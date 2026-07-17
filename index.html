@@ -12,6 +12,7 @@
 <link rel="manifest" href="manifest.json"/>
 <meta name="theme-color" content="#C0282D"/>
 <meta name="apple-mobile-web-app-capable" content="yes"/>
+<meta name="mobile-web-app-capable" content="yes"/>
 <meta name="apple-mobile-web-app-status-bar-style" content="default"/>
 <meta name="apple-mobile-web-app-title" content="NPD Hub"/>
 
@@ -2146,12 +2147,11 @@ window.showWeeklyLog = async (productId) => {
   const logSnap  = await get(ref(db, `products/${productId}/weeklyLog/${weekKey}`));
   const log      = logSnap.val() || { summary: '', tasksCompleted: [], tasksOpen: [] };
 
-  // Auto-populate from pillar changes this week (pillars marked complete)
+  // Auto-populate from pillar changes this week
   const autoComplete = PILLARS
     .filter(pl => prod.pillars?.[pl.id]?.taskStatus === 'complete' && prod.pillars?.[pl.id]?.notes)
     .map(pl => `${pl.name} — completed`)
     .filter(t => !log.tasksCompleted.includes(t));
-
   const allCompleted = [...log.tasksCompleted, ...autoComplete];
 
   document.getElementById('modal-title-text').textContent = `Weekly Log — ${weekKey.replace('week_','')}`;
@@ -2166,21 +2166,26 @@ window.showWeeklyLog = async (productId) => {
     </div>
     <div class="form-row">
       <label class="form-label">Tasks completed <span class="form-hint">— one per line</span></label>
-      <textarea id="wl-completed" class="input-field" rows="4" placeholder="e.g. Submitted financial model for review">${allCompleted.join('
-')}</textarea>
+      <textarea id="wl-completed" class="input-field" rows="4" placeholder="e.g. Submitted financial model for review"></textarea>
     </div>
     <div class="form-row">
       <label class="form-label">Open items <span class="form-hint">— one per line</span></label>
-      <textarea id="wl-open" class="input-field" rows="4" placeholder="e.g. Awaiting architect approval on design sketch">${log.tasksOpen.join('
-')}</textarea>
+      <textarea id="wl-open" class="input-field" rows="4" placeholder="e.g. Awaiting architect approval on design sketch"></textarea>
     </div>
     <div class="form-actions">
       <button class="btn-outline" onclick="closeProductModal()">Cancel</button>
       <button class="btn-primary" onclick="saveWeeklyLog('${productId}','${weekKey}')">Save log</button>
     </div>`;
-  document.getElementById('create-product-modal').style.display = 'flex';
-};
 
+  // Set textarea values after rendering (avoids escaping issues in template literals)
+  document.getElementById('create-product-modal').style.display = 'flex';
+  setTimeout(() => {
+    const completedEl = document.getElementById('wl-completed');
+    const openEl      = document.getElementById('wl-open');
+    if (completedEl) completedEl.value = allCompleted.join('\n');
+    if (openEl)      openEl.value      = log.tasksOpen.join('\n');
+  }, 10);
+};
 window.saveWeeklyLog = async (productId, weekKey) => {
   const summary   = document.getElementById('wl-summary')?.value.trim() || '';
   const completed = document.getElementById('wl-completed')?.value.split('
