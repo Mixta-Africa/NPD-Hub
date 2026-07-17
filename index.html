@@ -573,22 +573,172 @@ function buildPillarDetail(p) {
     <div class="form-actions">${editBtn}<button class="btn-outline" onclick="closeProductModal()">Close</button></div>`;
 }
 
+/* ══ CALENDAR VIEW ══════════════════════════════════════════ */
+let calSelectedProduct = 'all';
+let calCurrentMonth    = new Date().getMonth();
+let calCurrentYear     = new Date().getFullYear();
+let calProductsCache   = {};
+
 function renderCalendar(el) {
+  const dayHeaders = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'].map(d => `<div class="cal-day-hdr">${d}</div>`).join('');
   el.innerHTML = `
     <div class="view-header">
       <div>
         <h1 class="view-title">Launch Calendar</h1>
-        <p class="view-subtitle">Visual timeline of all product milestones</p>
+        <p class="view-subtitle">Milestone timeline across all active products</p>
+      </div>
+      <select id="cal-product-filter" class="select-field" onchange="calFilterChange()">
+        <option value="all">All products</option>
+      </select>
+    </div>
+    <div class="cal-legend">
+      <span class="leg-item"><span class="leg-dot leg-green"></span>On track</span>
+      <span class="leg-item"><span class="leg-dot leg-amber"></span>Due within 3 days</span>
+      <span class="leg-item"><span class="leg-dot leg-red"></span>Overdue</span>
+      <span class="leg-item"><span class="leg-dot leg-blue"></span>Complete</span>
+    </div>
+    <div class="panel" style="margin-bottom:16px;">
+      <div class="cal-nav">
+        <button class="cal-nav-btn" onclick="calMove(-1)">&#8592;</button>
+        <span class="cal-month-label" id="cal-month-label"></span>
+        <button class="cal-nav-btn" onclick="calMove(1)">&#8594;</button>
+        <button class="cal-today-btn" onclick="calGoToday()">Today</button>
+      </div>
+      <div class="cal-grid-wrap">
+        <div class="cal-day-headers">${dayHeaders}</div>
+        <div class="cal-grid" id="cal-grid"></div>
       </div>
     </div>
-    <div class="panel">
-      <div class="empty-state">
-        <span class="empty-icon">📆</span>
-        <h3>Calendar coming in Phase 3</h3>
-        <p>Once products are created in Phase 2, the calendar will render a colour-coded milestone timeline here — green for on-track, amber for 3-day warning, red for overdue.</p>
-      </div>
+    <div class="panel" id="cal-upcoming-panel">
+      <div class="panel-header"><span class="panel-title">All milestones this month</span></div>
+      <div class="panel-body" id="cal-milestone-list"><div class="loading-row">Loading...</div></div>
     </div>`;
+  loadCalendarData();
 }
+
+window.calFilterChange = () => {
+  calSelectedProduct = document.getElementById('cal-product-filter')?.value || 'all';
+  drawCalendar(); drawMilestoneList();
+};
+window.calMove = (dir) => {
+  calCurrentMonth += dir;
+  if (calCurrentMonth > 11) { calCurrentMonth = 0; calCurrentYear++; }
+  if (calCurrentMonth < 0)  { calCurrentMonth = 11; calCurrentYear--; }
+  drawCalendar(); drawMilestoneList();
+};
+window.calGoToday = () => {
+  const n = new Date(); calCurrentMonth = n.getMonth(); calCurrentYear = n.getFullYear();
+  drawCalendar(); drawMilestoneList();
+};
+window.calDayClick = (day) => {
+  const hits = getCalMilestones().filter(m => {
+    const d = new Date(m.date);
+    return d.getFullYear()===calCurrentYear && d.getMonth()===calCurrentMonth && d.getDate()===day;
+  });
+  if (!hits.length) return;
+  const monthNames = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  const titleEl = document.querySelector('#cal-upcoming-panel .panel-title');
+  const listEl  = document.getElementById('cal-milestone-list');
+  if (titleEl) titleEl.textContent = `Milestones — ${day} ${monthNames[calCurrentMonth]} ${calCurrentYear}`;
+  if (listEl)  listEl.innerHTML = hits.map(buildMilestoneRow).join('');
+};
+
+async function loadCalendarData() {
+  const snap = await get(ref(db, 'products'));
+  calProductsCache = snap.val() || {};
+  const active = Object.values(calProductsCache).filter(p => p.status !== 'archived');
+  const sel = document.getElementById('cal-product-filter');
+  if (sel) active.forEach(p => { const o=document.createElement('option'); o.value=p.id; o.textContent=p.name; sel.appendChild(o); });
+  drawCalendar(); drawMilestoneList();
+}
+
+function getCalMilestones() {
+  const prods = Object.values(calProductsCache).filter(p => p.status !== 'archived');
+  const filtered = calSelectedProduct === 'all' ? prods : prods.filter(p => p.id === calSelectedProduct);
+  const out = [];
+  filtered.forEach(prod => {
+    PILLARS.forEach(pl => {
+      const pd = prod.pillars?.[pl.id];
+      if (!pd?.deadline) return;
+      out.push({ date: pd.deadline, productName: prod.name, productId: prod.id,
+        pillarName: pl.name, pillarId: pl.id, taskStatus: pd.taskStatus || 'not-started',
+        deadlineStatus: pd.taskStatus === 'complete' ? 'complete' : getPillarStatus(pd.deadline) });
+    });
+  });
+  return out;
+}
+
+function drawCalendar() {
+  const label = document.getElementById('cal-month-label');
+  const grid  = document.getElementById('cal-grid');
+  if (!label || !grid) return;
+  const MONTHS = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+  label.textContent = `${MONTHS[calCurrentMonth]} ${calCurrentYear}`;
+  const firstDay    = new Date(calCurrentYear, calCurrentMonth, 1).getDay();
+  const daysInMonth = new Date(calCurrentYear, calCurrentMonth+1, 0).getDate();
+  const today = new Date(); today.setHours(0,0,0,0);
+  const milestones  = getCalMilestones();
+  const dayMap = {};
+  milestones.forEach(m => {
+    const d = new Date(m.date);
+    if (d.getFullYear()===calCurrentYear && d.getMonth()===calCurrentMonth) {
+      const day = d.getDate();
+      if (!dayMap[day]) dayMap[day] = [];
+      dayMap[day].push(m);
+    }
+  });
+  let html = '';
+  for (let i=0; i<firstDay; i++) html += '<div class="cal-cell cal-cell-empty"></div>';
+  for (let day=1; day<=daysInMonth; day++) {
+    const cellDate = new Date(calCurrentYear, calCurrentMonth, day); cellDate.setHours(0,0,0,0);
+    const isToday  = cellDate.getTime() === today.getTime();
+    const events   = dayMap[day] || [];
+    const dots = events.slice(0,4).map(e => {
+      const cls = e.deadlineStatus==='complete' ? 'cal-dot-blue'
+        : e.deadlineStatus==='overdue' ? 'cal-dot-red'
+        : e.deadlineStatus==='warning' ? 'cal-dot-amber' : 'cal-dot-green';
+      return `<span class="cal-dot ${cls}" title="${e.productName}: ${e.pillarName}"></span>`;
+    }).join('');
+    const extra = events.length > 4 ? `<span class="cal-dot-more">+${events.length-4}</span>` : '';
+    html += `<div class="cal-cell${isToday?' cal-cell-today':''}${events.length?' cal-cell-has-events':''}" onclick="calDayClick(${day})">
+      <div class="cal-day-num">${day}</div>
+      <div class="cal-dots">${dots}${extra}</div>
+    </div>`;
+  }
+  grid.innerHTML = html;
+}
+
+function drawMilestoneList() {
+  const listEl = document.getElementById('cal-milestone-list');
+  const panel  = document.querySelector('#cal-upcoming-panel .panel-title');
+  if (!listEl) return;
+  if (panel) panel.textContent = 'All milestones this month';
+  const hits = getCalMilestones().filter(m => {
+    const d = new Date(m.date);
+    return d.getFullYear()===calCurrentYear && d.getMonth()===calCurrentMonth;
+  }).sort((a,b) => new Date(a.date)-new Date(b.date));
+  listEl.innerHTML = hits.length
+    ? hits.map(buildMilestoneRow).join('')
+    : '<div class="empty-state-sm"><p>No milestones set for this month.</p></div>';
+}
+
+function buildMilestoneRow(m) {
+  const cls = m.deadlineStatus==='complete' ? 'leg-blue'
+    : m.deadlineStatus==='overdue' ? 'leg-red'
+    : m.deadlineStatus==='warning' ? 'leg-amber' : 'leg-green';
+  return `<div class="milestone-row">
+    <span class="leg-dot ${cls}" style="flex-shrink:0;margin-top:2px;"></span>
+    <div class="milestone-info">
+      <div class="milestone-pillar">${m.pillarName}</div>
+      <div class="milestone-product">${m.productName} &mdash; ${formatDate(m.date)}</div>
+    </div>
+    <span class="task-status task-${m.taskStatus}">${statusLabel(m.taskStatus)}</span>
+  </div>`;
+}
+
+/* ══ TASK TRACKER ════════════════════════════════════════════ */
+let trackerProductsCache   = {};
+let trackerSelectedProduct = '';
 
 function renderTracker(el) {
   el.innerHTML = `
@@ -597,15 +747,111 @@ function renderTracker(el) {
         <h1 class="view-title">Task Tracker</h1>
         <p class="view-subtitle">Per-pillar status across all active products</p>
       </div>
+      <select id="tracker-product-sel" class="select-field" onchange="trackerSelectProduct()">
+        <option value="">Select a product...</option>
+      </select>
     </div>
-    <div class="panel">
-      <div class="empty-state">
-        <span class="empty-icon">✅</span>
-        <h3>Task tracker coming in Phase 3</h3>
-        <p>All 12 SOP pillars will be tracked here per product, with status, owner department, deadline, and notes.</p>
-      </div>
+    <div id="tracker-body"><div class="loading-row" style="padding:24px;">Loading products...</div></div>`;
+  loadTrackerProducts();
+}
+
+async function loadTrackerProducts() {
+  const snap = await get(ref(db, 'products'));
+  trackerProductsCache = snap.val() || {};
+  const active = Object.values(trackerProductsCache).filter(p => p.status !== 'archived');
+  const sel = document.getElementById('tracker-product-sel');
+  if (!sel) return;
+  active.forEach(p => { const o=document.createElement('option'); o.value=p.id; o.textContent=p.name; sel.appendChild(o); });
+  if (active.length > 0) { sel.value=active[0].id; trackerSelectedProduct=active[0].id; renderTrackerTable(active[0]); }
+  else document.getElementById('tracker-body').innerHTML =
+    '<div class="panel"><div class="empty-state"><span class="empty-icon">📋</span><h3>No products yet</h3><p>Create a product first.</p></div></div>';
+}
+
+window.trackerSelectProduct = () => {
+  const id = document.getElementById('tracker-product-sel')?.value;
+  if (!id) return;
+  trackerSelectedProduct = id;
+  const prod = trackerProductsCache[id];
+  if (prod) renderTrackerTable(prod);
+};
+
+function renderTrackerTable(prod) {
+  const body = document.getElementById('tracker-body');
+  if (!body) return;
+  const complete = PILLARS.filter(pl => prod.pillars?.[pl.id]?.taskStatus === 'complete').length;
+  const pct      = Math.round((complete / PILLARS.length) * 100);
+  const overdue  = PILLARS.filter(pl => {
+    const pd = prod.pillars?.[pl.id];
+    return pd?.deadline && pd?.taskStatus !== 'complete' && getPillarStatus(pd.deadline) === 'overdue';
+  }).length;
+
+  const rows = PILLARS.map((pl, i) => {
+    const pd = prod.pillars?.[pl.id] || {};
+    const st = pd.taskStatus || 'not-started';
+    const dst = pd.deadline ? getPillarStatus(pd.deadline) : 'no-date';
+    const isComplete = st === 'complete';
+    const deadlinePill = !pd.deadline
+      ? '<span class="pill pill-grey">No date</span>'
+      : isComplete ? `<span class="pill pill-blue">${formatDate(pd.deadline)}</span>`
+      : dst==='overdue' ? `<span class="pill pill-red">Overdue &mdash; ${formatDate(pd.deadline)}</span>`
+      : dst==='warning' ? `<span class="pill pill-amber">Due soon &mdash; ${formatDate(pd.deadline)}</span>`
+      : `<span class="pill pill-green">${formatDate(pd.deadline)}</span>`;
+    const statusCtrl = currentRole === 'admin'
+      ? `<select class="status-select" onchange="updatePillarStatus('${prod.id}','${pl.id}',this.value)">
+          <option value="not-started" ${st==='not-started'?'selected':''}>Not started</option>
+          <option value="in-progress" ${st==='in-progress'?'selected':''}>In progress</option>
+          <option value="complete"    ${st==='complete'   ?'selected':''}>Complete</option>
+        </select>`
+      : `<span class="task-status task-${st}">${statusLabel(st)}</span>`;
+    const notesCtrl = currentRole === 'admin'
+      ? `<input type="text" class="notes-input" placeholder="Add note..." value="${pd.notes||''}" onblur="updatePillarNotes('${prod.id}','${pl.id}',this.value)"/>`
+      : `<span class="notes-text">${pd.notes||'&mdash;'}</span>`;
+    return `<tr class="tracker-row${isComplete?' tracker-row-done':''}">
+      <td class="tracker-num">${i+1}</td>
+      <td class="tracker-pillar"><div class="tracker-pillar-name">${pl.name}</div><div class="tracker-pillar-owner">${pl.owner}</div></td>
+      <td class="tracker-deadline">${deadlinePill}</td>
+      <td class="tracker-status">${statusCtrl}</td>
+      <td class="tracker-notes">${notesCtrl}</td>
+    </tr>`;
+  }).join('');
+
+  const overdueHtml = overdue > 0 ? `<span style="color:var(--red)">${overdue} overdue</span>` : '0 overdue';
+  body.innerHTML = `
+    <div class="tracker-summary">
+      <div class="tracker-summary-name">${prod.name}</div>
+      <div class="tracker-summary-meta">Launch: ${formatDate(prod.launchDate)} &nbsp;&middot;&nbsp; ${complete}/12 complete &nbsp;&middot;&nbsp; ${overdueHtml}</div>
+      <div class="progress-bar-wrap" style="margin-top:10px;"><div class="progress-bar-fill" style="width:${pct}%"></div></div>
+    </div>
+    <div class="panel" style="overflow:auto;">
+      <table class="tracker-table">
+        <thead><tr>
+          <th style="width:32px;">#</th><th>Pillar</th>
+          <th style="width:180px;">Deadline</th>
+          <th style="width:160px;">Status</th>
+          <th>Notes</th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
     </div>`;
 }
+
+window.updatePillarStatus = async (productId, pillarId, newStatus) => {
+  try {
+    await set(ref(db, `products/${productId}/pillars/${pillarId}/taskStatus`), newStatus);
+    if (trackerProductsCache[productId]?.pillars?.[pillarId])
+      trackerProductsCache[productId].pillars[pillarId].taskStatus = newStatus;
+    showToast('Status updated.', 'success');
+  } catch(e) { showToast('Update failed: ' + e.message, 'error'); }
+};
+
+window.updatePillarNotes = async (productId, pillarId, notes) => {
+  try {
+    await set(ref(db, `products/${productId}/pillars/${pillarId}/notes`), notes);
+    if (trackerProductsCache[productId]?.pillars?.[pillarId])
+      trackerProductsCache[productId].pillars[pillarId].notes = notes;
+  } catch(e) { showToast('Note save failed.', 'error'); }
+};
+
 
 function renderDocuments(el) {
   el.innerHTML = `
@@ -777,15 +1023,22 @@ window.__npd_init({
   handleSignIn,
   handleSignOut,
   loadView,
-  toggleSidebar:      window.toggleSidebar,
-  showCreateProduct:  window.showCreateProduct,
-  closeProductModal:  window.closeProductModal,
-  saveProduct:        window.saveProduct,
-  editProduct:        window.editProduct,
-  viewProduct:        window.viewProduct,
-  addToAllowlist:     window.addToAllowlist,
-  removeFromAllowlist: window.removeFromAllowlist,
-  showToast:          window.showToast
+  toggleSidebar:        window.toggleSidebar,
+  showCreateProduct:    window.showCreateProduct,
+  closeProductModal:    window.closeProductModal,
+  saveProduct:          window.saveProduct,
+  editProduct:          window.editProduct,
+  viewProduct:          window.viewProduct,
+  addToAllowlist:       window.addToAllowlist,
+  removeFromAllowlist:  window.removeFromAllowlist,
+  showToast:            window.showToast,
+  calFilterChange:      window.calFilterChange,
+  calMove:              window.calMove,
+  calGoToday:           window.calGoToday,
+  calDayClick:          window.calDayClick,
+  trackerSelectProduct: window.trackerSelectProduct,
+  updatePillarStatus:   window.updatePillarStatus,
+  updatePillarNotes:    window.updatePillarNotes,
 });
 
 </script>
@@ -1172,6 +1425,74 @@ textarea.input-field { resize: vertical; line-height: 1.6; }
 .deadline-product { font-size: 12px; color: var(--text-muted); }
 .btn-secondary-sm { padding: 6px 14px; background: none; border: 1px solid var(--border-mid); border-radius: var(--radius); font-size: 12px; font-weight: 500; color: var(--text); transition: background .15s; }
 .btn-secondary-sm:hover { background: var(--bg); }
+
+/* ─── PHASE 3: CALENDAR ─── */
+.cal-legend { display:flex; gap:16px; flex-wrap:wrap; margin-bottom:14px; }
+.leg-item   { display:flex; align-items:center; gap:6px; font-size:12px; color:var(--text-mid); }
+.leg-dot    { width:8px; height:8px; border-radius:50%; flex-shrink:0; }
+.leg-green  { background:var(--green); }
+.leg-amber  { background:var(--amber); }
+.leg-red    { background:var(--red);   }
+.leg-grey   { background:var(--border-mid); }
+.leg-blue   { background:var(--blue);  }
+
+.cal-nav { display:flex; align-items:center; gap:10px; padding:14px 18px; border-bottom:1px solid var(--border); }
+.cal-nav-btn    { background:none; border:1px solid var(--border-mid); border-radius:6px; padding:4px 12px; font-size:16px; color:var(--text-mid); cursor:pointer; }
+.cal-nav-btn:hover { background:var(--bg); }
+.cal-month-label { font-size:15px; font-weight:600; flex:1; text-align:center; }
+.cal-today-btn  { background:none; border:1px solid var(--border-mid); border-radius:6px; padding:4px 12px; font-size:12px; font-weight:500; color:var(--text-mid); cursor:pointer; }
+.cal-today-btn:hover { background:var(--bg); }
+.cal-controls { display:flex; align-items:center; gap:8px; }
+
+.cal-grid-wrap { padding:12px 14px 14px; }
+.cal-day-headers { display:grid; grid-template-columns:repeat(7,1fr); margin-bottom:4px; }
+.cal-day-hdr    { text-align:center; font-size:11px; font-weight:600; color:var(--text-muted); text-transform:uppercase; padding:4px 0; }
+.cal-grid       { display:grid; grid-template-columns:repeat(7,1fr); gap:3px; }
+
+.cal-cell { min-height:64px; border-radius:6px; padding:4px 6px; cursor:pointer; border:1px solid transparent; transition:background .1s; }
+.cal-cell:hover { background:var(--bg); }
+.cal-cell-empty { min-height:64px; }
+.cal-cell-today { background:var(--red-light); border-color:var(--red-mid); }
+.cal-cell-today .cal-day-num { color:var(--red); font-weight:700; }
+.cal-cell-has-events { border-color:var(--border); }
+.cal-day-num { font-size:12px; font-weight:500; color:var(--text-mid); margin-bottom:4px; }
+.cal-dots    { display:flex; flex-wrap:wrap; gap:2px; }
+.cal-dot     { width:7px; height:7px; border-radius:50%; }
+.cal-dot-green { background:var(--green); }
+.cal-dot-amber { background:var(--amber); }
+.cal-dot-red   { background:var(--red);   }
+.cal-dot-blue  { background:var(--blue);  }
+.cal-dot-more  { font-size:9px; color:var(--text-muted); font-weight:600; }
+
+.milestone-row  { display:flex; align-items:flex-start; gap:10px; padding:9px 0; border-bottom:1px solid var(--border); }
+.milestone-row:last-child { border-bottom:none; }
+.milestone-info { flex:1; }
+.milestone-pillar  { font-size:13px; font-weight:500; color:var(--text); }
+.milestone-product { font-size:12px; color:var(--text-muted); margin-top:1px; }
+
+/* ─── PHASE 3: TASK TRACKER ─── */
+.tracker-summary { background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); padding:18px 20px; margin-bottom:14px; }
+.tracker-summary-name { font-size:16px; font-weight:600; margin-bottom:4px; }
+.tracker-summary-meta { font-size:13px; color:var(--text-mid); }
+
+.tracker-table { width:100%; border-collapse:collapse; font-size:13px; min-width:640px; }
+.tracker-table th { text-align:left; font-size:11px; font-weight:600; color:var(--text-muted); text-transform:uppercase; letter-spacing:.05em; padding:10px 12px; border-bottom:2px solid var(--border); white-space:nowrap; background:var(--surface); }
+.tracker-table td { padding:10px 12px; border-bottom:1px solid var(--border); vertical-align:middle; }
+.tracker-row:last-child td { border-bottom:none; }
+.tracker-row:hover { background:var(--bg); }
+.tracker-row-done { opacity:.6; }
+.tracker-row-done .tracker-pillar-name { text-decoration:line-through; }
+.tracker-num         { color:var(--text-muted); font-size:12px; font-weight:600; width:32px; }
+.tracker-pillar-name { font-weight:500; color:var(--text); margin-bottom:2px; }
+.tracker-pillar-owner { font-size:11px; color:var(--text-muted); }
+.tracker-deadline    { white-space:nowrap; }
+.pill-blue  { background:var(--blue-light); color:var(--blue); }
+
+.status-select { padding:5px 8px; border:1px solid var(--border-mid); border-radius:6px; font-size:12px; color:var(--text); background:var(--bg); font-family:inherit; }
+.notes-input { width:100%; padding:5px 8px; border:1px solid transparent; border-radius:6px; font-size:12px; color:var(--text); background:transparent; font-family:inherit; }
+.notes-input:focus { border-color:var(--border-mid); background:var(--surface); outline:none; }
+.notes-input:hover { border-color:var(--border); }
+.notes-text  { font-size:12px; color:var(--text-mid); }
 </style>
 
 <!-- ══════════════════════════════════════════
