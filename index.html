@@ -215,10 +215,50 @@ window.loadView = (view) => {
 };
 
 /* ─────────────────────────────────────────────
-   VIEW RENDERERS — Phase 1: skeleton stubs
-   Each will be fully built in its own phase.
+   VIEW RENDERERS — Phase 2: Products + Dashboard live
 ───────────────────────────────────────────── */
 
+/* ── PILLAR DEFINITIONS (12 SOP pillars from Mixta NPD guide) ── */
+const PILLARS = [
+  { id: 'p1',  name: 'New Product Case Assessment',         owner: 'Commercial Strategy', dept: 'commercial' },
+  { id: 'p2',  name: 'New Product Development Meetings',    owner: 'Commercial Strategy', dept: 'commercial' },
+  { id: 'p3',  name: 'Market Survey & Research',            owner: 'Commercial Strategy', dept: 'commercial' },
+  { id: 'p4',  name: 'Product Design & Development',        owner: 'Design',              dept: 'design'     },
+  { id: 'p5',  name: 'Product Financial & Profitability Analysis', owner: 'Financial Planning', dept: 'finplan' },
+  { id: 'p6',  name: 'Product AMC Meetings',                owner: 'Country Manager',     dept: 'amc'        },
+  { id: 'p7',  name: 'AMC Product Presentations',           owner: 'Country Manager',     dept: 'amc'        },
+  { id: 'p8',  name: 'IC Product Presentations',            owner: 'Country Manager',     dept: 'amc'        },
+  { id: 'p9',  name: 'Product Components: Factsheet, Legal & Layout', owner: 'Operations', dept: 'operations' },
+  { id: 'p10', name: 'Product Pricing Development',         owner: 'Financial Planning',  dept: 'finplan'    },
+  { id: 'p11', name: 'Product Marketing Materials',         owner: 'MCC',                 dept: 'mcc'        },
+  { id: 'p12', name: 'Project Execution Strategy',          owner: 'Country Manager',     dept: 'amc'        },
+];
+
+/* ── STATUS HELPERS ── */
+function getPillarStatus(deadline) {
+  if (!deadline) return 'no-date';
+  const today = new Date(); today.setHours(0,0,0,0);
+  const due   = new Date(deadline); due.setHours(0,0,0,0);
+  const diff  = Math.round((due - today) / 86400000);
+  if (diff < 0)  return 'overdue';
+  if (diff <= 3) return 'warning';
+  return 'ontrack';
+}
+
+function statusLabel(s) {
+  return { ontrack: 'On track', warning: 'Due soon', overdue: 'Overdue', 'no-date': 'No date set', 'complete': 'Complete', 'not-started': 'Not started', 'in-progress': 'In progress' }[s] || s;
+}
+
+function formatDate(d) {
+  if (!d) return '—';
+  return new Date(d).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+}
+
+function generateId() {
+  return 'prod_' + Date.now() + '_' + Math.random().toString(36).slice(2,7);
+}
+
+/* ── DASHBOARD ── */
 function renderDashboard(el) {
   el.innerHTML = `
     <div class="view-header">
@@ -226,81 +266,96 @@ function renderDashboard(el) {
         <h1 class="view-title">Good ${getGreeting()}, ${(currentUser?.displayName || 'there').split(' ')[0]}.</h1>
         <p class="view-subtitle">New Product Development Operations Hub</p>
       </div>
+      ${currentRole === 'admin' ? '<button class="btn-primary" onclick="loadView('products')">+ New product</button>' : ''}
     </div>
-
     <div class="stats-row">
-      <div class="stat-card">
-        <div class="stat-label">Active Products</div>
-        <div class="stat-value" id="stat-active">—</div>
-      </div>
-      <div class="stat-card">
-        <div class="stat-label">Pillars On Track</div>
-        <div class="stat-value green" id="stat-ontrack">—</div>
-      </div>
-      <div class="stat-card">
-        <div class="stat-label">Overdue</div>
-        <div class="stat-value red" id="stat-overdue">—</div>
-      </div>
-      <div class="stat-card">
-        <div class="stat-label">Deadlines This Week</div>
-        <div class="stat-value amber" id="stat-week">—</div>
-      </div>
+      <div class="stat-card"><div class="stat-label">Active Products</div><div class="stat-value" id="stat-active">—</div></div>
+      <div class="stat-card"><div class="stat-label">Pillars On Track</div><div class="stat-value green" id="stat-ontrack">—</div></div>
+      <div class="stat-card"><div class="stat-label">Overdue</div><div class="stat-value red" id="stat-overdue">—</div></div>
+      <div class="stat-card"><div class="stat-label">Deadlines This Week</div><div class="stat-value amber" id="stat-week">—</div></div>
     </div>
-
     <div class="two-col">
       <div class="panel">
-        <div class="panel-header">
-          <span class="panel-title">Recent Activity</span>
-        </div>
-        <div class="panel-body">
-          <div class="empty-state-sm">
-            <span class="empty-icon">📋</span>
-            <p>No products launched yet.<br/>Create your first product to begin.</p>
-            ${currentRole === 'admin' ? `<button class="btn-primary-sm" onclick="loadView('products')">Create product</button>` : ''}
-          </div>
-        </div>
+        <div class="panel-header"><span class="panel-title">Recent Products</span></div>
+        <div class="panel-body" id="dash-recent"><div class="loading-row">Loading...</div></div>
       </div>
       <div class="panel">
-        <div class="panel-header">
-          <span class="panel-title">Upcoming Deadlines</span>
-        </div>
-        <div class="panel-body">
-          <div class="empty-state-sm">
-            <span class="empty-icon">📅</span>
-            <p>No upcoming deadlines.<br/>Deadlines will appear here once a<br/>product is created.</p>
-          </div>
-        </div>
-      </div>
-    </div>
-
-    <div class="panel phase-banner">
-      <div class="phase-inner">
-        <div class="phase-dot"></div>
-        <div>
-          <div class="phase-label">Phase 1 complete — Foundation & Auth</div>
-          <div class="phase-sub">Phase 2 next: Create product form, milestone dates, Firebase write, product list view</div>
-        </div>
+        <div class="panel-header"><span class="panel-title">Upcoming Deadlines</span></div>
+        <div class="panel-body" id="dash-deadlines"><div class="loading-row">Loading...</div></div>
       </div>
     </div>`;
-
-  // Load real stats from Firebase (will populate once products exist)
   loadDashboardStats();
 }
 
 async function loadDashboardStats() {
   try {
-    const snap = await get(ref(db, 'products'));
+    const snap     = await get(ref(db, 'products'));
     const products = snap.val() || {};
-    const list = Object.values(products);
-    const active = list.filter(p => p.status !== 'archived').length;
-    document.getElementById('stat-active').textContent  = active || '0';
-    document.getElementById('stat-ontrack').textContent = '—';
-    document.getElementById('stat-overdue').textContent = '0';
-    document.getElementById('stat-week').textContent    = '0';
+    const list     = Object.values(products).filter(p => p.status !== 'archived');
+
+    const today = new Date(); today.setHours(0,0,0,0);
+    const weekEnd = new Date(today); weekEnd.setDate(weekEnd.getDate() + 7);
+
+    let ontrack = 0, overdue = 0, thisWeek = 0;
+    const upcomingDeadlines = [];
+
+    list.forEach(prod => {
+      PILLARS.forEach(pillar => {
+        const pd = prod.pillars?.[pillar.id];
+        if (!pd?.deadline) return;
+        const st = getPillarStatus(pd.deadline);
+        if (pd.taskStatus === 'complete') return;
+        if (st === 'ontrack') ontrack++;
+        if (st === 'overdue') overdue++;
+        const due = new Date(pd.deadline); due.setHours(0,0,0,0);
+        if (due >= today && due <= weekEnd) {
+          thisWeek++;
+          upcomingDeadlines.push({ product: prod.name, pillar: pillar.name, date: pd.deadline, status: st });
+        }
+      });
+    });
+
+    document.getElementById('stat-active').textContent  = list.length;
+    document.getElementById('stat-ontrack').textContent = ontrack || '0';
+    document.getElementById('stat-overdue').textContent = overdue || '0';
+    document.getElementById('stat-week').textContent    = thisWeek || '0';
+
+    // Recent products panel
+    const recentEl = document.getElementById('dash-recent');
+    if (list.length === 0) {
+      recentEl.innerHTML = '<div class="empty-state-sm"><span class="empty-icon">📋</span><p>No products yet.' + (currentRole === 'admin' ? ' <button class="btn-primary-sm" onclick="loadView('products')">Create one</button>' : '') + '</p></div>';
+    } else {
+      const sorted = list.sort((a,b) => b.createdAt - a.createdAt).slice(0,4);
+      recentEl.innerHTML = sorted.map(p => `
+        <div class="dash-product-row" onclick="viewProduct('${p.id}')">
+          <div class="dash-product-name">${p.name}</div>
+          <div class="dash-product-meta">Launch: ${formatDate(p.launchDate)}</div>
+          <span class="status-chip status-${p.status || 'active'}">${p.status === 'complete' ? 'Complete' : 'Active'}</span>
+        </div>`).join('');
+    }
+
+    // Deadlines panel
+    const dlEl = document.getElementById('dash-deadlines');
+    if (upcomingDeadlines.length === 0) {
+      dlEl.innerHTML = '<div class="empty-state-sm"><span class="empty-icon">📅</span><p>No deadlines this week.</p></div>';
+    } else {
+      upcomingDeadlines.sort((a,b) => new Date(a.date) - new Date(b.date));
+      dlEl.innerHTML = upcomingDeadlines.slice(0,5).map(d => `
+        <div class="deadline-row">
+          <div class="deadline-dot deadline-${d.status}"></div>
+          <div class="deadline-info">
+            <div class="deadline-pillar">${d.pillar}</div>
+            <div class="deadline-product">${d.product} — ${formatDate(d.date)}</div>
+          </div>
+        </div>`).join('');
+    }
   } catch(e) {
     console.warn('Stats load failed:', e);
   }
 }
+
+/* ── PRODUCTS VIEW ── */
+let productListCache = {};
 
 function renderProducts(el) {
   el.innerHTML = `
@@ -309,22 +364,199 @@ function renderProducts(el) {
         <h1 class="view-title">Products</h1>
         <p class="view-subtitle">All product launches — active, completed, and archived</p>
       </div>
-      ${currentRole === 'admin' ? `<button class="btn-primary" onclick="showCreateProduct()">+ New product</button>` : ''}
+      ${currentRole === 'admin' ? '<button class="btn-primary" onclick="showCreateProduct()">+ New product</button>' : ''}
     </div>
-    <div class="panel">
-      <div class="empty-state">
-        <span class="empty-icon">🏗️</span>
-        <h3>No products yet</h3>
-        <p>When a product launch is initiated, it will appear here with its full pillar breakdown, milestone dates, and status.</p>
-        ${currentRole === 'admin' ? `<button class="btn-primary" onclick="showCreateProduct()">Create your first product</button>` : '<p class="muted">Contact an admin to initiate a product launch.</p>'}
+    <div id="product-list-area"><div class="loading-row" style="padding:24px;">Loading products...</div></div>
+    <div id="create-product-modal" class="modal-overlay" style="display:none;">
+      <div class="modal-box">
+        <div class="modal-header">
+          <span class="modal-title" id="modal-title-text">New Product Launch</span>
+          <button class="modal-close" onclick="closeProductModal()">✕</button>
+        </div>
+        <div class="modal-body" id="modal-body-content"></div>
       </div>
-    </div>
-    <div id="create-product-panel" style="display:none;"><!-- Phase 2 --></div>`;
+    </div>`;
+  loadProductList();
 }
 
+async function loadProductList() {
+  const area = document.getElementById('product-list-area');
+  if (!area) return;
+  try {
+    const snap     = await get(ref(db, 'products'));
+    const products = snap.val() || {};
+    productListCache = products;
+    const list     = Object.values(products).sort((a,b) => b.createdAt - a.createdAt);
+
+    if (list.length === 0) {
+      area.innerHTML = '<div class="panel"><div class="empty-state"><span class="empty-icon">🏗️</span><h3>No products yet</h3><p>Create your first product launch to get started.</p>' +
+        (currentRole === 'admin' ? '<button class="btn-primary" onclick="showCreateProduct()">Create your first product</button>' : '<p class="muted">Contact an admin to initiate a product launch.</p>') +
+        '</div></div>';
+      return;
+    }
+
+    area.innerHTML = '<div class="product-grid">' + list.map(p => renderProductCard(p)).join('') + '</div>';
+  } catch(e) {
+    area.innerHTML = '<div class="panel"><div class="empty-state-sm"><p>Failed to load products.</p></div></div>';
+  }
+}
+
+function renderProductCard(p) {
+  const pillarsWithDates = PILLARS.filter(pl => p.pillars?.[pl.id]?.deadline);
+  const complete  = PILLARS.filter(pl => p.pillars?.[pl.id]?.taskStatus === 'complete').length;
+  const overduePl = PILLARS.filter(pl => {
+    const pd = p.pillars?.[pl.id];
+    return pd?.deadline && pd?.taskStatus !== 'complete' && getPillarStatus(pd.deadline) === 'overdue';
+  }).length;
+  const pct = Math.round((complete / PILLARS.length) * 100);
+
+  return '<div class="product-card-full">' +
+    '<div class="pcf-header">' +
+      '<div>' +
+        '<div class="pcf-name">' + p.name + '</div>' +
+        '<div class="pcf-desc">' + (p.description || 'No description') + '</div>' +
+      '</div>' +
+      '<span class="status-chip status-' + (p.status || 'active') + '">' + (p.status === 'complete' ? 'Complete' : 'Active') + '</span>' +
+    '</div>' +
+    '<div class="pcf-meta-row">' +
+      '<div class="pcf-meta-item"><span class="pcf-meta-label">Launch date</span><span class="pcf-meta-val">' + formatDate(p.launchDate) + '</span></div>' +
+      '<div class="pcf-meta-item"><span class="pcf-meta-label">Pillars with dates</span><span class="pcf-meta-val">' + pillarsWithDates.length + ' / 12</span></div>' +
+      '<div class="pcf-meta-item"><span class="pcf-meta-label">Completed</span><span class="pcf-meta-val green">' + complete + ' / 12</span></div>' +
+      (overduePl > 0 ? '<div class="pcf-meta-item"><span class="pcf-meta-label">Overdue</span><span class="pcf-meta-val red">' + overduePl + '</span></div>' : '') +
+    '</div>' +
+    '<div class="progress-bar-wrap"><div class="progress-bar-fill" style="width:' + pct + '%"></div></div>' +
+    '<div class="pcf-actions">' +
+      '<button class="btn-secondary-sm" onclick="viewProduct('' + p.id + '')">View pillars</button>' +
+      (currentRole === 'admin' ? '<button class="btn-secondary-sm" onclick="editProduct('' + p.id + '')">Edit dates</button>' : '') +
+    '</div>' +
+  '</div>';
+}
+
+/* ── CREATE / EDIT PRODUCT MODAL ── */
 window.showCreateProduct = () => {
-  showToast('Product creation form coming in Phase 2.', 'info');
+  document.getElementById('modal-title-text').textContent = 'New Product Launch';
+  document.getElementById('modal-body-content').innerHTML = buildProductForm(null);
+  document.getElementById('create-product-modal').style.display = 'flex';
 };
+
+window.editProduct = (id) => {
+  const p = productListCache[id];
+  if (!p) return;
+  document.getElementById('modal-title-text').textContent = 'Edit — ' + p.name;
+  document.getElementById('modal-body-content').innerHTML = buildProductForm(p);
+  document.getElementById('create-product-modal').style.display = 'flex';
+};
+
+window.closeProductModal = () => {
+  document.getElementById('create-product-modal').style.display = 'none';
+};
+
+function buildProductForm(p) {
+  const v = (field) => p ? (p[field] || '') : '';
+  const pd = (pillarId) => p?.pillars?.[pillarId]?.deadline || '';
+
+  return '<div class="form-section-label">Product details</div>' +
+    '<div class="form-row">' +
+      '<label class="form-label">Product name <span class="req">*</span></label>' +
+      '<input type="text" id="f-name" class="input-field" placeholder="e.g. Lakowe Garden Terrace Phase 3" value="' + v('name') + '"/>' +
+    '</div>' +
+    '<div class="form-row">' +
+      '<label class="form-label">Description</label>' +
+      '<textarea id="f-desc" class="input-field" rows="2" placeholder="Brief description of the product...">' + v('description') + '</textarea>' +
+    '</div>' +
+    '<div class="form-row">' +
+      '<label class="form-label">Target launch date <span class="req">*</span></label>' +
+      '<input type="date" id="f-launch" class="input-field" value="' + v('launchDate') + '"/>' +
+    '</div>' +
+
+    '<div class="form-section-label" style="margin-top:20px;">SOP pillar milestone dates <span class="form-hint">— all optional, set now or later</span></div>' +
+    PILLARS.map((pl, i) =>
+      '<div class="pillar-date-row">' +
+        '<div class="pillar-date-num">' + (i+1) + '</div>' +
+        '<div class="pillar-date-name">' + pl.name + '<span class="pillar-owner">' + pl.owner + '</span></div>' +
+        '<input type="date" id="f-' + pl.id + '" class="input-field pillar-date-input" value="' + pd(pl.id) + '"/>' +
+      '</div>'
+    ).join('') +
+
+    '<div class="form-actions">' +
+      '<button class="btn-outline" onclick="closeProductModal()">Cancel</button>' +
+      '<button class="btn-primary" onclick="saveProduct('' + (p?.id || '') + '')">' + (p ? 'Save changes' : 'Create product') + '</button>' +
+    '</div>';
+}
+
+window.saveProduct = async (existingId) => {
+  const name      = document.getElementById('f-name')?.value.trim();
+  const desc      = document.getElementById('f-desc')?.value.trim();
+  const launchDate = document.getElementById('f-launch')?.value;
+
+  if (!name) { showToast('Product name is required.', 'error'); return; }
+  if (!launchDate) { showToast('Launch date is required.', 'error'); return; }
+
+  const pillars = {};
+  PILLARS.forEach(pl => {
+    const d = document.getElementById('f-' + pl.id)?.value;
+    pillars[pl.id] = {
+      deadline:   d || null,
+      taskStatus: existingId ? (productListCache[existingId]?.pillars?.[pl.id]?.taskStatus || 'not-started') : 'not-started',
+      notes:      existingId ? (productListCache[existingId]?.pillars?.[pl.id]?.notes || '') : ''
+    };
+  });
+
+  const id      = existingId || generateId();
+  const isNew   = !existingId;
+  const payload = {
+    id, name, description: desc, launchDate,
+    pillars, status: 'active',
+    createdAt:   isNew ? Date.now() : (productListCache[existingId]?.createdAt || Date.now()),
+    updatedAt:   Date.now(),
+    createdBy:   isNew ? currentUser.email : (productListCache[existingId]?.createdBy || currentUser.email),
+  };
+
+  try {
+    await set(ref(db, 'products/' + id), payload);
+    productListCache[id] = payload;
+    closeProductModal();
+    showToast(isNew ? 'Product created successfully.' : 'Product updated.', 'success');
+    loadProductList();
+  } catch(e) {
+    showToast('Save failed: ' + e.message, 'error');
+  }
+};
+
+/* ── VIEW PRODUCT DETAIL ── */
+window.viewProduct = (id) => {
+  const p = productListCache[id];
+  if (!p) return;
+  document.getElementById('modal-title-text').textContent = p.name + ' — Pillars';
+  document.getElementById('modal-body-content').innerHTML = buildPillarDetail(p);
+  document.getElementById('create-product-modal').style.display = 'flex';
+};
+
+function buildPillarDetail(p) {
+  return '<div class="pillar-detail-list">' +
+    PILLARS.map((pl, i) => {
+      const pd  = p.pillars?.[pl.id] || {};
+      const st  = pd.taskStatus || 'not-started';
+      const dst = pd.deadline ? getPillarStatus(pd.deadline) : 'no-date';
+      const deadlineChip = dst === 'no-date' ? '<span class="pill pill-grey">No date</span>'
+        : dst === 'overdue' ? '<span class="pill pill-red">Overdue — ' + formatDate(pd.deadline) + '</span>'
+        : dst === 'warning' ? '<span class="pill pill-amber">Due soon — ' + formatDate(pd.deadline) + '</span>'
+        : '<span class="pill pill-green">' + formatDate(pd.deadline) + '</span>';
+      return '<div class="pillar-detail-row">' +
+        '<div class="pillar-detail-num">' + (i+1) + '</div>' +
+        '<div class="pillar-detail-body">' +
+          '<div class="pillar-detail-name">' + pl.name + '</div>' +
+          '<div class="pillar-detail-meta"><span class="pillar-owner">' + pl.owner + '</span>' + deadlineChip + '</div>' +
+        '</div>' +
+        '<span class="task-status task-' + st + '">' + statusLabel(st) + '</span>' +
+      '</div>';
+    }).join('') +
+  '</div>' +
+  '<div class="form-actions">' +
+    (currentRole === 'admin' ? '<button class="btn-primary" onclick="editProduct('' + p.id + '')">Edit dates</button>' : '') +
+    '<button class="btn-outline" onclick="closeProductModal()">Close</button>' +
+  '</div>';
+}
 
 function renderCalendar(el) {
   el.innerHTML = `
@@ -530,11 +762,15 @@ window.__npd_init({
   handleSignIn,
   handleSignOut,
   loadView,
-  toggleSidebar:     window.toggleSidebar,
-  showCreateProduct: window.showCreateProduct,
-  addToAllowlist:    window.addToAllowlist,
+  toggleSidebar:      window.toggleSidebar,
+  showCreateProduct:  window.showCreateProduct,
+  closeProductModal:  window.closeProductModal,
+  saveProduct:        window.saveProduct,
+  editProduct:        window.editProduct,
+  viewProduct:        window.viewProduct,
+  addToAllowlist:     window.addToAllowlist,
   removeFromAllowlist: window.removeFromAllowlist,
-  showToast:         window.showToast
+  showToast:          window.showToast
 });
 
 </script>
@@ -821,6 +1057,106 @@ a { color: inherit; text-decoration: none; }
   .sidebar-bottom { padding: 10px; }
   .user-row { justify-content: center; }
 }
+
+/* ─── PHASE 2: PRODUCT CARDS & MODAL ─── */
+.product-grid { display: flex; flex-direction: column; gap: 14px; }
+
+.product-card-full {
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 20px 22px;
+}
+.pcf-header  { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 14px; gap: 12px; }
+.pcf-name    { font-size: 15px; font-weight: 600; color: var(--text); margin-bottom: 4px; }
+.pcf-desc    { font-size: 13px; color: var(--text-mid); }
+.pcf-meta-row { display: flex; gap: 24px; flex-wrap: wrap; margin-bottom: 12px; }
+.pcf-meta-item { display: flex; flex-direction: column; gap: 2px; }
+.pcf-meta-label { font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: .05em; font-weight: 500; }
+.pcf-meta-val { font-size: 13px; font-weight: 500; color: var(--text); }
+.pcf-meta-val.green { color: var(--green); }
+.pcf-meta-val.red   { color: var(--red);   }
+.pcf-actions { display: flex; gap: 8px; margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--border); }
+
+.progress-bar-wrap { height: 4px; background: var(--border); border-radius: 99px; overflow: hidden; margin-bottom: 4px; }
+.progress-bar-fill { height: 100%; background: var(--green); border-radius: 99px; transition: width .3s; }
+
+.status-chip { font-size: 11px; font-weight: 600; padding: 3px 10px; border-radius: 99px; flex-shrink: 0; }
+.status-active   { background: var(--blue-light); color: var(--blue); }
+.status-complete { background: var(--green-light); color: var(--green); }
+.status-archived { background: #F3F4F6; color: #6B7280; }
+
+/* Modal */
+.modal-overlay {
+  position: fixed; inset: 0; background: rgba(0,0,0,0.35);
+  display: flex; align-items: center; justify-content: center; z-index: 1000; padding: 20px;
+}
+.modal-box {
+  background: var(--surface); border-radius: 12px; width: 100%; max-width: 680px;
+  max-height: 88vh; display: flex; flex-direction: column; overflow: hidden;
+  box-shadow: 0 8px 40px rgba(0,0,0,0.18);
+}
+.modal-header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 18px 22px; border-bottom: 1px solid var(--border); flex-shrink: 0;
+}
+.modal-title { font-size: 15px; font-weight: 600; }
+.modal-close { background: none; border: none; font-size: 16px; color: var(--text-muted); padding: 4px 8px; border-radius: 6px; }
+.modal-close:hover { background: var(--bg); }
+.modal-body  { overflow-y: auto; padding: 22px; flex: 1; }
+
+/* Form */
+.form-section-label { font-size: 11px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: .07em; margin-bottom: 12px; }
+.form-hint { font-weight: 400; color: var(--text-muted); text-transform: none; letter-spacing: 0; font-size: 11px; }
+.form-row { margin-bottom: 14px; }
+.form-label { display: block; font-size: 12px; font-weight: 500; color: var(--text-mid); margin-bottom: 6px; }
+.req { color: var(--red); }
+.form-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 24px; padding-top: 16px; border-top: 1px solid var(--border); }
+textarea.input-field { resize: vertical; line-height: 1.6; }
+
+/* Pillar date rows in form */
+.pillar-date-row { display: flex; align-items: center; gap: 12px; padding: 8px 0; border-bottom: 1px solid var(--border); }
+.pillar-date-row:last-of-type { border-bottom: none; }
+.pillar-date-num  { width: 22px; height: 22px; border-radius: 50%; background: var(--bg); color: var(--text-muted); font-size: 11px; font-weight: 600; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+.pillar-date-name { flex: 1; font-size: 13px; color: var(--text); display: flex; flex-direction: column; gap: 1px; }
+.pillar-date-input { width: 148px; flex-shrink: 0; font-size: 12px; padding: 6px 10px; }
+.pillar-owner { font-size: 11px; color: var(--text-muted); }
+
+/* Pillar detail view */
+.pillar-detail-list { display: flex; flex-direction: column; gap: 0; }
+.pillar-detail-row  { display: flex; align-items: flex-start; gap: 12px; padding: 11px 0; border-bottom: 1px solid var(--border); }
+.pillar-detail-row:last-child { border-bottom: none; }
+.pillar-detail-num  { width: 22px; height: 22px; border-radius: 50%; background: var(--bg); color: var(--text-muted); font-size: 11px; font-weight: 600; display: flex; align-items: center; justify-content: center; flex-shrink: 0; margin-top: 1px; }
+.pillar-detail-body { flex: 1; }
+.pillar-detail-name { font-size: 13px; font-weight: 500; color: var(--text); margin-bottom: 4px; }
+.pillar-detail-meta { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.task-status { font-size: 11px; font-weight: 600; padding: 3px 10px; border-radius: 99px; flex-shrink: 0; white-space: nowrap; }
+.task-complete    { background: var(--green-light); color: var(--green); }
+.task-in-progress { background: var(--blue-light);  color: var(--blue); }
+.task-not-started { background: #F3F4F6; color: #6B7280; }
+.task-overdue     { background: var(--red-light);   color: var(--red);  }
+
+.pill { font-size: 11px; padding: 2px 8px; border-radius: 99px; font-weight: 500; }
+.pill-green { background: var(--green-light); color: var(--green); }
+.pill-amber { background: var(--amber-light); color: var(--amber); }
+.pill-red   { background: var(--red-light);   color: var(--red);   }
+.pill-grey  { background: #F3F4F6; color: #6B7280; }
+
+/* Dashboard panels */
+.dash-product-row { display: flex; align-items: center; gap: 10px; padding: 9px 0; border-bottom: 1px solid var(--border); cursor: pointer; }
+.dash-product-row:last-child { border-bottom: none; }
+.dash-product-row:hover { opacity: .8; }
+.dash-product-name { flex: 1; font-size: 13px; font-weight: 500; }
+.dash-product-meta { font-size: 12px; color: var(--text-muted); white-space: nowrap; }
+.deadline-row { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--border); }
+.deadline-row:last-child { border-bottom: none; }
+.deadline-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+.deadline-ontrack { background: var(--green); }
+.deadline-warning { background: var(--amber); }
+.deadline-overdue { background: var(--red); }
+.deadline-info { flex: 1; }
+.deadline-pillar  { font-size: 13px; font-weight: 500; }
+.deadline-product { font-size: 12px; color: var(--text-muted); }
+.btn-secondary-sm { padding: 6px 14px; background: none; border: 1px solid var(--border-mid); border-radius: var(--radius); font-size: 12px; font-weight: 500; color: var(--text); transition: background .15s; }
+.btn-secondary-sm:hover { background: var(--bg); }
 </style>
 
 <!-- ══════════════════════════════════════════
