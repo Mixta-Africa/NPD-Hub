@@ -1036,21 +1036,203 @@ window.updatePillarNotes = async (productId, pillarId, notes) => {
 };
 
 
+/* ══ DOCUMENT CENTRE ═══════════════════════════════════════ */
+const DOC_FOLDERS = [
+  { id: 'f1',  name: '01 - Market Research & Survey',  pillarIds: ['p3'] },
+  { id: 'f2',  name: '02 - Design & Development Docs', pillarIds: ['p4'] },
+  { id: 'f3',  name: '03 - Financial Model',            pillarIds: ['p5','p10'] },
+  { id: 'f4',  name: '04 - AMC Presentation Deck',      pillarIds: ['p6','p7','p8'] },
+  { id: 'f5',  name: '05 - Legal Documentation',        pillarIds: ['p9'] },
+  { id: 'f6',  name: '06 - Factsheet & Brief',          pillarIds: ['p9'] },
+  { id: 'f7',  name: '07 - Marketing Materials',        pillarIds: ['p11'] },
+  { id: 'f8',  name: '08 - Progress Reports',           pillarIds: [] },
+];
+
+let docsProductsCache  = {};
+let docsSelectedProduct = '';
+
 function renderDocuments(el) {
   el.innerHTML = `
     <div class="view-header">
       <div>
         <h1 class="view-title">Document Centre</h1>
-        <p class="view-subtitle">Upload and access all product launch documents — synced to Google Drive</p>
+        <p class="view-subtitle">Upload documents per SOP pillar — synced to Google Drive</p>
       </div>
+      <select id="docs-product-sel" class="select-field" onchange="docsSelectProduct()">
+        <option value="">Select a product...</option>
+      </select>
     </div>
-    <div class="panel">
-      <div class="empty-state">
-        <span class="empty-icon">📁</span>
-        <h3>Document centre coming in Phase 6</h3>
-        <p>Each product will have a dedicated upload zone tied to its Google Drive folder. Documents are organised by SOP pillar and shared automatically with relevant stakeholders.</p>
+    <div id="docs-body"><div class="loading-row" style="padding:24px;">Loading products...</div></div>`;
+  loadDocsProducts();
+}
+
+async function loadDocsProducts() {
+  const snap = await get(ref(db, 'products'));
+  docsProductsCache = snap.val() || {};
+  const active = Object.values(docsProductsCache).filter(p => p.status !== 'archived');
+  const sel = document.getElementById('docs-product-sel');
+  if (!sel) return;
+  active.forEach(p => {
+    const o = document.createElement('option');
+    o.value = p.id; o.textContent = p.name; sel.appendChild(o);
+  });
+  if (active.length > 0) {
+    sel.value = active[0].id;
+    docsSelectedProduct = active[0].id;
+    renderDocsFolders(active[0]);
+  } else {
+    document.getElementById('docs-body').innerHTML =
+      '<div class="panel"><div class="empty-state"><span class="empty-icon">📁</span><h3>No products yet</h3><p>Create a product first.</p></div></div>';
+  }
+}
+
+window.docsSelectProduct = () => {
+  const id = document.getElementById('docs-product-sel')?.value;
+  if (!id) return;
+  docsSelectedProduct = id;
+  renderDocsFolders(docsProductsCache[id]);
+};
+
+function renderDocsFolders(prod) {
+  const body = document.getElementById('docs-body');
+  if (!body) return;
+
+  const driveBtn = prod.driveUrl
+    ? `<a href="${prod.driveUrl}" target="_blank" class="btn-outline" style="font-size:12px;text-decoration:none;display:inline-flex;align-items:center;gap:6px;">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+        Open in Google Drive
+       </a>`
+    : '<span class="muted" style="font-size:12px;">Drive folder not yet created (complete onboarding first)</span>';
+
+  body.innerHTML = `
+    <div class="docs-header-row">
+      <div>
+        <div style="font-size:15px;font-weight:600;">${prod.name}</div>
+        <div style="font-size:12px;color:var(--text-muted);margin-top:2px;">Launch: ${formatDate(prod.launchDate)}</div>
+      </div>
+      ${driveBtn}
+    </div>
+    <div class="docs-grid" id="docs-grid">
+      ${DOC_FOLDERS.map(f => renderDocFolder(f, prod)).join('')}
+    </div>`;
+}
+
+function renderDocFolder(folder, prod) {
+  const docs   = prod.documents?.[folder.id] || {};
+  const docList = Object.values(docs);
+  const count  = docList.length;
+
+  const fileRows = docList.map(d => `
+    <div class="doc-file-row">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="flex-shrink:0;color:var(--text-muted)"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+      <span class="doc-file-name">${d.name}</span>
+      <span class="doc-file-date">${new Date(d.uploadedAt).toLocaleDateString('en-GB',{day:'numeric',month:'short'})}</span>
+      ${d.driveUrl ? `<a href="${d.driveUrl}" target="_blank" class="doc-file-link">View</a>` : ''}
+    </div>`).join('');
+
+  const uploadZone = currentRole === 'admin' ? `
+    <div class="doc-upload-zone" id="zone-${folder.id}"
+      ondragover="docDragOver(event,'${folder.id}')"
+      ondragleave="docDragLeave('${folder.id}')"
+      ondrop="docDrop(event,'${prod.id}','${folder.id}')">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="color:var(--text-muted)"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+      <span class="doc-upload-label">Drag file here or <label class="doc-upload-click">browse<input type="file" style="display:none;" onchange="docFileSelected(event,'${prod.id}','${folder.id}')"/></label></span>
+    </div>` : '';
+
+  return `
+    <div class="doc-folder-card">
+      <div class="doc-folder-header">
+        <div class="doc-folder-name">${folder.name}</div>
+        <span class="doc-folder-count">${count} file${count!==1?'s':''}</span>
+      </div>
+      <div class="doc-file-list">${fileRows || '<div class="doc-empty">No files uploaded yet</div>'}</div>
+      ${uploadZone}
+      <div class="doc-uploading" id="uploading-${folder.id}" style="display:none;">
+        <span class="spinner-sm"></span> Uploading to Drive...
       </div>
     </div>`;
+}
+
+/* ── DRAG & DROP HANDLERS ── */
+window.docDragOver = (e, folderId) => {
+  e.preventDefault();
+  document.getElementById(`zone-${folderId}`)?.classList.add('drag-over');
+};
+window.docDragLeave = (folderId) => {
+  document.getElementById(`zone-${folderId}`)?.classList.remove('drag-over');
+};
+window.docDrop = (e, productId, folderId) => {
+  e.preventDefault();
+  document.getElementById(`zone-${folderId}`)?.classList.remove('drag-over');
+  const file = e.dataTransfer.files[0];
+  if (file) uploadDocFile(file, productId, folderId);
+};
+window.docFileSelected = (e, productId, folderId) => {
+  const file = e.target.files[0];
+  if (file) uploadDocFile(file, productId, folderId);
+};
+
+async function uploadDocFile(file, productId, folderId) {
+  const uploadingEl = document.getElementById(`uploading-${folderId}`);
+  const zoneEl      = document.getElementById(`zone-${folderId}`);
+  if (uploadingEl) uploadingEl.style.display = 'flex';
+  if (zoneEl)      zoneEl.style.display = 'none';
+
+  try {
+    // Convert file to base64
+    const base64 = await fileToBase64(file);
+    const folder  = DOC_FOLDERS.find(f => f.id === folderId);
+    const prod    = docsProductsCache[productId];
+
+    const result = await callGAS('uploadDocument', {
+      productId,
+      productName:  prod.name,
+      folderId,
+      folderName:   folder.name,
+      fileName:     file.name,
+      fileType:     file.type,
+      fileBase64:   base64,
+      uploadedBy:   currentUser.email,
+      driveUrl:     prod.driveUrl || null,
+    });
+
+    if (!result.ok) throw new Error(result.error || 'Upload failed');
+
+    // Save document metadata to Firebase
+    const docId  = 'doc_' + Date.now();
+    const docMeta = {
+      id:         docId,
+      name:       file.name,
+      folderId,
+      driveUrl:   result.fileUrl || null,
+      uploadedBy: currentUser.email,
+      uploadedAt: Date.now(),
+      size:       file.size,
+    };
+    await set(ref(db, `products/${productId}/documents/${folderId}/${docId}`), docMeta);
+
+    // Update local cache + re-render
+    if (!docsProductsCache[productId].documents) docsProductsCache[productId].documents = {};
+    if (!docsProductsCache[productId].documents[folderId]) docsProductsCache[productId].documents[folderId] = {};
+    docsProductsCache[productId].documents[folderId][docId] = docMeta;
+
+    showToast(`${file.name} uploaded successfully.`, 'success');
+    renderDocsFolders(docsProductsCache[productId]);
+
+  } catch(e) {
+    showToast('Upload failed: ' + e.message, 'error');
+    if (uploadingEl) uploadingEl.style.display = 'none';
+    if (zoneEl)      zoneEl.style.display = 'flex';
+  }
+}
+
+function fileToBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload  = () => resolve(reader.result.split(',')[1]);
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
 }
 
 /* ══ REPORTS + DEADLINE ALERT TRIGGER ══════════════════════ */
@@ -1127,16 +1309,29 @@ function renderReports(el) {
     </div>
 
     <div class="panel" style="margin-top:16px;">
-      <div class="panel-header"><span class="panel-title">Progress Reports</span></div>
+      <div class="panel-header"><span class="panel-title">Generate Progress Report</span></div>
       <div class="panel-body">
         <p style="font-size:13px;color:var(--text-mid);line-height:1.7;margin-bottom:16px;">
-          Full progress report generation — including PDF export and email delivery — is coming in Phase 6.
+          Generates a structured progress report for the selected product and emails it to all onboarded stakeholders.
+          Also logs the report to the Sheets audit trail.
         </p>
-        <div style="opacity:.5;">
-          <button class="btn-primary" disabled>Generate &amp; email report</button>
-        </div>
+        ${currentRole === 'admin' ? `
+        <div class="report-form">
+          <div class="form-row">
+            <label class="form-label">Product</label>
+            <select id="report-product-sel" class="select-field" style="width:100%;"></select>
+          </div>
+          <div class="form-row">
+            <label class="form-label">Report notes <span class="form-hint">— optional context to include</span></label>
+            <textarea id="report-notes" class="input-field" rows="3" placeholder="e.g. Focus areas, escalations, key decisions this week..."></textarea>
+          </div>
+          <button class="btn-primary" onclick="generateProgressReport()" style="width:100%;">Generate &amp; email report</button>
+          <div id="report-result" style="display:none;margin-top:12px;"></div>
+        </div>` : '<p style="font-size:12px;color:var(--text-muted);">Contact an admin to generate a report.</p>'}
       </div>
     </div>`;
+
+  if (currentRole === 'admin') setTimeout(loadReportProductList, 50);
 
   loadDeadlineStatus();
   if (currentRole === 'admin') loadAlertProductList();
@@ -1208,6 +1403,197 @@ async function loadDeadlineStatus() {
     el.innerHTML = '<div class="loading-row muted">Failed to load deadline status.</div>';
   }
 }
+
+/* ══ PHASE 6: PROGRESS REPORTS ══════════════════════════════ */
+async function loadReportProductList() {
+  const snap = await get(ref(db, 'products'));
+  const prods = snap.val() || {};
+  const sel   = document.getElementById('report-product-sel');
+  if (!sel) return;
+  sel.innerHTML = '';
+  Object.values(prods).filter(p => p.status !== 'archived').forEach(p => {
+    const o = document.createElement('option');
+    o.value = p.id; o.textContent = p.name; sel.appendChild(o);
+  });
+}
+
+window.generateProgressReport = async () => {
+  const btn      = document.querySelector('.report-form .btn-primary');
+  const resultEl = document.getElementById('report-result');
+  const productId = document.getElementById('report-product-sel')?.value;
+  const notes     = document.getElementById('report-notes')?.value?.trim() || '';
+
+  if (!productId) { showToast('Select a product.', 'error'); return; }
+  if (btn) { btn.disabled = true; btn.textContent = 'Generating...'; }
+  if (resultEl) resultEl.style.display = 'none';
+
+  try {
+    const snap = await get(ref(db, `products/${productId}`));
+    const prod  = snap.val();
+    if (!prod) throw new Error('Product not found');
+
+    // Build report data
+    const today    = new Date(); today.setHours(0,0,0,0);
+    const complete = PILLARS.filter(pl => prod.pillars?.[pl.id]?.taskStatus === 'complete').length;
+    const inProg   = PILLARS.filter(pl => prod.pillars?.[pl.id]?.taskStatus === 'in-progress').length;
+    const overdue  = PILLARS.filter(pl => {
+      const pd = prod.pillars?.[pl.id];
+      return pd?.deadline && pd?.taskStatus !== 'complete' && getPillarStatus(pd.deadline) === 'overdue';
+    }).length;
+    const pct = Math.round((complete / PILLARS.length) * 100);
+
+    const pillarSummary = PILLARS.map(pl => {
+      const pd = prod.pillars?.[pl.id] || {};
+      return { pillar: pl.name, owner: pl.owner, status: pd.taskStatus || 'not-started', deadline: pd.deadline || null, notes: pd.notes || '' };
+    });
+
+    const reportPayload = {
+      productName:     prod.name,
+      productId:       prod.id,
+      launchDate:      prod.launchDate,
+      reportDate:      new Date().toISOString().split('T')[0],
+      generatedBy:     currentUser.email,
+      pctComplete:     pct,
+      complete,
+      inProgress:      inProg,
+      notStarted:      PILLARS.length - complete - inProg,
+      overdue,
+      notes,
+      pillarSummary,
+      onboardedEmails: prod.onboardedEmails || [],
+      driveUrl:        prod.driveUrl || null,
+    };
+
+    const result = await callGAS('sendProgressReport', reportPayload);
+    if (!result.ok) throw new Error(result.error || 'Report failed');
+
+    // Log to audit
+    await callGAS('logToAuditSheet', {
+      event:       'Progress report sent',
+      productName: prod.name,
+      productId:   prod.id,
+      user:        currentUser.email,
+      timestamp:   new Date().toISOString(),
+      data:        { pct, complete, overdue, recipientCount: reportPayload.onboardedEmails.length },
+    });
+
+    // Save last reported timestamp to Firebase
+    await set(ref(db, `products/${productId}/lastReportAt`), Date.now());
+
+    if (resultEl) {
+      resultEl.style.display = 'block';
+      resultEl.className = 'alert-result-box alert-result-ok';
+      resultEl.innerHTML = `✅ Report sent to ${reportPayload.onboardedEmails.length} stakeholder${reportPayload.onboardedEmails.length!==1?'s':''}.`;
+    }
+    document.getElementById('report-notes').value = '';
+  } catch(e) {
+    if (resultEl) {
+      resultEl.style.display = 'block';
+      resultEl.className = 'alert-result-box alert-result-err';
+      resultEl.innerHTML = '❌ ' + e.message;
+    }
+  }
+  if (btn) { btn.disabled = false; btn.textContent = 'Generate & email report'; }
+};
+
+/* ══ PHASE 6: READ-ONLY PRODUCT PAGE ════════════════════════ */
+function checkReadOnlyRoute() {
+  const hash = window.location.hash;
+  if (!hash.startsWith('#/product/')) return false;
+  const productId = hash.replace('#/product/', '').trim();
+  if (!productId) return false;
+  renderReadOnlyPage(productId);
+  return true;
+}
+
+async function renderReadOnlyPage(productId) {
+  // Show a minimal read-only view without requiring auth
+  document.getElementById('screen-login').style.display  = 'none';
+  document.getElementById('screen-denied').style.display = 'none';
+  document.getElementById('screen-app').style.display    = 'none';
+
+  const ro = document.getElementById('screen-readonly');
+  if (!ro) {
+    const div = document.createElement('div');
+    div.id = 'screen-readonly';
+    div.style.cssText = 'min-height:100vh;background:#F8F8F7;padding:32px 24px;max-width:760px;margin:0 auto;';
+    document.body.appendChild(div);
+  }
+  const screen = document.getElementById('screen-readonly');
+  screen.style.display = 'block';
+  screen.innerHTML = '<div class="loading-row" style="padding:48px;text-align:center;">Loading product status...</div>';
+
+  try {
+    const snap = await get(ref(db, `products/${productId}`));
+    const prod  = snap.val();
+    if (!prod) { screen.innerHTML = '<div style="text-align:center;padding:48px;"><h2>Product not found</h2></div>'; return; }
+
+    const complete = PILLARS.filter(pl => prod.pillars?.[pl.id]?.taskStatus === 'complete').length;
+    const pct      = Math.round((complete / PILLARS.length) * 100);
+    const overdue  = PILLARS.filter(pl => {
+      const pd = prod.pillars?.[pl.id];
+      return pd?.deadline && pd?.taskStatus !== 'complete' && getPillarStatus(pd.deadline) === 'overdue';
+    }).length;
+
+    const pillarRows = PILLARS.map((pl, i) => {
+      const pd  = prod.pillars?.[pl.id] || {};
+      const st  = pd.taskStatus || 'not-started';
+      const dst = pd.deadline ? getPillarStatus(pd.deadline) : 'no-date';
+      const isComplete = st === 'complete';
+      const deadlinePill = !pd.deadline ? '<span class="pill pill-grey">No date</span>'
+        : isComplete      ? `<span class="pill pill-blue">${formatDate(pd.deadline)}</span>`
+        : dst==='overdue' ? `<span class="pill pill-red">Overdue &mdash; ${formatDate(pd.deadline)}</span>`
+        : dst==='warning' ? `<span class="pill pill-amber">Due soon &mdash; ${formatDate(pd.deadline)}</span>`
+        : `<span class="pill pill-green">${formatDate(pd.deadline)}</span>`;
+      return `<tr class="tracker-row${isComplete?' tracker-row-done':''}">
+        <td class="tracker-num">${i+1}</td>
+        <td class="tracker-pillar"><div class="tracker-pillar-name">${pl.name}</div><div class="tracker-pillar-owner">${pl.owner}</div></td>
+        <td class="tracker-deadline">${deadlinePill}</td>
+        <td class="tracker-status"><span class="task-status task-${st}">${statusLabel(st)}</span></td>
+      </tr>`;
+    }).join('');
+
+    screen.innerHTML = `
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:24px;">
+        <div style="width:32px;height:32px;background:#C0282D;border-radius:8px;display:flex;align-items:center;justify-content:center;color:white;font-family:'Playfair Display',serif;font-size:15px;font-weight:600;">M</div>
+        <div style="font-size:12px;color:#9a9a96;text-transform:uppercase;letter-spacing:.07em;">Mixta Africa — NPD Hub</div>
+      </div>
+      <h1 style="font-family:'Playfair Display',serif;font-size:26px;font-weight:600;margin-bottom:4px;">${prod.name}</h1>
+      <p style="font-size:13px;color:#6b6b67;margin-bottom:24px;">Launch: ${formatDate(prod.launchDate)} &nbsp;·&nbsp; Last updated: ${new Date(prod.updatedAt||prod.createdAt).toLocaleDateString('en-GB',{day:'numeric',month:'short',year:'numeric'})}</p>
+
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:24px;">
+        <div style="background:white;border:1px solid #e5e4e0;border-radius:8px;padding:16px 18px;">
+          <div style="font-size:11px;color:#9a9a96;text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px;">Complete</div>
+          <div style="font-size:26px;font-weight:600;color:#16A34A;">${complete}/12</div>
+        </div>
+        <div style="background:white;border:1px solid #e5e4e0;border-radius:8px;padding:16px 18px;">
+          <div style="font-size:11px;color:#9a9a96;text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px;">Progress</div>
+          <div style="font-size:26px;font-weight:600;">${pct}%</div>
+        </div>
+        <div style="background:white;border:1px solid #e5e4e0;border-radius:8px;padding:16px 18px;">
+          <div style="font-size:11px;color:#9a9a96;text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px;">Overdue</div>
+          <div style="font-size:26px;font-weight:600;color:${overdue>0?'#C0282D':'#1a1a18'};">${overdue}</div>
+        </div>
+      </div>
+
+      <div style="background:white;border:1px solid #e5e4e0;border-radius:8px;overflow:auto;margin-bottom:24px;">
+        <table class="tracker-table">
+          <thead><tr>
+            <th style="width:32px;">#</th><th>Pillar</th>
+            <th style="width:180px;">Deadline</th>
+            <th style="width:130px;">Status</th>
+          </tr></thead>
+          <tbody>${pillarRows}</tbody>
+        </table>
+      </div>
+      <div style="font-size:11px;color:#9a9a96;text-align:center;">This is a read-only status page. Contact the NPD Hub admin for access.</div>`;
+  } catch(e) {
+    screen.innerHTML = `<div style="text-align:center;padding:48px;"><h2>Failed to load</h2><p>${e.message}</p></div>`;
+  }
+}
+
+// Check for read-only route on load
+window.addEventListener('hashchange', () => { checkReadOnlyRoute(); });
 
 window.triggerDeadlineCheck = async () => {
   const btn = document.querySelector('.alert-manual-section .btn-primary');
@@ -1439,6 +1825,12 @@ window.__npd_init({
   skipGASSetup:            window.skipGASSetup,
   confirmAndLaunchGAS:     window.confirmAndLaunchGAS,
   triggerDeadlineCheck:    window.triggerDeadlineCheck,
+  docsSelectProduct:       window.docsSelectProduct,
+  docDragOver:             window.docDragOver,
+  docDragLeave:            window.docDragLeave,
+  docDrop:                 window.docDrop,
+  docFileSelected:         window.docFileSelected,
+  generateProgressReport:  window.generateProgressReport,
 });
 
 </script>
@@ -1924,6 +2316,34 @@ textarea.input-field { resize: vertical; line-height: 1.6; }
 .alert-result-box { padding:10px 14px; border-radius:var(--radius); font-size:13px; font-weight:500; }
 .alert-result-ok  { background:var(--green-light); color:var(--green); }
 .alert-result-err { background:var(--red-light);   color:var(--red);   }
+
+/* ─── PHASE 6: DOCUMENT CENTRE ─── */
+.docs-header-row { display:flex; align-items:flex-start; justify-content:space-between; gap:16px; padding:18px 20px; border-bottom:1px solid var(--border); flex-wrap:wrap; }
+.docs-grid { display:grid; grid-template-columns:repeat(2,1fr); gap:14px; padding:16px; }
+@media(max-width:700px) { .docs-grid { grid-template-columns:1fr; } }
+
+.doc-folder-card { background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); overflow:hidden; }
+.doc-folder-header { display:flex; align-items:center; justify-content:space-between; padding:12px 14px; background:var(--bg); border-bottom:1px solid var(--border); }
+.doc-folder-name  { font-size:12px; font-weight:600; color:var(--text); }
+.doc-folder-count { font-size:11px; color:var(--text-muted); background:var(--surface); padding:2px 8px; border-radius:99px; border:1px solid var(--border); }
+
+.doc-file-list { padding:8px 14px; min-height:40px; }
+.doc-empty { font-size:12px; color:var(--text-muted); padding:8px 0; }
+.doc-file-row { display:flex; align-items:center; gap:8px; padding:6px 0; border-bottom:1px solid var(--border); }
+.doc-file-row:last-child { border-bottom:none; }
+.doc-file-name { flex:1; font-size:12px; color:var(--text); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.doc-file-date { font-size:11px; color:var(--text-muted); flex-shrink:0; }
+.doc-file-link { font-size:11px; color:var(--blue); flex-shrink:0; text-decoration:none; }
+.doc-file-link:hover { text-decoration:underline; }
+
+.doc-upload-zone { display:flex; align-items:center; justify-content:center; gap:8px; padding:12px 14px; border-top:1px solid var(--border); border:2px dashed var(--border-mid); border-radius:0 0 var(--radius) var(--radius); cursor:pointer; transition:background .15s,border-color .15s; }
+.doc-upload-zone:hover, .doc-upload-zone.drag-over { background:var(--blue-light); border-color:var(--blue); }
+.doc-upload-label { font-size:12px; color:var(--text-muted); }
+.doc-upload-click { color:var(--blue); cursor:pointer; text-decoration:underline; }
+.doc-uploading { display:flex; align-items:center; gap:8px; padding:10px 14px; border-top:1px solid var(--border); font-size:12px; color:var(--text-muted); }
+
+/* ─── PHASE 6: REPORTS FORM ─── */
+.report-form { background:var(--bg); border-radius:var(--radius); padding:14px; }
 </style>
 
 <!-- ══════════════════════════════════════════
