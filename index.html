@@ -266,7 +266,7 @@ function renderDashboard(el) {
         <h1 class="view-title">Good ${getGreeting()}, ${(currentUser?.displayName || 'there').split(' ')[0]}.</h1>
         <p class="view-subtitle">New Product Development Operations Hub</p>
       </div>
-      ${currentRole === 'admin' ? '<button class="btn-primary" onclick="loadView('products')">+ New product</button>' : ''}
+      ${currentRole === 'admin' ? `<button class="btn-primary" onclick="loadView('products')">+ New product</button>` : ''}
     </div>
     <div class="stats-row">
       <div class="stat-card"><div class="stat-label">Active Products</div><div class="stat-value" id="stat-active">—</div></div>
@@ -323,7 +323,7 @@ async function loadDashboardStats() {
     // Recent products panel
     const recentEl = document.getElementById('dash-recent');
     if (list.length === 0) {
-      recentEl.innerHTML = '<div class="empty-state-sm"><span class="empty-icon">📋</span><p>No products yet.' + (currentRole === 'admin' ? ' <button class="btn-primary-sm" onclick="loadView('products')">Create one</button>' : '') + '</p></div>';
+      recentEl.innerHTML = `<div class="empty-state-sm"><span class="empty-icon">📋</span><p>No products yet.${currentRole === 'admin' ? ' <button class="btn-primary-sm" onclick="loadView(\'products\')">Create one</button>' : ''}</p></div>`;
     } else {
       const sorted = list.sort((a,b) => b.createdAt - a.createdAt).slice(0,4);
       recentEl.innerHTML = sorted.map(p => `
@@ -364,7 +364,7 @@ function renderProducts(el) {
         <h1 class="view-title">Products</h1>
         <p class="view-subtitle">All product launches — active, completed, and archived</p>
       </div>
-      ${currentRole === 'admin' ? '<button class="btn-primary" onclick="showCreateProduct()">+ New product</button>' : ''}
+      ${currentRole === 'admin' ? `<button class="btn-primary" onclick="showCreateProduct()">+ New product</button>` : ''}
     </div>
     <div id="product-list-area"><div class="loading-row" style="padding:24px;">Loading products...</div></div>
     <div id="create-product-modal" class="modal-overlay" style="display:none;">
@@ -390,7 +390,7 @@ async function loadProductList() {
 
     if (list.length === 0) {
       area.innerHTML = '<div class="panel"><div class="empty-state"><span class="empty-icon">🏗️</span><h3>No products yet</h3><p>Create your first product launch to get started.</p>' +
-        (currentRole === 'admin' ? '<button class="btn-primary" onclick="showCreateProduct()">Create your first product</button>' : '<p class="muted">Contact an admin to initiate a product launch.</p>') +
+        (currentRole === 'admin' ? `<button class="btn-primary" onclick="showCreateProduct()">Create your first product</button>` : '<p class="muted">Contact an admin to initiate a product launch.</p>') +
         '</div></div>';
       return;
     }
