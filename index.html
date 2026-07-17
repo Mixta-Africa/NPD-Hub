@@ -158,31 +158,46 @@ async function sha256(message) {
 }
 
 window.showSAChallenge = () => {
-  // Can only attempt if already signed in with Google
   if (!currentUser) { showToast('Sign in with your Mixta account first.', 'error'); return; }
 
-  document.getElementById('modal-title-text').textContent = '🔒 Super Admin Access';
-  document.getElementById('modal-body-content').innerHTML = `
-    <div class="sa-challenge-wrap">
-      <div class="sa-challenge-icon">⚡</div>
-      <p style="font-size:13px;color:var(--text-mid);margin-bottom:20px;line-height:1.7;text-align:center;">
-        Enter the super admin password to access the circuit box.<br/>
-        Session expires after 30 minutes of inactivity.
-      </p>
-      <div class="form-row">
-        <input type="password" id="sa-password-input" class="input-field"
-          placeholder="Super admin password"
-          onkeydown="if(event.key==='Enter') verifySAPassword()"
-          style="text-align:center;letter-spacing:.15em;font-size:16px;"/>
-      </div>
-      <div id="sa-error" style="display:none;color:var(--red);font-size:12px;text-align:center;margin-top:8px;"></div>
-      <div class="form-actions">
-        <button class="btn-outline" onclick="closeProductModal()">Cancel</button>
-        <button class="btn-primary" onclick="verifySAPassword()">Enter</button>
-      </div>
-    </div>`;
-  document.getElementById('create-product-modal').style.display = 'flex';
+  // Use a dedicated SA modal — does not depend on the product modal being in the DOM
+  let modal = document.getElementById('sa-modal');
+  if (!modal) {
+    modal = document.createElement('div');
+    modal.id = 'sa-modal';
+    modal.className = 'modal-overlay';
+    modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.45);display:flex;align-items:center;justify-content:center;z-index:2000;padding:20px;';
+    modal.innerHTML = `
+      <div style="background:#fff;border-radius:12px;width:100%;max-width:400px;overflow:hidden;box-shadow:0 8px 40px rgba(0,0,0,0.2);">
+        <div style="background:#C0282D;padding:20px 24px;">
+          <div style="color:white;font-size:11px;letter-spacing:.1em;text-transform:uppercase;margin-bottom:2px;">Mixta Africa NPD Hub</div>
+          <div style="color:white;font-size:18px;font-weight:700;">⚡ Super Admin Access</div>
+        </div>
+        <div style="padding:24px;">
+          <p style="font-size:13px;color:#6b6b67;margin-bottom:20px;line-height:1.7;text-align:center;">
+            Enter the super admin password to access the circuit box.<br/>
+            Session expires after 30 minutes.
+          </p>
+          <input type="password" id="sa-password-input" class="input-field"
+            placeholder="Password"
+            onkeydown="if(event.key==='Enter') verifySAPassword()"
+            style="width:100%;text-align:center;letter-spacing:.15em;font-size:16px;margin-bottom:8px;"/>
+          <div id="sa-error" style="display:none;color:#C0282D;font-size:12px;text-align:center;margin-bottom:12px;"></div>
+          <div style="display:flex;gap:10px;justify-content:flex-end;">
+            <button class="btn-outline" onclick="closeSAModal()">Cancel</button>
+            <button class="btn-primary" onclick="verifySAPassword()">Enter</button>
+          </div>
+        </div>
+      </div>`;
+    document.body.appendChild(modal);
+  }
+  modal.style.display = 'flex';
   setTimeout(() => document.getElementById('sa-password-input')?.focus(), 100);
+};
+
+window.closeSAModal = () => {
+  const modal = document.getElementById('sa-modal');
+  if (modal) modal.style.display = 'none';
 };
 
 window.verifySAPassword = async () => {
@@ -209,7 +224,7 @@ window.verifySAPassword = async () => {
       });
     } catch(e) {}
 
-    closeProductModal();
+    closeSAModal();
     showSANav();
     showToast('Super admin session active. 30-minute timeout.', 'success');
     loadView('superadmin');
@@ -237,8 +252,8 @@ window.verifySAPassword = async () => {
 
     if (errEl) { errEl.textContent = 'Incorrect password. Try again.'; errEl.style.display = 'block'; }
     if (btn)   { btn.disabled = false; btn.textContent = 'Enter'; }
-    document.getElementById('sa-password-input').value = '';
-    document.getElementById('sa-password-input').focus();
+    const pwInput = document.getElementById('sa-password-input');
+    if (pwInput) { pwInput.value = ''; pwInput.focus(); }
   }
 };
 
@@ -261,7 +276,12 @@ function hideSANav() {
 }
 
 // Global error capture — feeds the SA error log
+// Guard flag prevents infinite loop when Firebase write itself fails
+let _errorLogging = false;
+
 window.addEventListener('error', async (e) => {
+  if (_errorLogging) return;
+  _errorLogging = true;
   try {
     await set(ref(db, `errors/${Date.now()}`), {
       message:   e.message || 'Unknown error',
@@ -273,10 +293,13 @@ window.addEventListener('error', async (e) => {
       timestamp: new Date().toISOString(),
       stack:     e.error?.stack?.slice(0, 500) || '',
     });
-  } catch(_) {}
+  } catch(_) { /* silently ignore — Firebase rules may not allow /errors/ writes yet */ }
+  finally { _errorLogging = false; }
 });
 
 window.addEventListener('unhandledrejection', async (e) => {
+  if (_errorLogging) return;
+  _errorLogging = true;
   try {
     await set(ref(db, `errors/${Date.now()}`), {
       message:   e.reason?.message || String(e.reason) || 'Unhandled rejection',
@@ -286,7 +309,8 @@ window.addEventListener('unhandledrejection', async (e) => {
       timestamp: new Date().toISOString(),
       stack:     e.reason?.stack?.slice(0, 500) || '',
     });
-  } catch(_) {}
+  } catch(_) { /* silently ignore */ }
+  finally { _errorLogging = false; }
 });
 
 function setBtnLoading(loading) {
