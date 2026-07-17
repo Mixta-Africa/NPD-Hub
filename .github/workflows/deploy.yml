@@ -27,6 +27,7 @@ jobs:
           sed -i "s|__FIREBASE_MESSAGING_SENDER_ID__|${{ secrets.FIREBASE_MESSAGING_SENDER_ID }}|g" index.html
           sed -i "s|__FIREBASE_APP_ID__|${{ secrets.FIREBASE_APP_ID }}|g"                   index.html
           sed -i "s|__GAS_ENDPOINT__|${{ secrets.GAS_ENDPOINT }}|g"                         index.html
+          sed -i "s|__SUPER_ADMIN_HASH__|${{ secrets.SUPER_ADMIN_HASH }}|g"               index.html
 
       - name: Deploy to GitHub Pages
         uses: peaceiris/actions-gh-pages@v3
