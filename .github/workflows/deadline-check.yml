@@ -1,0 +1,152 @@
+name: Daily Deadline Check
+
+on:
+  schedule:
+    # 7:00 AM WAT = 6:00 AM UTC (WAT is UTC+1)
+    - cron: '0 6 * * *'
+  workflow_dispatch: # Allow manual trigger from GitHub Actions tab
+
+jobs:
+  check-deadlines:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Run deadline check
+        env:
+          FIREBASE_DATABASE_URL: ${{ secrets.FIREBASE_DATABASE_URL }}
+          GAS_ENDPOINT:          ${{ secrets.GAS_ENDPOINT }}
+        run: |
+          node << 'NODESCRIPT'
+
+          const https = require('https');
+
+          const FIREBASE_URL = process.env.FIREBASE_DATABASE_URL;
+          const GAS_ENDPOINT = process.env.GAS_ENDPOINT;
+
+          // ── SOP Pillars (must match index.html PILLARS array) ──
+          const PILLARS = [
+            { id: 'p1',  name: 'New Product Case Assessment',              owner: 'Commercial Strategy', dept: 'commercial' },
+            { id: 'p2',  name: 'New Product Development Meetings',         owner: 'Commercial Strategy', dept: 'commercial' },
+            { id: 'p3',  name: 'Market Survey & Research',                 owner: 'Commercial Strategy', dept: 'commercial' },
+            { id: 'p4',  name: 'Product Design & Development',             owner: 'Design',              dept: 'design'     },
+            { id: 'p5',  name: 'Product Financial & Profitability Analysis',owner: 'Financial Planning', dept: 'finplan'    },
+            { id: 'p6',  name: 'Product AMC Meetings',                     owner: 'Country Manager',     dept: 'amc'        },
+            { id: 'p7',  name: 'AMC Product Presentations',                owner: 'Country Manager',     dept: 'amc'        },
+            { id: 'p8',  name: 'IC Product Presentations',                 owner: 'Country Manager',     dept: 'amc'        },
+            { id: 'p9',  name: 'Product Components: Factsheet, Legal & Layout', owner: 'Operations',   dept: 'operations'  },
+            { id: 'p10', name: 'Product Pricing Development',              owner: 'Financial Planning',  dept: 'finplan'    },
+            { id: 'p11', name: 'Product Marketing Materials',              owner: 'MCC',                 dept: 'mcc'        },
+            { id: 'p12', name: 'Project Execution Strategy',               owner: 'Country Manager',     dept: 'amc'        },
+          ];
+
+          // ── Stakeholders by pillar (matches STAKEHOLDERS in index.html) ──
+          const PILLAR_EMAILS = {
+            p1:  ['dcs_nigeria@mixtafrica.com'],
+            p2:  ['dcs_nigeria@mixtafrica.com'],
+            p3:  ['mcc@mixtafrica.com','o.kolawole@mixtafrica.com','k.haastrup@mixtafrica.com'],
+            p4:  ['dcs_nigeria@mixtafrica.com','a.arokodare@mixtafrica.com','c.uwadiale@mixtafrica.com','a.uwuigbe@mixtafrica.com','mn_costingandprocurement@mixtafrica.com','o.james@mixtafrica.com','j.olowe@mixtafrica.com'],
+            p5:  ['mn_costingandprocurement@mixtafrica.com','o.james@mixtafrica.com','j.olowe@mixtafrica.com','o.ogunewu@mixtafrica.com','t.ibidokun@mixtafrica.com'],
+            p6:  ['deji.alli@mixtafrica.com','s.hughes@mixtafrica.com','b.ajayi@mixtafrica.com','t.akinsulire@mixtafrica.com','p.ozolua@mixtafrica.com','u.ndubuisi@mixtafrica.com'],
+            p7:  ['deji.alli@mixtafrica.com','s.hughes@mixtafrica.com','b.ajayi@mixtafrica.com','t.akinsulire@mixtafrica.com','p.ozolua@mixtafrica.com','u.ndubuisi@mixtafrica.com'],
+            p8:  ['deji.alli@mixtafrica.com','s.hughes@mixtafrica.com','b.ajayi@mixtafrica.com','t.akinsulire@mixtafrica.com','p.ozolua@mixtafrica.com','u.ndubuisi@mixtafrica.com'],
+            p9:  [],
+            p10: ['mn_costingandprocurement@mixtafrica.com','o.james@mixtafrica.com','j.olowe@mixtafrica.com','o.ogunewu@mixtafrica.com','t.ibidokun@mixtafrica.com'],
+            p11: ['mcc@mixtafrica.com','o.kolawole@mixtafrica.com','k.haastrup@mixtafrica.com','pmo_nigeria@mixtafrica.com'],
+            p12: ['deji.alli@mixtafrica.com','s.hughes@mixtafrica.com','b.ajayi@mixtafrica.com','t.akinsulire@mixtafrica.com','p.ozolua@mixtafrica.com','u.ndubuisi@mixtafrica.com'],
+          };
+
+          // ── Fetch all products from Firebase REST API ──
+          function fetchFirebase(path) {
+            return new Promise((resolve, reject) => {
+              const url = `${FIREBASE_URL}${path}.json`;
+              https.get(url, (res) => {
+                let data = '';
+                res.on('data', chunk => data += chunk);
+                res.on('end', () => resolve(JSON.parse(data)));
+              }).on('error', reject);
+            });
+          }
+
+          // ── POST to GAS endpoint ──
+          function postGAS(payload) {
+            return new Promise((resolve, reject) => {
+              const body = JSON.stringify(payload);
+              const url  = new URL(GAS_ENDPOINT);
+              const opts = {
+                hostname: url.hostname,
+                path:     url.pathname + url.search,
+                method:   'POST',
+                headers:  { 'Content-Type': 'text/plain', 'Content-Length': Buffer.byteLength(body) }
+              };
+              const req = https.request(opts, res => {
+                let data = '';
+                res.on('data', chunk => data += chunk);
+                res.on('end', () => { try { resolve(JSON.parse(data)); } catch(e) { resolve({ ok: false, error: data }); } });
+              });
+              req.on('error', reject);
+              req.write(body);
+              req.end();
+            });
+          }
+
+          // ── MAIN ──
+          async function run() {
+            console.log('NPD Hub deadline check starting — ' + new Date().toISOString());
+
+            const products = await fetchFirebase('/products');
+            if (!products) { console.log('No products found.'); return; }
+
+            const today = new Date(); today.setHours(0,0,0,0);
+            const alerts = [];
+
+            Object.values(products)
+              .filter(p => p.status !== 'archived')
+              .forEach(prod => {
+                PILLARS.forEach(pl => {
+                  const pd = prod.pillars?.[pl.id];
+                  if (!pd?.deadline || pd?.taskStatus === 'complete') return;
+
+                  const due  = new Date(pd.deadline); due.setHours(0,0,0,0);
+                  const diff = Math.round((due - today) / 86400000);
+
+                  // Only alert for: overdue, due today, or 3 days away
+                  if (diff > 3) return;
+
+                  const deptEmails = PILLAR_EMAILS[pl.id] || [];
+                  if (deptEmails.length === 0) return;
+
+                  alerts.push({
+                    productName: prod.name,
+                    productId:   prod.id,
+                    pillarName:  pl.name,
+                    pillarId:    pl.id,
+                    ownerDept:   pl.owner,
+                    deptEmails,
+                    daysUntil:   diff,
+                    deadline:    pd.deadline,
+                    alertType:   diff < 0 ? 'overdue' : diff === 0 ? 'due' : 'warning',
+                  });
+                });
+              });
+
+            console.log(`Found ${alerts.length} alert(s) to send.`);
+
+            if (alerts.length === 0) {
+              console.log('No alerts needed today.');
+              return;
+            }
+
+            const result = await postGAS({ action: 'checkDeadlines', alerts });
+            console.log('GAS response:', JSON.stringify(result));
+
+            if (result.ok) {
+              console.log(`✅ Sent ${result.sent} alert email(s).`);
+              if (result.errors?.length) console.log('Errors:', result.errors);
+            } else {
+              console.error('❌ GAS error:', result.error);
+              process.exit(1);
+            }
+          }
+
+          run().catch(e => { console.error('Fatal:', e); process.exit(1); });
+
+          NODESCRIPT
