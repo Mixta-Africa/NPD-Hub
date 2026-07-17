@@ -64,6 +64,9 @@ const firebaseConfig = {
 // GAS endpoint — injected at deploy time
 const GAS_ENDPOINT = 'https://script.google.com/macros/s/AKfycbyf77g3j0-PfKlLoYZ4ZoGW1UIzy6HhNLTmCkN6Ad1AW9iuXTgR5A0PFhXyzmuRVoI6/exec';
 
+// Super admin password hash — injected at deploy time (SHA-256, never stored as plaintext)
+const SA_PASSWORD_HASH = '__SUPER_ADMIN_HASH__';
+
 const app      = initializeApp(firebaseConfig);
 const auth     = getAuth(app);
 const db       = getDatabase(app);
@@ -83,9 +86,12 @@ function sanitiseEmail(email) {
 }
 
 /* ─── STATE ─── */
-let currentUser = null;
-let currentRole = null; // 'admin' | 'readonly' | null
-let currentView = 'dashboard';
+let currentUser      = null;
+let currentRole      = null;      // 'admin' | 'member' | null
+let currentView      = 'dashboard';
+let isSuperAdmin     = false;     // true after password challenge passed
+let saSessionStart   = null;      // timestamp of super admin session start
+const SA_TIMEOUT_MS  = 30 * 60 * 1000; // 30-minute super admin session timeout
 
 /* ─── AUTH STATE LISTENER ─── */
 onAuthStateChanged(auth, async (user) => {
@@ -104,6 +110,8 @@ onAuthStateChanged(auth, async (user) => {
   } else {
     currentUser = null;
     currentRole = null;
+    isSuperAdmin = false;
+    saSessionStart = null;
     showLogin();
   }
 });
@@ -122,8 +130,155 @@ window.handleSignIn = async () => {
 };
 
 window.handleSignOut = async () => {
+  isSuperAdmin   = false;
+  saSessionStart = null;
+  hideSANav();
   await signOut(auth);
 };
+
+/* ════════════════════════════════════════════════════════════
+   SUPER ADMIN — Password challenge + session management
+════════════════════════════════════════════════════════════ */
+
+// SHA-256 hash using Web Crypto API (browser-native, no libraries)
+async function sha256(message) {
+  const msgBuffer  = new TextEncoder().encode(message);
+  const hashBuffer = await crypto.subtle.digest('SHA-256', msgBuffer);
+  const hashArray  = Array.from(new Uint8Array(hashBuffer));
+  return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+window.showSAChallenge = () => {
+  // Can only attempt if already signed in with Google
+  if (!currentUser) { showToast('Sign in with your Mixta account first.', 'error'); return; }
+
+  document.getElementById('modal-title-text').textContent = '🔒 Super Admin Access';
+  document.getElementById('modal-body-content').innerHTML = `
+    <div class="sa-challenge-wrap">
+      <div class="sa-challenge-icon">⚡</div>
+      <p style="font-size:13px;color:var(--text-mid);margin-bottom:20px;line-height:1.7;text-align:center;">
+        Enter the super admin password to access the circuit box.<br/>
+        Session expires after 30 minutes of inactivity.
+      </p>
+      <div class="form-row">
+        <input type="password" id="sa-password-input" class="input-field"
+          placeholder="Super admin password"
+          onkeydown="if(event.key==='Enter') verifySAPassword()"
+          style="text-align:center;letter-spacing:.15em;font-size:16px;"/>
+      </div>
+      <div id="sa-error" style="display:none;color:var(--red);font-size:12px;text-align:center;margin-top:8px;"></div>
+      <div class="form-actions">
+        <button class="btn-outline" onclick="closeProductModal()">Cancel</button>
+        <button class="btn-primary" onclick="verifySAPassword()">Enter</button>
+      </div>
+    </div>`;
+  document.getElementById('create-product-modal').style.display = 'flex';
+  setTimeout(() => document.getElementById('sa-password-input')?.focus(), 100);
+};
+
+window.verifySAPassword = async () => {
+  const input  = document.getElementById('sa-password-input')?.value || '';
+  const errEl  = document.getElementById('sa-error');
+  const btn    = document.querySelector('#modal-body-content .btn-primary');
+
+  if (!input) return;
+  if (btn) { btn.disabled = true; btn.textContent = 'Verifying...'; }
+
+  const hash = await sha256(input);
+
+  if (hash === SA_PASSWORD_HASH) {
+    isSuperAdmin   = true;
+    saSessionStart = Date.now();
+
+    // Log the super admin access attempt to Firebase
+    try {
+      await set(ref(db, `sa_log/${Date.now()}`), {
+        user:      currentUser.email,
+        action:    'SA_LOGIN',
+        timestamp: new Date().toISOString(),
+        ip:        'client',
+      });
+    } catch(e) {}
+
+    closeProductModal();
+    showSANav();
+    showToast('Super admin session active. 30-minute timeout.', 'success');
+    loadView('superadmin');
+
+    // Auto-expire session after 30 minutes
+    setTimeout(() => {
+      if (isSuperAdmin) {
+        isSuperAdmin   = false;
+        saSessionStart = null;
+        hideSANav();
+        showToast('Super admin session expired.', 'info');
+        if (currentView === 'superadmin') loadView('dashboard');
+      }
+    }, SA_TIMEOUT_MS);
+
+  } else {
+    // Log failed attempt
+    try {
+      await set(ref(db, `sa_log/${Date.now()}`), {
+        user:      currentUser.email,
+        action:    'SA_LOGIN_FAILED',
+        timestamp: new Date().toISOString(),
+      });
+    } catch(e) {}
+
+    if (errEl) { errEl.textContent = 'Incorrect password. Try again.'; errEl.style.display = 'block'; }
+    if (btn)   { btn.disabled = false; btn.textContent = 'Enter'; }
+    document.getElementById('sa-password-input').value = '';
+    document.getElementById('sa-password-input').focus();
+  }
+};
+
+window.exitSASession = () => {
+  isSuperAdmin   = false;
+  saSessionStart = null;
+  hideSANav();
+  showToast('Super admin session ended.', 'info');
+  loadView('dashboard');
+};
+
+function showSANav() {
+  const el = document.getElementById('nav-superadmin');
+  if (el) el.style.display = 'flex';
+}
+
+function hideSANav() {
+  const el = document.getElementById('nav-superadmin');
+  if (el) el.style.display = 'none';
+}
+
+// Global error capture — feeds the SA error log
+window.addEventListener('error', async (e) => {
+  try {
+    await set(ref(db, `errors/${Date.now()}`), {
+      message:   e.message || 'Unknown error',
+      source:    e.filename || '',
+      line:      e.lineno || 0,
+      col:       e.colno  || 0,
+      user:      currentUser?.email || 'unauthenticated',
+      view:      currentView || 'unknown',
+      timestamp: new Date().toISOString(),
+      stack:     e.error?.stack?.slice(0, 500) || '',
+    });
+  } catch(_) {}
+});
+
+window.addEventListener('unhandledrejection', async (e) => {
+  try {
+    await set(ref(db, `errors/${Date.now()}`), {
+      message:   e.reason?.message || String(e.reason) || 'Unhandled rejection',
+      source:    'promise',
+      user:      currentUser?.email || 'unauthenticated',
+      view:      currentView || 'unknown',
+      timestamp: new Date().toISOString(),
+      stack:     e.reason?.stack?.slice(0, 500) || '',
+    });
+  } catch(_) {}
+});
 
 function setBtnLoading(loading) {
   const btn = document.getElementById('sign-in-btn');
@@ -167,6 +322,10 @@ function showApp() {
   document.querySelectorAll('[data-admin-only]').forEach(el => {
     el.style.display = currentRole === 'admin' ? 'flex' : 'none';
   });
+
+  // Super admin nav — always hidden until SA session active
+  const saNav = document.getElementById('nav-superadmin');
+  if (saNav) saNav.style.display = 'none';
 
   // Role badge
   const badge = document.getElementById('role-badge');
@@ -224,8 +383,9 @@ window.loadView = (view) => {
     case 'tracker':    renderTracker(content);   break;
     case 'documents':  renderDocuments(content); break;
     case 'reports':    renderReports(content);   break;
-    case 'settings':   renderSettings(content);  break;
-    default:           content.innerHTML = '<div class="empty-state"><p>Coming in a future phase.</p></div>';
+    case 'settings':    renderSettings(content);   break;
+    case 'superadmin':  renderSuperAdmin(content);  break;
+    default:            content.innerHTML = '<div class="empty-state"><p>Coming in a future phase.</p></div>';
   }
 };
 
@@ -2156,6 +2316,391 @@ async function renderTeamSection() {
   if (el) el.innerHTML = rows;
 }
 
+/* ════════════════════════════════════════════════════════════
+   SUPER ADMIN VIEW — Circuit Box
+════════════════════════════════════════════════════════════ */
+function renderSuperAdmin(el) {
+  if (!isSuperAdmin) {
+    el.innerHTML = `<div class="empty-state">
+      <span class="empty-icon">🔒</span>
+      <h3>Super admin access required</h3>
+      <p>Your session has expired or you have not authenticated.</p>
+      <button class="btn-primary" onclick="showSAChallenge()">Enter password</button>
+    </div>`;
+    return;
+  }
+
+  const sessionMins = Math.round((Date.now() - saSessionStart) / 60000);
+  const remaining   = Math.max(0, 30 - sessionMins);
+
+  el.innerHTML = `
+    <div class="view-header">
+      <div>
+        <h1 class="view-title">⚡ Circuit Box</h1>
+        <p class="view-subtitle">Super admin — maintenance &amp; debugging centre</p>
+      </div>
+      <div style="display:flex;align-items:center;gap:10px;">
+        <span class="sa-session-badge">Session: ${remaining}m remaining</span>
+        <button class="btn-danger-sm" onclick="exitSASession()">End session</button>
+      </div>
+    </div>
+
+    <div class="sa-tabs">
+      <button class="sa-tab active" onclick="switchSATab('health', this)">System Health</button>
+      <button class="sa-tab" onclick="switchSATab('errors', this)">Error Log</button>
+      <button class="sa-tab" onclick="switchSATab('users', this)">User Management</button>
+      <button class="sa-tab" onclick="switchSATab('products', this)">Product Audit</button>
+      <button class="sa-tab" onclick="switchSATab('maintenance', this)">Maintenance</button>
+    </div>
+
+    <div id="sa-tab-content">
+      <div class="loading-row" style="padding:24px;">Loading system health...</div>
+    </div>`;
+
+  loadSATab('health');
+}
+
+window.switchSATab = (tab, btn) => {
+  document.querySelectorAll('.sa-tab').forEach(t => t.classList.remove('active'));
+  if (btn) btn.classList.add('active');
+  loadSATab(tab);
+};
+
+async function loadSATab(tab) {
+  const el = document.getElementById('sa-tab-content');
+  if (!el) return;
+  el.innerHTML = '<div class="loading-row" style="padding:24px;">Loading...</div>';
+
+  switch(tab) {
+    case 'health':      await renderSAHealth(el);      break;
+    case 'errors':      await renderSAErrors(el);      break;
+    case 'users':       await renderSAUsers(el);       break;
+    case 'products':    await renderSAProducts(el);    break;
+    case 'maintenance': await renderSAMaintenance(el); break;
+  }
+}
+
+/* ── TAB 1: SYSTEM HEALTH ─────────────────────────────────── */
+async function renderSAHealth(el) {
+  el.innerHTML = '<div class="loading-row" style="padding:24px;">Running health checks...</div>';
+
+  const results = {};
+
+  // Firebase connection check
+  try {
+    const snap = await get(ref(db, '.info/connected'));
+    results.firebase = snap.val() === true ? 'ok' : 'warn';
+  } catch(e) { results.firebase = 'error'; }
+
+  // Error count in last 24h
+  try {
+    const errSnap  = await get(ref(db, 'errors'));
+    const errors   = errSnap.val() || {};
+    const cutoff   = Date.now() - 86400000;
+    results.errors24h = Object.keys(errors).filter(k => parseInt(k) > cutoff).length;
+  } catch(e) { results.errors24h = '?'; }
+
+  // Product count
+  try {
+    const prodSnap = await get(ref(db, 'products'));
+    const prods    = prodSnap.val() || {};
+    results.products = Object.keys(prods).length;
+    results.active   = Object.values(prods).filter(p => p.status !== 'archived').length;
+  } catch(e) { results.products = '?'; results.active = '?'; }
+
+  // User count
+  try {
+    const userSnap = await get(ref(db, 'users'));
+    results.users  = Object.keys(userSnap.val() || {}).length;
+  } catch(e) { results.users = '?'; }
+
+  // GAS ping
+  let gasStatus = 'checking';
+  let gasMsg    = '';
+  try {
+    const r = await callGAS('ping', {});
+    gasStatus = r.ok ? 'ok' : 'error';
+    gasMsg    = r.message || r.error || '';
+  } catch(e) { gasStatus = 'error'; gasMsg = e.message; }
+
+  const statusDot = (s) => `<span class="sa-status-dot sa-dot-${s}"></span>`;
+
+  el.innerHTML = `
+    <div class="sa-health-grid">
+      <div class="sa-health-card">
+        ${statusDot(results.firebase)} Firebase RTDB
+        <div class="sa-health-val">${results.firebase === 'ok' ? 'Connected' : 'Issue detected'}</div>
+      </div>
+      <div class="sa-health-card">
+        ${statusDot(gasStatus)} GAS Backend
+        <div class="sa-health-val">${gasStatus === 'ok' ? 'Live' : 'Unreachable'}</div>
+        ${gasMsg ? `<div class="sa-health-sub">${gasMsg}</div>` : ''}
+      </div>
+      <div class="sa-health-card">
+        ${statusDot(results.errors24h > 0 ? 'warn' : 'ok')} Errors (24h)
+        <div class="sa-health-val">${results.errors24h}</div>
+      </div>
+      <div class="sa-health-card">
+        ${statusDot('ok')} Active Products
+        <div class="sa-health-val">${results.active} / ${results.products}</div>
+      </div>
+      <div class="sa-health-card">
+        ${statusDot('ok')} Team Members
+        <div class="sa-health-val">${results.users} users</div>
+      </div>
+      <div class="sa-health-card">
+        ${statusDot('ok')} SA Session
+        <div class="sa-health-val">${Math.round((Date.now() - saSessionStart)/60000)}m active</div>
+      </div>
+    </div>
+    <div style="margin-top:14px;text-align:right;">
+      <button class="btn-secondary-sm" onclick="loadSATab('health')">↻ Refresh</button>
+    </div>`;
+}
+
+/* ── TAB 2: ERROR LOG ─────────────────────────────────────── */
+async function renderSAErrors(el) {
+  const snap   = await get(ref(db, 'errors'));
+  const errors = snap.val() || {};
+  const list   = Object.entries(errors)
+    .sort(([a],[b]) => b - a)
+    .slice(0, 50);
+
+  if (list.length === 0) {
+    el.innerHTML = '<div class="empty-state-sm"><span class="empty-icon">✅</span><p>No errors logged yet.</p></div>';
+    return;
+  }
+
+  el.innerHTML = `
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+      <span style="font-size:13px;color:var(--text-mid);">${list.length} errors (most recent 50)</span>
+      <button class="btn-danger-sm" onclick="clearErrorLog()">Clear all</button>
+    </div>
+    <div class="sa-error-list">
+      ${list.map(([ts, e]) => `
+        <div class="sa-error-row">
+          <div class="sa-error-meta">
+            <span class="sa-error-time">${new Date(parseInt(ts)).toLocaleString('en-GB')}</span>
+            <span class="sa-error-user">${e.user || '?'}</span>
+            <span class="sa-error-view">view: ${e.view || '?'}</span>
+          </div>
+          <div class="sa-error-msg">${e.message || 'No message'}</div>
+          ${e.stack ? `<div class="sa-error-stack">${e.stack}</div>` : ''}
+        </div>`).join('')}
+    </div>`;
+}
+
+window.clearErrorLog = async () => {
+  if (!confirm('Clear all error logs? This cannot be undone.')) return;
+  await set(ref(db, 'errors'), null);
+  showToast('Error log cleared.', 'success');
+  loadSATab('errors');
+};
+
+/* ── TAB 3: USER MANAGEMENT ──────────────────────────────── */
+async function renderSAUsers(el) {
+  const [allowSnap, userSnap, prodSnap] = await Promise.all([
+    get(ref(db, 'allowlist')),
+    get(ref(db, 'users')),
+    get(ref(db, 'products')),
+  ]);
+  const allowlist = allowSnap.val() || {};
+  const users     = userSnap.val()  || {};
+  const products  = prodSnap.val()  || {};
+
+  const rows = Object.entries(allowlist).map(([key, al]) => {
+    const u        = users[key] || {};
+    const owned    = Object.values(products).filter(p => p.ownerId === key).length;
+    const shared   = Object.values(products).filter(p => p.sharedWith?.[key]).length;
+    const handover = Object.values(products).find(p => p.handover?.active && p.handover?.relieverId === key);
+
+    return `<tr class="tracker-row">
+      <td class="tracker-pillar">
+        <div class="tracker-pillar-name">${u.name || key}</div>
+        <div class="tracker-pillar-owner">${u.email || key.replace(/_/g,'.')}</div>
+      </td>
+      <td><span class="role-badge ${al.role === 'admin' ? 'role-admin' : 'role-viewer'}">${al.role}</span></td>
+      <td style="font-size:13px;">${owned} owned · ${shared} shared</td>
+      <td style="font-size:13px;">${handover ? `<span class="pill pill-amber">Covering ${handover.name}</span>` : '—'}</td>
+      <td>
+        <button class="btn-danger-xs" onclick="saResetUser('${key}')">Reset</button>
+      </td>
+    </tr>`;
+  }).join('');
+
+  el.innerHTML = `
+    <div class="panel" style="overflow:auto;">
+      <table class="tracker-table">
+        <thead><tr>
+          <th>User</th><th style="width:90px;">Role</th>
+          <th>Products</th><th>Handover</th><th style="width:70px;"></th>
+        </tr></thead>
+        <tbody>${rows || '<tr><td colspan="5" class="muted" style="padding:16px;">No users found.</td></tr>'}</tbody>
+      </table>
+    </div>`;
+}
+
+window.saResetUser = async (userKey) => {
+  if (!confirm('Reset this user? This clears their active handovers and shared access.')) return;
+  try {
+    // Clear their active handovers (as reliever)
+    const snap = await get(ref(db, 'products'));
+    const prods = snap.val() || {};
+    const updates = {};
+    Object.entries(prods).forEach(([id, p]) => {
+      if (p.handover?.relieverId === userKey) updates[`products/${id}/handover/active`] = false;
+      if (p.sharedWith?.[userKey]) updates[`products/${id}/sharedWith/${userKey}`] = null;
+    });
+    await Promise.all(Object.entries(updates).map(([path, val]) => set(ref(db, path), val)));
+    showToast('User reset complete.', 'success');
+    loadSATab('users');
+  } catch(e) { showToast('Reset failed: ' + e.message, 'error'); }
+};
+
+/* ── TAB 4: PRODUCT AUDIT ────────────────────────────────── */
+async function renderSAProducts(el) {
+  const snap  = await get(ref(db, 'products'));
+  const prods = Object.values(snap.val() || {});
+  const today = new Date(); today.setHours(0,0,0,0);
+
+  const stuckHandovers = prods.filter(p =>
+    p.handover?.active && p.handover?.returnDate && new Date(p.handover.returnDate) < today
+  );
+  const noOwner = prods.filter(p => !p.ownerId);
+
+  el.innerHTML = `
+    <div class="two-col" style="margin-bottom:16px;">
+      <div class="stat-card">
+        <div class="stat-label">Total products</div>
+        <div class="stat-value">${prods.length}</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Stuck handovers</div>
+        <div class="stat-value ${stuckHandovers.length > 0 ? 'red' : ''}">${stuckHandovers.length}</div>
+      </div>
+    </div>
+
+    ${stuckHandovers.length > 0 ? `
+    <div class="panel" style="margin-bottom:16px;">
+      <div class="panel-header"><span class="panel-title" style="color:var(--red);">⚠ Stuck handovers — return date passed</span></div>
+      <div class="panel-body">
+        ${stuckHandovers.map(p => `
+          <div class="deadline-alert-row">
+            <div class="deadline-alert-info">
+              <div class="deadline-alert-pillar">${p.name}</div>
+              <div class="deadline-alert-product">Reliever: ${p.handover.relieverName} · Return was: ${p.handover.returnDate}</div>
+            </div>
+            <button class="btn-danger-sm" onclick="saClearHandover('${p.id}')">Clear handover</button>
+          </div>`).join('')}
+      </div>
+    </div>` : ''}
+
+    <div class="panel">
+      <div class="panel-header"><span class="panel-title">All products</span></div>
+      <div class="panel-body">
+        ${prods.map(p => `
+          <div class="deadline-alert-row">
+            <div class="deadline-alert-info">
+              <div class="deadline-alert-pillar">${p.name}</div>
+              <div class="deadline-alert-product">Owner: ${p.ownerName || 'Unassigned'} · Status: ${p.status || 'active'} · Launch: ${p.launchDate || '—'}</div>
+            </div>
+            <span class="pill ${p.status === 'active' ? 'pill-green' : 'pill-grey'}">${p.status || 'active'}</span>
+          </div>`).join('')}
+      </div>
+    </div>`;
+}
+
+window.saClearHandover = async (productId) => {
+  try {
+    await set(ref(db, `products/${productId}/handover/active`), false);
+    showToast('Handover cleared.', 'success');
+    loadSATab('products');
+  } catch(e) { showToast('Failed: ' + e.message, 'error'); }
+};
+
+/* ── TAB 5: MAINTENANCE ──────────────────────────────────── */
+async function renderSAMaintenance(el) {
+  el.innerHTML = `
+    <div class="two-col">
+      <div class="panel">
+        <div class="panel-header"><span class="panel-title">GAS reachability test</span></div>
+        <div class="panel-body">
+          <p style="font-size:13px;color:var(--text-mid);margin-bottom:14px;">Sends a ping to the GAS backend and returns the response.</p>
+          <button class="btn-primary" onclick="saPingGAS()">Run ping</button>
+          <div id="sa-ping-result" style="margin-top:12px;display:none;"></div>
+        </div>
+      </div>
+      <div class="panel">
+        <div class="panel-header"><span class="panel-title">SA access log</span></div>
+        <div class="panel-body" id="sa-access-log"><div class="loading-row">Loading...</div></div>
+      </div>
+    </div>
+    <div class="panel" style="margin-top:16px;">
+      <div class="panel-header"><span class="panel-title">Danger zone</span></div>
+      <div class="panel-body">
+        <div class="threshold-row">
+          <div>
+            <div style="font-size:13px;font-weight:500;">Clear all error logs</div>
+            <div style="font-size:12px;color:var(--text-muted);">Permanently deletes all logged errors from Firebase</div>
+          </div>
+          <button class="btn-danger-sm" onclick="clearErrorLog()">Clear errors</button>
+        </div>
+        <div class="threshold-row">
+          <div>
+            <div style="font-size:13px;font-weight:500;">Clear SA access log</div>
+            <div style="font-size:12px;color:var(--text-muted);">Clears the record of super admin login attempts</div>
+          </div>
+          <button class="btn-danger-sm" onclick="saClearAccessLog()">Clear log</button>
+        </div>
+      </div>
+    </div>`;
+
+  // Load SA access log
+  loadSAAccessLog();
+}
+
+async function loadSAAccessLog() {
+  const el   = document.getElementById('sa-access-log');
+  if (!el) return;
+  const snap = await get(ref(db, 'sa_log'));
+  const log  = Object.entries(snap.val() || {}).sort(([a],[b]) => b - a).slice(0,20);
+  el.innerHTML = log.length === 0
+    ? '<div class="muted" style="font-size:12px;">No access attempts logged.</div>'
+    : log.map(([ts, e]) => `
+      <div style="padding:6px 0;border-bottom:1px solid var(--border);font-size:12px;">
+        <span style="color:var(--text-muted);">${new Date(parseInt(ts)).toLocaleString('en-GB')}</span>
+        <span style="margin-left:8px;font-weight:500;color:${e.action==='SA_LOGIN'?'var(--green)':'var(--red)'};">${e.action}</span>
+        <span style="margin-left:8px;color:var(--text-mid);">${e.user}</span>
+      </div>`).join('');
+}
+
+window.saPingGAS = async () => {
+  const btn = document.querySelector('#sa-ping-result').previousElementSibling;
+  const res = document.getElementById('sa-ping-result');
+  if (btn) { btn.disabled = true; btn.textContent = 'Pinging...'; }
+  res.style.display = 'block';
+  res.className = 'alert-result-box alert-result-ok';
+  res.textContent = 'Waiting for response...';
+  try {
+    const t0     = Date.now();
+    const result = await callGAS('ping', {});
+    const ms     = Date.now() - t0;
+    res.className = `alert-result-box ${result.ok ? 'alert-result-ok' : 'alert-result-err'}`;
+    res.textContent = result.ok ? `✅ GAS live — ${ms}ms · ${result.message}` : `❌ ${result.error}`;
+  } catch(e) {
+    res.className = 'alert-result-box alert-result-err';
+    res.textContent = '❌ ' + e.message;
+  }
+  if (btn) { btn.disabled = false; btn.textContent = 'Run ping'; }
+};
+
+window.saClearAccessLog = async () => {
+  if (!confirm('Clear the SA access log?')) return;
+  await set(ref(db, 'sa_log'), null);
+  showToast('Access log cleared.', 'success');
+  loadSAAccessLog();
+};
+
 // Register all real functions with the global dispatcher
 window.__npd_init({
   handleSignIn,
@@ -2195,6 +2740,15 @@ window.__npd_init({
   saveWeeklyLog:           window.saveWeeklyLog,
   showHandoverModal:       window.showHandoverModal,
   confirmHandover:         window.confirmHandover,
+  showSAChallenge:         window.showSAChallenge,
+  verifySAPassword:        window.verifySAPassword,
+  exitSASession:           window.exitSASession,
+  switchSATab:             window.switchSATab,
+  saResetUser:             window.saResetUser,
+  saClearHandover:         window.saClearHandover,
+  saPingGAS:               window.saPingGAS,
+  saClearAccessLog:        window.saClearAccessLog,
+  clearErrorLog:           window.clearErrorLog,
 });
 
 </script>
@@ -2723,6 +3277,37 @@ textarea.input-field { resize: vertical; line-height: 1.6; }
 .ho-what-happens { background:var(--bg); border-radius:var(--radius); padding:14px; margin:16px 0; display:flex; flex-direction:column; gap:8px; }
 .ho-step         { display:flex; align-items:flex-start; gap:10px; font-size:13px; color:var(--text-mid); line-height:1.6; }
 .ho-step-num     { width:20px; height:20px; border-radius:50%; background:var(--red-light); color:var(--red); font-size:11px; font-weight:700; display:flex; align-items:center; justify-content:center; flex-shrink:0; margin-top:2px; }
+
+/* ─── SUPER ADMIN / CIRCUIT BOX ─── */
+.sa-tabs { display:flex; gap:2px; border-bottom:1px solid var(--border); margin-bottom:16px; }
+.sa-tab  { padding:8px 16px; font-size:13px; cursor:pointer; border:none; background:none; color:var(--text-mid); border-bottom:2px solid transparent; margin-bottom:-1px; font-family:inherit; }
+.sa-tab:hover  { color:var(--text-primary); }
+.sa-tab.active { color:var(--amber); border-bottom-color:var(--amber); font-weight:500; }
+
+.sa-session-badge { font-size:12px; background:var(--amber-light); color:var(--amber); padding:4px 10px; border-radius:99px; font-weight:500; }
+
+.sa-health-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:12px; }
+@media(max-width:600px) { .sa-health-grid { grid-template-columns:repeat(2,1fr); } }
+.sa-health-card { background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); padding:14px 16px; font-size:12px; font-weight:500; color:var(--text-mid); display:flex; flex-direction:column; gap:4px; }
+.sa-health-val  { font-size:18px; font-weight:700; color:var(--text); }
+.sa-health-sub  { font-size:11px; color:var(--text-muted); }
+.sa-status-dot  { width:8px; height:8px; border-radius:50%; display:inline-block; margin-right:6px; }
+.sa-dot-ok      { background:var(--green); }
+.sa-dot-warn    { background:var(--amber); }
+.sa-dot-error   { background:var(--red); }
+
+.sa-error-list { display:flex; flex-direction:column; gap:0; max-height:500px; overflow-y:auto; border:1px solid var(--border); border-radius:var(--radius); }
+.sa-error-row  { padding:10px 14px; border-bottom:1px solid var(--border); }
+.sa-error-row:last-child { border-bottom:none; }
+.sa-error-meta { display:flex; gap:10px; flex-wrap:wrap; margin-bottom:4px; }
+.sa-error-time { font-size:11px; color:var(--text-muted); }
+.sa-error-user { font-size:11px; font-weight:500; color:var(--text-mid); }
+.sa-error-view { font-size:11px; color:var(--text-muted); }
+.sa-error-msg  { font-size:13px; color:var(--red); font-family:monospace; }
+.sa-error-stack { font-size:11px; color:var(--text-muted); font-family:monospace; margin-top:4px; white-space:pre-wrap; }
+
+.sa-challenge-wrap { text-align:center; padding:8px 0; }
+.sa-challenge-icon { font-size:40px; margin-bottom:16px; }
 </style>
 
 <!-- ══════════════════════════════════════════
@@ -2812,6 +3397,11 @@ textarea.input-field { resize: vertical; line-height: 1.6; }
         <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3"/><path d="M19.07 4.93l-1.41 1.41M4.93 4.93l1.41 1.41M4.93 19.07l1.41-1.41M19.07 19.07l-1.41-1.41M21 12h-2M5 12H3M12 21v-2M12 5V3"/></svg>
         <span>Settings</span>
       </button>
+      <button class="nav-item" id="nav-superadmin" data-view="superadmin" onclick="loadView('superadmin')" style="display:none;color:var(--amber);">
+        <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+        <span>Circuit Box</span>
+      </button>
+      <button class="nav-item" style="font-size:11px;color:var(--text-muted);justify-content:center;" onclick="showSAChallenge()" title="Super admin access">⚡</button>
     </div>
 
     <div class="sidebar-bottom">
