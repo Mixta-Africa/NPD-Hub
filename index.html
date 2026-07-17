@@ -171,9 +171,24 @@ function showApp() {
   // Role badge
   const badge = document.getElementById('role-badge');
   if (badge) {
-    badge.textContent = currentRole === 'admin' ? 'Admin' : 'Viewer';
+    badge.textContent = currentRole === 'admin' ? 'Admin' : 'Member';
     badge.className   = 'role-badge ' + (currentRole === 'admin' ? 'role-admin' : 'role-viewer');
   }
+
+  // Phase 7: load team members + ensure user profile exists
+  loadTeamMembers();
+  const userKey = sanitiseEmail(currentUser.email);
+  get(ref(db, `users/${userKey}`)).then(snap => {
+    if (!snap.exists()) {
+      set(ref(db, `users/${userKey}`), {
+        name:      currentUser.displayName || currentUser.email.split('@')[0],
+        email:     currentUser.email,
+        role:      currentRole,
+        dept:      'Commercial Strategy',
+        createdAt: Date.now(),
+      });
+    }
+  });
 }
 
 /* ─── NAVIGATION ─── */
@@ -261,6 +276,51 @@ const STAKEHOLDERS = [
   { name: 'Haastrup K.',        email: 'k.haastrup@mixtafrica.com',               dept: 'MCC',                 pillarIds: ['p3','p11'] },
 ];
 
+/* ══ PHASE 7: MULTI-USER WORKSPACE ══════════════════════════ */
+
+// Commercial Strategy team (admin populates via Settings)
+// Stored in Firebase at /users/{sanitised_email}/
+// Loaded at runtime into this map
+let TEAM_MEMBERS = {}; // { sanitised_email: { name, email, role } }
+
+// Current user's effective permissions per product
+// 'owner' | 'edit' | 'view' | 'admin' | null
+function getProductAccess(prod) {
+  if (!prod || !currentUser) return null;
+  if (currentRole === 'admin') return 'admin';
+  const key = sanitiseEmail(currentUser.email);
+  if (prod.ownerId === key) return 'owner';
+  if (prod.sharedWith?.[key]) return prod.sharedWith[key]; // 'edit' | 'view'
+  return null;
+}
+
+function canEdit(prod) {
+  const access = getProductAccess(prod);
+  return ['admin','owner','edit'].includes(access);
+}
+
+function getWeekKey() {
+  const now  = new Date();
+  const jan1 = new Date(now.getFullYear(), 0, 1);
+  const week = Math.ceil(((now - jan1) / 86400000 + jan1.getDay() + 1) / 7);
+  return `week_${now.getFullYear()}-${String(week).padStart(2,'0')}`;
+}
+
+async function loadTeamMembers() {
+  try {
+    const snap = await get(ref(db, 'users'));
+    TEAM_MEMBERS = snap.val() || {};
+  } catch(e) {
+    console.warn('Could not load team members:', e);
+  }
+}
+
+// Call on app load
+window.__onAppReady = async () => {
+  await loadTeamMembers();
+};
+
+
 /* ══ GAS HELPER — call GAS backend endpoint ══ */
 async function callGAS(action, payload) {
   const resp = await fetch(GAS_ENDPOINT, {
@@ -302,8 +362,9 @@ function renderDashboard(el) {
     <div class="view-header">
       <div>
         <h1 class="view-title">Good ${getGreeting()}, ${(currentUser?.displayName || 'there').split(' ')[0]}.</h1>
-        <p class="view-subtitle">New Product Development Operations Hub</p>
+        <p class="view-subtitle">${currentRole === 'admin' ? 'Team overview — all products' : 'My products — Commercial Strategy'}</p>
       </div>
+      ${currentRole !== 'admin' ? `<div class="my-products-banner"><span class="my-products-label">Your products</span><button class="btn-outline" style="font-size:11px;padding:4px 10px;" onclick="loadView('products')">View all →</button></div>` : ''}
       ${currentRole === 'admin' ? `<button class="btn-primary" onclick="loadView('products')">+ New product</button>` : ''}
     </div>
     <div class="stats-row">
@@ -329,7 +390,14 @@ async function loadDashboardStats() {
   try {
     const snap     = await get(ref(db, 'products'));
     const products = snap.val() || {};
-    const list     = Object.values(products).filter(p => p.status !== 'archived');
+    const userKey  = sanitiseEmail(currentUser.email);
+    const list     = Object.values(products).filter(p => {
+      if (p.status === 'archived') return false;
+      if (currentRole === 'admin') return true;           // admin sees all
+      if (p.ownerId === userKey) return true;             // owned by me
+      if (p.sharedWith?.[userKey]) return true;           // shared with me
+      return false;
+    });
 
     const today = new Date(); today.setHours(0,0,0,0);
     const weekEnd = new Date(today); weekEnd.setDate(weekEnd.getDate() + 7);
@@ -424,7 +492,16 @@ async function loadProductList() {
     const snap     = await get(ref(db, 'products'));
     const products = snap.val() || {};
     productListCache = products;
-    const list     = Object.values(products).sort((a,b) => b.createdAt - a.createdAt);
+    const userKey  = sanitiseEmail(currentUser.email);
+    const list     = Object.values(products)
+      .filter(p => {
+        if (p.status === 'archived') return false;
+        if (currentRole === 'admin') return true;
+        if (p.ownerId === userKey) return true;
+        if (p.sharedWith?.[userKey]) return true;
+        return false;
+      })
+      .sort((a,b) => b.createdAt - a.createdAt);
 
     if (list.length === 0) {
       area.innerHTML = '<div class="panel"><div class="empty-state"><span class="empty-icon">🏗️</span><h3>No products yet</h3><p>Create your first product launch to get started.</p>' +
@@ -471,9 +548,18 @@ function renderProductCard(p) {
         ${overdueHtml}
       </div>
       <div class="progress-bar-wrap"><div class="progress-bar-fill" style="width:${pct}%"></div></div>
+      <div class="pcf-meta-row" style="margin-top:8px;">
+        <div class="pcf-meta-item">
+          <span class="pcf-meta-label">Owner</span>
+          <span class="pcf-meta-val">${p.ownerName || 'Unassigned'}</span>
+        </div>
+      </div>
       <div class="pcf-actions">
         <button class="btn-secondary-sm" onclick="viewProduct('${p.id}')">View pillars</button>
+        ${canEdit(p) ? `<button class="btn-secondary-sm" onclick="showWeeklyLog('${p.id}')">Weekly log</button>` : ''}
         ${editBtn}
+        ${canEdit(p) ? `<button class="btn-secondary-sm" onclick="showShareModal('${p.id}')">Share</button>` : ''}
+        ${getProductAccess(p) === 'owner' || currentRole === 'admin' ? `<button class="btn-secondary-sm" onclick="showHandoverModal('${p.id}')">Handover</button>` : ''}
       </div>
     </div>`;
 }
@@ -510,8 +596,24 @@ function buildProductForm(p) {
       <input type="date" id="f-${pl.id}" class="input-field pillar-date-input" value="${pd(pl.id)}"/>
     </div>`).join('');
 
+  // Build owner dropdown for admin
+  const ownerOptions = currentRole === 'admin'
+    ? Object.entries(TEAM_MEMBERS).map(([key, m]) =>
+        `<option value="${key}" ${(p?.ownerId || sanitiseEmail(currentUser.email)) === key ? 'selected' : ''}>${m.name}</option>`
+      ).join('')
+    : '';
+  const ownerField = currentRole === 'admin'
+    ? `<div class="form-row">
+        <label class="form-label">Product owner</label>
+        <select id="f-owner" class="select-field" style="width:100%;">
+          ${ownerOptions || `<option value="${sanitiseEmail(currentUser.email)}">${currentUser.displayName || currentUser.email}</option>`}
+        </select>
+       </div>`
+    : '';
+
   return `
     <div class="form-section-label">Product details</div>
+    ${ownerField}
     <div class="form-row">
       <label class="form-label">Product name <span class="req">*</span></label>
       <input type="text" id="f-name" class="input-field" placeholder="e.g. Lakowe Garden Terrace Phase 3" value="${v('name')}"/>
@@ -554,9 +656,20 @@ window.saveProduct = async (existingId) => {
 
   const id      = existingId || generateId();
   const isNew   = !existingId;
+  // Owner: if admin is creating for a team member, ownerField will be set
+  const ownerFieldEl = document.getElementById('f-owner');
+  const ownerKey     = isNew
+    ? (ownerFieldEl?.value || sanitiseEmail(currentUser.email))
+    : (productListCache[existingId]?.ownerId || sanitiseEmail(currentUser.email));
+  const ownerMember  = TEAM_MEMBERS[ownerKey];
+  const ownerName    = ownerMember?.name || currentUser.displayName || currentUser.email.split('@')[0];
+
   const payload = {
     id, name, description: desc, launchDate,
     pillars, status: 'active',
+    ownerId:   ownerKey,
+    ownerName: ownerName,
+    sharedWith: isNew ? {} : (productListCache[existingId]?.sharedWith || {}),
     createdAt: isNew ? Date.now() : (productListCache[existingId]?.createdAt || Date.now()),
     updatedAt: Date.now(),
     createdBy: isNew ? currentUser.email : (productListCache[existingId]?.createdBy || currentUser.email),
@@ -1698,6 +1811,13 @@ function renderSettings(el) {
     </div>
 
     ${currentRole === 'admin' ? `
+    <div class="panel" style="margin-bottom:16px;">
+      <div class="panel-header"><span class="panel-title">Commercial Strategy team</span></div>
+      <div class="panel-body">
+        <p class="settings-hint">Team members appear here automatically after their first login. They can be assigned as product owners when creating products.</p>
+        <div id="team-members-list"><div class="loading-row">Loading...</div></div>
+      </div>
+    </div>
     <div class="panel">
       <div class="panel-header"><span class="panel-title">Allowlist management</span></div>
       <div class="panel-body">
@@ -1716,7 +1836,7 @@ function renderSettings(el) {
       </div>
     </div>` : ''}`;
 
-  if (currentRole === 'admin') loadAllowlist();
+  if (currentRole === 'admin') { loadAllowlist(); setTimeout(renderTeamSection, 100); }
 }
 
 async function loadAllowlist() {
@@ -1798,6 +1918,244 @@ window.toggleSidebar = () => {
   document.getElementById('screen-app').classList.toggle('sidebar-collapsed');
 };
 
+/* ══ PHASE 7: SHARING ═══════════════════════════════════════ */
+window.showShareModal = async (productId) => {
+  const prod = productListCache[productId];
+  if (!prod) return;
+  await loadTeamMembers();
+
+  const sharedWith = prod.sharedWith || {};
+  const ownerKey   = prod.ownerId;
+  const memberOptions = Object.entries(TEAM_MEMBERS)
+    .filter(([key]) => key !== ownerKey)
+    .map(([key, m]) => {
+      const current = sharedWith[key];
+      return `<div class="share-member-row">
+        <div class="share-member-info">
+          <div class="share-member-name">${m.name}</div>
+          <div class="share-member-email">${m.email}</div>
+        </div>
+        <select class="status-select" id="share-${key}" onchange="updateShareAccess('${productId}','${key}',this.value)">
+          <option value=""      ${!current      ? 'selected':''}>No access</option>
+          <option value="view"  ${current==='view'  ? 'selected':''}>View only</option>
+          <option value="edit"  ${current==='edit'  ? 'selected':''}>Can edit</option>
+        </select>
+      </div>`;
+    }).join('') || '<p class="muted" style="padding:8px 0;">No other team members found. Add them in Settings first.</p>';
+
+  document.getElementById('modal-title-text').textContent = `Share — ${prod.name}`;
+  document.getElementById('modal-body-content').innerHTML = `
+    <p style="font-size:13px;color:var(--text-mid);margin-bottom:16px;line-height:1.6;">
+      Grant team members access to this product. Changes take effect immediately.
+    </p>
+    <div class="share-member-list">${memberOptions}</div>
+    <div class="form-actions"><button class="btn-outline" onclick="closeProductModal()">Done</button></div>`;
+  document.getElementById('create-product-modal').style.display = 'flex';
+};
+
+window.updateShareAccess = async (productId, memberKey, level) => {
+  try {
+    if (level === '') {
+      await set(ref(db, `products/${productId}/sharedWith/${memberKey}`), null);
+    } else {
+      await set(ref(db, `products/${productId}/sharedWith/${memberKey}`), level);
+    }
+    if (productListCache[productId]) {
+      if (!productListCache[productId].sharedWith) productListCache[productId].sharedWith = {};
+      productListCache[productId].sharedWith[memberKey] = level || null;
+    }
+    showToast(level ? `Access updated to ${level}.` : 'Access removed.', 'success');
+  } catch(e) {
+    showToast('Failed to update access: ' + e.message, 'error');
+  }
+};
+
+/* ══ PHASE 7: WEEKLY LOG ════════════════════════════════════ */
+window.showWeeklyLog = async (productId) => {
+  const prod = productListCache[productId];
+  if (!prod) return;
+  const weekKey  = getWeekKey();
+  const logSnap  = await get(ref(db, `products/${productId}/weeklyLog/${weekKey}`));
+  const log      = logSnap.val() || { summary: '', tasksCompleted: [], tasksOpen: [] };
+
+  // Auto-populate from pillar changes this week (pillars marked complete)
+  const autoComplete = PILLARS
+    .filter(pl => prod.pillars?.[pl.id]?.taskStatus === 'complete' && prod.pillars?.[pl.id]?.notes)
+    .map(pl => `${pl.name} — completed`)
+    .filter(t => !log.tasksCompleted.includes(t));
+
+  const allCompleted = [...log.tasksCompleted, ...autoComplete];
+
+  document.getElementById('modal-title-text').textContent = `Weekly Log — ${weekKey.replace('week_','')}`;
+  document.getElementById('modal-body-content').innerHTML = `
+    <p style="font-size:13px;color:var(--text-mid);margin-bottom:16px;line-height:1.6;">
+      Record what was completed and what remains open this week for <strong>${prod.name}</strong>.
+      This feeds into your handover package.
+    </p>
+    <div class="form-row">
+      <label class="form-label">Summary</label>
+      <textarea id="wl-summary" class="input-field" rows="2" placeholder="Brief summary of this week's activity...">${log.summary}</textarea>
+    </div>
+    <div class="form-row">
+      <label class="form-label">Tasks completed <span class="form-hint">— one per line</span></label>
+      <textarea id="wl-completed" class="input-field" rows="4" placeholder="e.g. Submitted financial model for review">${allCompleted.join('
+')}</textarea>
+    </div>
+    <div class="form-row">
+      <label class="form-label">Open items <span class="form-hint">— one per line</span></label>
+      <textarea id="wl-open" class="input-field" rows="4" placeholder="e.g. Awaiting architect approval on design sketch">${log.tasksOpen.join('
+')}</textarea>
+    </div>
+    <div class="form-actions">
+      <button class="btn-outline" onclick="closeProductModal()">Cancel</button>
+      <button class="btn-primary" onclick="saveWeeklyLog('${productId}','${weekKey}')">Save log</button>
+    </div>`;
+  document.getElementById('create-product-modal').style.display = 'flex';
+};
+
+window.saveWeeklyLog = async (productId, weekKey) => {
+  const summary   = document.getElementById('wl-summary')?.value.trim() || '';
+  const completed = document.getElementById('wl-completed')?.value.split('
+').map(s=>s.trim()).filter(Boolean) || [];
+  const open      = document.getElementById('wl-open')?.value.split('
+').map(s=>s.trim()).filter(Boolean) || [];
+  try {
+    await set(ref(db, `products/${productId}/weeklyLog/${weekKey}`), {
+      summary, tasksCompleted: completed, tasksOpen: open,
+      updatedAt: Date.now(), updatedBy: currentUser.email,
+    });
+    closeProductModal();
+    showToast('Weekly log saved.', 'success');
+  } catch(e) {
+    showToast('Save failed: ' + e.message, 'error');
+  }
+};
+
+/* ══ PHASE 7: HANDOVER ══════════════════════════════════════ */
+window.showHandoverModal = async (productId) => {
+  await loadTeamMembers();
+  const prod = productListCache[productId];
+  if (!prod) return;
+
+  const memberOptions = Object.entries(TEAM_MEMBERS)
+    .filter(([key]) => key !== prod.ownerId)
+    .map(([key, m]) => `<option value="${key}">${m.name} — ${m.email}</option>`)
+    .join('') || '<option value="">No team members available</option>';
+
+  const today = new Date().toISOString().split('T')[0];
+
+  document.getElementById('modal-title-text').textContent = 'Initiate Handover';
+  document.getElementById('modal-body-content').innerHTML = `
+    <div class="sc-intro">
+      <p>This will temporarily grant your reliever edit access to <strong>${prod.name}</strong> and send them a full briefing package.</p>
+    </div>
+    <div class="form-row">
+      <label class="form-label">Reliever <span class="req">*</span></label>
+      <select id="ho-reliever" class="select-field" style="width:100%;">${memberOptions}</select>
+    </div>
+    <div class="form-row">
+      <label class="form-label">Return date <span class="req">*</span></label>
+      <input type="date" id="ho-return" class="input-field" value="" min="${today}"/>
+    </div>
+    <div class="form-row">
+      <label class="form-label">Handover notes</label>
+      <textarea id="ho-notes" class="input-field" rows="3" placeholder="Key context, priorities, or things to watch out for..."></textarea>
+    </div>
+    <div class="ho-what-happens">
+      <div class="ho-step"><span class="ho-step-num">1</span>Reliever gets edit access to this product immediately</div>
+      <div class="ho-step"><span class="ho-step-num">2</span>Full briefing package emailed to reliever (CC: admin)</div>
+      <div class="ho-step"><span class="ho-step-num">3</span>Package includes: product status, last 4 weeks of logs, all open items</div>
+      <div class="ho-step"><span class="ho-step-num">4</span>Access automatically noted until your return date</div>
+    </div>
+    <div class="form-actions">
+      <button class="btn-outline" onclick="closeProductModal()">Cancel</button>
+      <button class="btn-primary" onclick="confirmHandover('${productId}')">Confirm &amp; send package</button>
+    </div>`;
+  document.getElementById('create-product-modal').style.display = 'flex';
+};
+
+window.confirmHandover = async (productId) => {
+  const relieverId  = document.getElementById('ho-reliever')?.value;
+  const returnDate  = document.getElementById('ho-return')?.value;
+  const notes       = document.getElementById('ho-notes')?.value?.trim() || '';
+  const btn         = document.querySelector('#modal-body-content .btn-primary');
+
+  if (!relieverId) { showToast('Select a reliever.', 'error'); return; }
+  if (!returnDate)  { showToast('Set a return date.', 'error'); return; }
+  if (btn) { btn.disabled = true; btn.textContent = 'Sending package...'; }
+
+  try {
+    const prod     = productListCache[productId];
+    const reliever = TEAM_MEMBERS[relieverId];
+
+    // 1. Grant edit access to reliever in Firebase
+    await set(ref(db, `products/${productId}/sharedWith/${relieverId}`), 'edit');
+    await set(ref(db, `products/${productId}/handover`), {
+      active:      true,
+      relieverId,
+      relieverName: reliever?.name || relieverId,
+      relieverEmail: reliever?.email || '',
+      returnDate,
+      initiatedAt: Date.now(),
+      initiatedBy: currentUser.email,
+      notes,
+    });
+    productListCache[productId].sharedWith = productListCache[productId].sharedWith || {};
+    productListCache[productId].sharedWith[relieverId] = 'edit';
+
+    // 2. Build handover payload — gather last 4 weeks of logs
+    const logsSnap = await get(ref(db, `products/${productId}/weeklyLog`));
+    const allLogs  = logsSnap.val() || {};
+    const last4Weeks = Object.entries(allLogs)
+      .sort(([a],[b]) => b.localeCompare(a))
+      .slice(0,4)
+      .map(([week, log]) => ({ week, ...log }));
+
+    // 3. Call GAS to send handover package
+    const result = await callGAS('sendHandoverPackage', {
+      productName:   prod.name,
+      productId,
+      launchDate:    prod.launchDate,
+      ownerName:     currentUser.displayName || currentUser.email,
+      ownerEmail:    currentUser.email,
+      relieverName:  reliever?.name || relieverId,
+      relieverEmail: reliever?.email || '',
+      returnDate,
+      notes,
+      pillars:       PILLARS,
+      pillarData:    prod.pillars || {},
+      weeklyLogs:    last4Weeks,
+      driveUrl:      prod.driveUrl || null,
+    });
+
+    if (!result.ok) throw new Error(result.error || 'GAS call failed');
+
+    closeProductModal();
+    showToast(`Handover package sent to ${reliever?.name || relieverId}.`, 'success');
+    loadProductList();
+  } catch(e) {
+    showToast('Handover failed: ' + e.message, 'error');
+  }
+  if (btn) { btn.disabled = false; btn.textContent = 'Confirm & send package'; }
+};
+
+/* ══ PHASE 7: TEAM SETTINGS (add to Settings tab) ══════════ */
+async function renderTeamSection() {
+  const snap    = await get(ref(db, 'users'));
+  const members = snap.val() || {};
+  const rows    = Object.entries(members).map(([key, m]) => `
+    <div class="allowlist-row">
+      <div class="allowlist-avatar">${(m.name||key)[0].toUpperCase()}</div>
+      <div class="allowlist-info">
+        <div class="allowlist-name">${m.name}</div>
+        <div class="allowlist-role-row"><span class="role-badge role-viewer">${m.dept || 'Commercial Strategy'}</span></div>
+      </div>
+    </div>`).join('') || '<div class="loading-row muted">No team members yet — they appear here after first login.</div>';
+
+  const el = document.getElementById('team-members-list');
+  if (el) el.innerHTML = rows;
+}
+
 // Register all real functions with the global dispatcher
 window.__npd_init({
   handleSignIn,
@@ -1831,6 +2189,12 @@ window.__npd_init({
   docDrop:                 window.docDrop,
   docFileSelected:         window.docFileSelected,
   generateProgressReport:  window.generateProgressReport,
+  showShareModal:          window.showShareModal,
+  updateShareAccess:       window.updateShareAccess,
+  showWeeklyLog:           window.showWeeklyLog,
+  saveWeeklyLog:           window.saveWeeklyLog,
+  showHandoverModal:       window.showHandoverModal,
+  confirmHandover:         window.confirmHandover,
 });
 
 </script>
@@ -2344,6 +2708,21 @@ textarea.input-field { resize: vertical; line-height: 1.6; }
 
 /* ─── PHASE 6: REPORTS FORM ─── */
 .report-form { background:var(--bg); border-radius:var(--radius); padding:14px; }
+
+/* ─── PHASE 7: MULTI-USER WORKSPACE ─── */
+.my-products-banner { display:flex; align-items:center; justify-content:space-between; background:var(--blue-light); border:0.5px solid var(--blue); border-radius:var(--radius); padding:8px 14px; margin-bottom:16px; gap:10px; }
+.my-products-label  { font-size:12px; font-weight:500; color:var(--blue); }
+
+.share-member-list  { display:flex; flex-direction:column; gap:4px; margin-bottom:16px; max-height:300px; overflow-y:auto; }
+.share-member-row   { display:flex; align-items:center; gap:12px; padding:8px 0; border-bottom:1px solid var(--border); }
+.share-member-row:last-child { border-bottom:none; }
+.share-member-info  { flex:1; }
+.share-member-name  { font-size:13px; font-weight:500; }
+.share-member-email { font-size:11px; color:var(--text-muted); }
+
+.ho-what-happens { background:var(--bg); border-radius:var(--radius); padding:14px; margin:16px 0; display:flex; flex-direction:column; gap:8px; }
+.ho-step         { display:flex; align-items:flex-start; gap:10px; font-size:13px; color:var(--text-mid); line-height:1.6; }
+.ho-step-num     { width:20px; height:20px; border-radius:50%; background:var(--red-light); color:var(--red); font-size:11px; font-weight:700; display:flex; align-items:center; justify-content:center; flex-shrink:0; margin-top:2px; }
 </style>
 
 <!-- ══════════════════════════════════════════
