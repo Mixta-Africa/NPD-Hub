@@ -6,6 +6,14 @@
 <title>Mixta Africa — Product Development Hub</title>
 <link rel="preconnect" href="https://fonts.googleapis.com"/>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&family=Playfair+Display:wght@600&display=swap" rel="stylesheet"/>
+<!-- Favicon + PWA icons -->
+<link rel="icon" type="image/jpeg" href="Mixta%20Africa.jpg"/>
+<link rel="apple-touch-icon" href="Mixta%20Africa.jpg"/>
+<link rel="manifest" href="manifest.json"/>
+<meta name="theme-color" content="#C0282D"/>
+<meta name="apple-mobile-web-app-capable" content="yes"/>
+<meta name="apple-mobile-web-app-status-bar-style" content="default"/>
+<meta name="apple-mobile-web-app-title" content="NPD Hub"/>
 
 <!-- Safe global stubs — ensures onclick handlers work before module loads -->
 <script>
@@ -902,7 +910,7 @@ function buildStakeholderConfirm(product) {
     <div class="form-actions">
       <button class="btn-outline" onclick="skipGASSetup()">Skip (do later)</button>
       <button class="btn-primary" onclick="confirmAndLaunchGAS()">
-        Confirm &amp; send notifications
+        Confirm & send notifications
       </button>
     </div>`;
 }
@@ -1186,7 +1194,7 @@ function buildMilestoneRow(m) {
     <span class="leg-dot ${cls}" style="flex-shrink:0;margin-top:2px;"></span>
     <div class="milestone-info">
       <div class="milestone-pillar">${m.pillarName}</div>
-      <div class="milestone-product">${m.productName} &mdash; ${formatDate(m.date)}</div>
+      <div class="milestone-product">${m.productName} — ${formatDate(m.date)}</div>
     </div>
     <span class="task-status task-${m.taskStatus}">${statusLabel(m.taskStatus)}</span>
   </div>`;
@@ -1249,8 +1257,8 @@ function renderTrackerTable(prod) {
     const deadlinePill = !pd.deadline
       ? '<span class="pill pill-grey">No date</span>'
       : isComplete ? `<span class="pill pill-blue">${formatDate(pd.deadline)}</span>`
-      : dst==='overdue' ? `<span class="pill pill-red">Overdue &mdash; ${formatDate(pd.deadline)}</span>`
-      : dst==='warning' ? `<span class="pill pill-amber">Due soon &mdash; ${formatDate(pd.deadline)}</span>`
+      : dst==='overdue' ? `<span class="pill pill-red">Overdue — ${formatDate(pd.deadline)}</span>`
+      : dst==='warning' ? `<span class="pill pill-amber">Due soon — ${formatDate(pd.deadline)}</span>`
       : `<span class="pill pill-green">${formatDate(pd.deadline)}</span>`;
     const statusCtrl = currentRole === 'admin'
       ? `<select class="status-select" onchange="updatePillarStatus('${prod.id}','${pl.id}',this.value)">
@@ -1261,7 +1269,7 @@ function renderTrackerTable(prod) {
       : `<span class="task-status task-${st}">${statusLabel(st)}</span>`;
     const notesCtrl = currentRole === 'admin'
       ? `<input type="text" class="notes-input" placeholder="Add note..." value="${pd.notes||''}" onblur="updatePillarNotes('${prod.id}','${pl.id}',this.value)"/>`
-      : `<span class="notes-text">${pd.notes||'&mdash;'}</span>`;
+      : `<span class="notes-text">${pd.notes||'—'}</span>`;
     return `<tr class="tracker-row${isComplete?' tracker-row-done':''}">
       <td class="tracker-num">${i+1}</td>
       <td class="tracker-pillar"><div class="tracker-pillar-name">${pl.name}</div><div class="tracker-pillar-owner">${pl.owner}</div></td>
@@ -1598,7 +1606,7 @@ function renderReports(el) {
             <label class="form-label">Report notes <span class="form-hint">— optional context to include</span></label>
             <textarea id="report-notes" class="input-field" rows="3" placeholder="e.g. Focus areas, escalations, key decisions this week..."></textarea>
           </div>
-          <button class="btn-primary" onclick="generateProgressReport()" style="width:100%;">Generate &amp; email report</button>
+          <button class="btn-primary" onclick="generateProgressReport()" style="width:100%;">Generate & email report</button>
           <div id="report-result" style="display:none;margin-top:12px;"></div>
         </div>` : '<p style="font-size:12px;color:var(--text-muted);">Contact an admin to generate a report.</p>'}
       </div>
@@ -1815,8 +1823,8 @@ async function renderReadOnlyPage(productId) {
       const isComplete = st === 'complete';
       const deadlinePill = !pd.deadline ? '<span class="pill pill-grey">No date</span>'
         : isComplete      ? `<span class="pill pill-blue">${formatDate(pd.deadline)}</span>`
-        : dst==='overdue' ? `<span class="pill pill-red">Overdue &mdash; ${formatDate(pd.deadline)}</span>`
-        : dst==='warning' ? `<span class="pill pill-amber">Due soon &mdash; ${formatDate(pd.deadline)}</span>`
+        : dst==='overdue' ? `<span class="pill pill-red">Overdue — ${formatDate(pd.deadline)}</span>`
+        : dst==='warning' ? `<span class="pill pill-amber">Due soon — ${formatDate(pd.deadline)}</span>`
         : `<span class="pill pill-green">${formatDate(pd.deadline)}</span>`;
       return `<tr class="tracker-row${isComplete?' tracker-row-done':''}">
         <td class="tracker-num">${i+1}</td>
@@ -1828,7 +1836,7 @@ async function renderReadOnlyPage(productId) {
 
     screen.innerHTML = `
       <div style="display:flex;align-items:center;gap:10px;margin-bottom:24px;">
-        <div style="width:32px;height:32px;background:#C0282D;border-radius:8px;display:flex;align-items:center;justify-content:center;color:white;font-family:'Playfair Display',serif;font-size:15px;font-weight:600;">M</div>
+        <div style="width:32px;height:32px;background:#C0282D;border-radius:8px;display:flex;align-items:center;justify-content:center;color:white;font-family:'Playfair Display',serif;font-size:15px;font-weight:600<img src="Mixta%20Africa.jpg" alt="Mixta Africa" style="width:32px;height:32px;border-radius:8px;object-fit:cover;display:block;"/>">M</div>
         <div style="font-size:12px;color:#9a9a96;text-transform:uppercase;letter-spacing:.07em;">Mixta Africa — NPD Hub</div>
       </div>
       <h1 style="font-family:'Playfair Display',serif;font-size:26px;font-weight:600;margin-bottom:4px;">${prod.name}</h1>
@@ -2229,7 +2237,7 @@ window.showHandoverModal = async (productId) => {
     </div>
     <div class="form-actions">
       <button class="btn-outline" onclick="closeProductModal()">Cancel</button>
-      <button class="btn-primary" onclick="confirmHandover('${productId}')">Confirm &amp; send package</button>
+      <button class="btn-primary" onclick="confirmHandover('${productId}')">Confirm & send package</button>
     </div>`;
   document.getElementById('create-product-modal').style.display = 'flex';
 };
@@ -2337,7 +2345,7 @@ function renderSuperAdmin(el) {
     <div class="view-header">
       <div>
         <h1 class="view-title">⚡ Circuit Box</h1>
-        <p class="view-subtitle">Super admin — maintenance &amp; debugging centre</p>
+        <p class="view-subtitle">Super admin — maintenance & debugging centre</p>
       </div>
       <div style="display:flex;align-items:center;gap:10px;">
         <span class="sa-session-badge">Session: ${remaining}m remaining</span>
@@ -2793,10 +2801,10 @@ a { color: inherit; text-decoration: none; }
   padding: 48px 40px; width: 380px; text-align: center; box-shadow: 0 4px 24px rgba(0,0,0,0.08);
 }
 .login-logo { margin-bottom: 32px; }
-.login-logo-mark {
-  width: 48px; height: 48px; background: var(--red); border-radius: 12px;
-  display: flex; align-items: center; justify-content: center; margin: 0 auto 12px;
-  color: white; font-family: 'Playfair Display', serif; font-size: 22px; font-weight: 600;
+.login-logo-img {
+  width: 72px; height: 72px; border-radius: 12px; object-fit: cover;
+  object-position: center; display: block; margin: 0 auto 12px;
+  box-shadow: 0 2px 12px rgba(0,0,0,0.12);
 }
 .login-brand { font-family: 'Playfair Display', serif; font-size: 20px; font-weight: 600; color: var(--text); }
 .login-sub   { font-size: 12px; color: var(--text-muted); letter-spacing: 0.08em; text-transform: uppercase; margin-top: 2px; }
@@ -2847,10 +2855,9 @@ a { color: inherit; text-decoration: none; }
   padding: 18px 16px 14px; border-bottom: 1px solid var(--border); flex-shrink: 0;
   display: flex; align-items: center; gap: 10px;
 }
-.sidebar-logo-mark {
-  width: 32px; height: 32px; background: var(--red); border-radius: 8px; flex-shrink: 0;
-  display: flex; align-items: center; justify-content: center;
-  color: white; font-family: 'Playfair Display', serif; font-size: 15px; font-weight: 600;
+.sidebar-logo-img {
+  width: 32px; height: 32px; border-radius: 8px; object-fit: cover;
+  object-position: center; flex-shrink: 0; display: block;
 }
 .sidebar-brand-text { overflow: hidden; }
 .sidebar-brand { font-family: 'Playfair Display', serif; font-size: 14px; font-weight: 600; white-space: nowrap; line-height: 1.2; }
@@ -3316,7 +3323,7 @@ textarea.input-field { resize: vertical; line-height: 1.6; }
 <div id="screen-login" style="display:flex;">
   <div class="login-card">
     <div class="login-logo">
-      <div class="login-logo-mark">M</div>
+      <img src="Mixta%20Africa.jpg" alt="Mixta Africa" class="login-logo-img"/>
       <div class="login-brand">Mixta Africa</div>
       <div class="login-sub">New Product Development Hub</div>
     </div>
@@ -3356,7 +3363,7 @@ textarea.input-field { resize: vertical; line-height: 1.6; }
   <!-- SIDEBAR -->
   <nav id="sidebar">
     <div class="sidebar-top">
-      <div class="sidebar-logo-mark">M</div>
+      <img src="Mixta%20Africa.jpg" alt="Mixta Africa" class="sidebar-logo-img"/>
       <div class="sidebar-brand-text">
         <div class="sidebar-brand">Mixta Africa</div>
         <div class="sidebar-subbrand">NPD Hub</div>
