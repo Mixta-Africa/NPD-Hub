@@ -234,6 +234,44 @@ const PILLARS = [
   { id: 'p12', name: 'Project Execution Strategy',          owner: 'Country Manager',     dept: 'amc'        },
 ];
 
+/* ══ STAKEHOLDER LIST (from Dashboard_Mailing_List_NPD.xlsx) ══ */
+const STAKEHOLDERS = [
+  { name: 'Design Team',        email: 'dcs_nigeria@mixtafrica.com',              dept: 'Design',              pillarIds: ['p4'] },
+  { name: 'Arokodare A.',       email: 'a.arokodare@mixtafrica.com',              dept: 'Design',              pillarIds: ['p4'] },
+  { name: 'Uwadiale C.',        email: 'c.uwadiale@mixtafrica.com',               dept: 'Design',              pillarIds: ['p4'] },
+  { name: 'Uwuigbe A.',         email: 'a.uwuigbe@mixtafrica.com',                dept: 'Design',              pillarIds: ['p4'] },
+  { name: 'Deji Alli',          email: 'deji.alli@mixtafrica.com',                dept: 'AMC',                 pillarIds: ['p6','p7','p8','p12'] },
+  { name: 'Sade Hughes',        email: 's.hughes@mixtafrica.com',                 dept: 'AMC',                 pillarIds: ['p6','p7','p8','p12'] },
+  { name: 'Busola Ajayi',       email: 'b.ajayi@mixtafrica.com',                 dept: 'AMC',                 pillarIds: ['p6','p7','p8','p12'] },
+  { name: 'Tola Akinsulire',    email: 't.akinsulire@mixtafrica.com',             dept: 'AMC',                 pillarIds: ['p6','p7','p8','p12'] },
+  { name: 'Peter Ozolua',       email: 'p.ozolua@mixtafrica.com',                 dept: 'AMC',                 pillarIds: ['p6','p7','p8','p12'] },
+  { name: 'Uche Ndubuisi',      email: 'u.ndubuisi@mixtafrica.com',               dept: 'AMC',                 pillarIds: ['p6','p7','p8','p12'] },
+  { name: 'IPD Team',           email: 'ipd_nigeria@mixtafrica.com',              dept: 'IPD',                 pillarIds: [] },
+  { name: 'PMO Team',           email: 'pmo_nigeria@mixtafrica.com',              dept: 'IPD/PMO',             pillarIds: ['p11'] },
+  { name: 'Wasiu Salami',       email: 'w.salami@mixtafrica.com',                 dept: 'IPD',                 pillarIds: [] },
+  { name: 'Tobi Banjo',         email: 't.banjo@mixtafrica.com',                  dept: 'IPD',                 pillarIds: [] },
+  { name: 'Herve Kacou',        email: 'h.kacou@mixtafrica.com',                  dept: 'IPD',                 pillarIds: [] },
+  { name: 'Costing & Procurement', email: 'mn_costingandprocurement@mixtafrica.com', dept: 'Costing',          pillarIds: ['p4','p5','p10'] },
+  { name: 'Olamide James',      email: 'o.james@mixtafrica.com',                  dept: 'Costing',             pillarIds: ['p4','p5','p10'] },
+  { name: 'Jumoke Olowe',       email: 'j.olowe@mixtafrica.com',                  dept: 'Costing',             pillarIds: ['p4','p5','p10'] },
+  { name: 'Opeyemi Ogunewu',    email: 'o.ogunewu@mixtafrica.com',                dept: 'Costing',             pillarIds: ['p4','p5','p10'] },
+  { name: 'Tobi Ibidokun',      email: 't.ibidokun@mixtafrica.com',               dept: 'Costing',             pillarIds: ['p4','p5','p10'] },
+  { name: 'MCC Team',           email: 'mcc@mixtafrica.com',                      dept: 'MCC',                 pillarIds: ['p3','p11'] },
+  { name: 'Kolawole O.',        email: 'o.kolawole@mixtafrica.com',               dept: 'MCC',                 pillarIds: ['p3','p11'] },
+  { name: 'Haastrup K.',        email: 'k.haastrup@mixtafrica.com',               dept: 'MCC',                 pillarIds: ['p3','p11'] },
+];
+
+/* ══ GAS HELPER — call GAS backend endpoint ══ */
+async function callGAS(action, payload) {
+  const resp = await fetch(GAS_ENDPOINT, {
+    method:  'POST',
+    headers: { 'Content-Type': 'text/plain' },
+    body:    JSON.stringify({ action, ...payload }),
+  });
+  return resp.json();
+}
+
+
 /* ── STATUS HELPERS ── */
 function getPillarStatus(deadline) {
   if (!deadline) return 'no-date';
@@ -497,12 +535,12 @@ function buildProductForm(p) {
 }
 
 window.saveProduct = async (existingId) => {
-  const name      = document.getElementById('f-name')?.value.trim();
-  const desc      = document.getElementById('f-desc')?.value.trim();
+  const name       = document.getElementById('f-name')?.value.trim();
+  const desc       = document.getElementById('f-desc')?.value.trim();
   const launchDate = document.getElementById('f-launch')?.value;
 
-  if (!name) { showToast('Product name is required.', 'error'); return; }
-  if (!launchDate) { showToast('Launch date is required.', 'error'); return; }
+  if (!name)       { showToast('Product name is required.', 'error');  return; }
+  if (!launchDate) { showToast('Launch date is required.', 'error');   return; }
 
   const pillars = {};
   PILLARS.forEach(pl => {
@@ -519,20 +557,165 @@ window.saveProduct = async (existingId) => {
   const payload = {
     id, name, description: desc, launchDate,
     pillars, status: 'active',
-    createdAt:   isNew ? Date.now() : (productListCache[existingId]?.createdAt || Date.now()),
-    updatedAt:   Date.now(),
-    createdBy:   isNew ? currentUser.email : (productListCache[existingId]?.createdBy || currentUser.email),
+    createdAt: isNew ? Date.now() : (productListCache[existingId]?.createdAt || Date.now()),
+    updatedAt: Date.now(),
+    createdBy: isNew ? currentUser.email : (productListCache[existingId]?.createdBy || currentUser.email),
   };
 
   try {
     await set(ref(db, 'products/' + id), payload);
     productListCache[id] = payload;
-    closeProductModal();
-    showToast(isNew ? 'Product created successfully.' : 'Product updated.', 'success');
-    loadProductList();
+
+    if (isNew) {
+      // Phase 4: show stakeholder confirmation before Drive/email
+      closeProductModal();
+      showStakeholderConfirm(payload);
+    } else {
+      closeProductModal();
+      showToast('Product updated.', 'success');
+      loadProductList();
+    }
   } catch(e) {
     showToast('Save failed: ' + e.message, 'error');
   }
+};
+
+/* ══ PHASE 4: STAKEHOLDER CONFIRM + GAS TRIGGER ══ */
+
+// Selected stakeholders for the current confirmation session
+let pendingProduct    = null;
+let selectedStakeholders = [];
+
+window.showStakeholderConfirm = (product) => {
+  pendingProduct = product;
+  selectedStakeholders = STAKEHOLDERS.map(s => s.email); // all selected by default
+
+  document.getElementById('modal-title-text').textContent = 'Confirm stakeholder notifications';
+  document.getElementById('modal-body-content').innerHTML = buildStakeholderConfirm(product);
+  document.getElementById('create-product-modal').style.display = 'flex';
+};
+
+function buildStakeholderConfirm(product) {
+  // Group stakeholders by department
+  const depts = {};
+  STAKEHOLDERS.forEach(s => {
+    if (!depts[s.dept]) depts[s.dept] = [];
+    depts[s.dept].push(s);
+  });
+
+  const deptRows = Object.entries(depts).map(([dept, members]) => `
+    <div class="sc-dept">
+      <div class="sc-dept-name">${dept}</div>
+      ${members.map(s => `
+        <label class="sc-member">
+          <input type="checkbox" class="sc-checkbox" value="${s.email}" checked
+            onchange="toggleStakeholder('${s.email}', this.checked)"/>
+          <span class="sc-member-name">${s.name}</span>
+          <span class="sc-member-email">${s.email}</span>
+        </label>`).join('')}
+    </div>`).join('');
+
+  return `
+    <div class="sc-intro">
+      <p><strong>${product.name}</strong> has been saved to Firebase.</p>
+      <p style="margin-top:6px;color:var(--text-mid);">Review and confirm which stakeholders should receive the onboarding email and Drive folder access. Uncheck anyone you want to exclude.</p>
+    </div>
+    <div class="sc-actions-top">
+      <button class="btn-outline" style="font-size:12px;" onclick="toggleAllStakeholders(true)">Select all</button>
+      <button class="btn-outline" style="font-size:12px;" onclick="toggleAllStakeholders(false)">Deselect all</button>
+      <span class="sc-count" id="sc-count">${STAKEHOLDERS.length} selected</span>
+    </div>
+    <div class="sc-dept-list">${deptRows}</div>
+    <div class="form-actions">
+      <button class="btn-outline" onclick="skipGASSetup()">Skip (do later)</button>
+      <button class="btn-primary" onclick="confirmAndLaunchGAS()">
+        Confirm &amp; send notifications
+      </button>
+    </div>`;
+}
+
+window.toggleStakeholder = (email, checked) => {
+  if (checked) {
+    if (!selectedStakeholders.includes(email)) selectedStakeholders.push(email);
+  } else {
+    selectedStakeholders = selectedStakeholders.filter(e => e !== email);
+  }
+  const countEl = document.getElementById('sc-count');
+  if (countEl) countEl.textContent = `${selectedStakeholders.length} selected`;
+};
+
+window.toggleAllStakeholders = (selectAll) => {
+  selectedStakeholders = selectAll ? STAKEHOLDERS.map(s => s.email) : [];
+  document.querySelectorAll('.sc-checkbox').forEach(cb => {
+    cb.checked = selectAll;
+  });
+  const countEl = document.getElementById('sc-count');
+  if (countEl) countEl.textContent = `${selectedStakeholders.length} selected`;
+};
+
+window.skipGASSetup = () => {
+  closeProductModal();
+  showToast('Product created. Drive setup and emails skipped.', 'info');
+  loadProductList();
+  pendingProduct = null;
+  selectedStakeholders = [];
+};
+
+window.confirmAndLaunchGAS = async () => {
+  if (!pendingProduct) return;
+  if (selectedStakeholders.length === 0) {
+    showToast('Select at least one stakeholder, or click Skip.', 'error'); return;
+  }
+
+  // Show loading state on button
+  const btn = document.querySelector('#modal-body-content .btn-primary');
+  if (btn) { btn.disabled = true; btn.textContent = 'Setting up...'; }
+
+  try {
+    // Step 1: Create Drive folder
+    showToast('Creating Drive folder...', 'info');
+    const driveResult = await callGAS('createProductDrive', {
+      productName:       pendingProduct.name,
+      productId:         pendingProduct.id,
+      launchDate:        pendingProduct.launchDate,
+      stakeholderEmails: selectedStakeholders,
+    });
+
+    let folderUrl = null;
+    if (driveResult.ok && !driveResult.stub) {
+      folderUrl = driveResult.folderUrl;
+      // Save folder URL to Firebase
+      await set(ref(db, `products/${pendingProduct.id}/driveUrl`), folderUrl);
+      productListCache[pendingProduct.id].driveUrl = folderUrl;
+    }
+
+    // Step 2: Send onboarding emails
+    showToast('Sending onboarding emails...', 'info');
+    const emailResult = await callGAS('sendOnboardingEmails', {
+      productName:       pendingProduct.name,
+      productId:         pendingProduct.id,
+      launchDate:        pendingProduct.launchDate,
+      folderUrl:         folderUrl || 'Folder setup pending',
+      createdBy:         pendingProduct.createdBy,
+      stakeholders:      STAKEHOLDERS.filter(s => selectedStakeholders.includes(s.email)),
+      pillars:           PILLARS,
+    });
+
+    // Save onboarding timestamp
+    await set(ref(db, `products/${pendingProduct.id}/onboardedAt`), Date.now());
+    await set(ref(db, `products/${pendingProduct.id}/onboardedEmails`), selectedStakeholders);
+
+    closeProductModal();
+    showToast(`Done. ${selectedStakeholders.length} stakeholders notified.`, 'success');
+    loadProductList();
+  } catch(e) {
+    showToast('GAS setup failed: ' + e.message + '. Product saved — retry from Settings.', 'error');
+    closeProductModal();
+    loadProductList();
+  }
+
+  pendingProduct = null;
+  selectedStakeholders = [];
 };
 
 /* ── VIEW PRODUCT DETAIL ── */
@@ -1023,22 +1206,27 @@ window.__npd_init({
   handleSignIn,
   handleSignOut,
   loadView,
-  toggleSidebar:        window.toggleSidebar,
-  showCreateProduct:    window.showCreateProduct,
-  closeProductModal:    window.closeProductModal,
-  saveProduct:          window.saveProduct,
-  editProduct:          window.editProduct,
-  viewProduct:          window.viewProduct,
-  addToAllowlist:       window.addToAllowlist,
-  removeFromAllowlist:  window.removeFromAllowlist,
-  showToast:            window.showToast,
-  calFilterChange:      window.calFilterChange,
-  calMove:              window.calMove,
-  calGoToday:           window.calGoToday,
-  calDayClick:          window.calDayClick,
-  trackerSelectProduct: window.trackerSelectProduct,
-  updatePillarStatus:   window.updatePillarStatus,
-  updatePillarNotes:    window.updatePillarNotes,
+  toggleSidebar:           window.toggleSidebar,
+  showCreateProduct:       window.showCreateProduct,
+  closeProductModal:       window.closeProductModal,
+  saveProduct:             window.saveProduct,
+  editProduct:             window.editProduct,
+  viewProduct:             window.viewProduct,
+  addToAllowlist:          window.addToAllowlist,
+  removeFromAllowlist:     window.removeFromAllowlist,
+  showToast:               window.showToast,
+  calFilterChange:         window.calFilterChange,
+  calMove:                 window.calMove,
+  calGoToday:              window.calGoToday,
+  calDayClick:             window.calDayClick,
+  trackerSelectProduct:    window.trackerSelectProduct,
+  updatePillarStatus:      window.updatePillarStatus,
+  updatePillarNotes:       window.updatePillarNotes,
+  showStakeholderConfirm:  window.showStakeholderConfirm,
+  toggleStakeholder:       window.toggleStakeholder,
+  toggleAllStakeholders:   window.toggleAllStakeholders,
+  skipGASSetup:            window.skipGASSetup,
+  confirmAndLaunchGAS:     window.confirmAndLaunchGAS,
 });
 
 </script>
@@ -1493,6 +1681,22 @@ textarea.input-field { resize: vertical; line-height: 1.6; }
 .notes-input:focus { border-color:var(--border-mid); background:var(--surface); outline:none; }
 .notes-input:hover { border-color:var(--border); }
 .notes-text  { font-size:12px; color:var(--text-mid); }
+
+/* ─── PHASE 4: STAKEHOLDER CONFIRM ─── */
+.sc-intro { margin-bottom:16px; font-size:14px; line-height:1.6; }
+.sc-actions-top { display:flex; align-items:center; gap:8px; margin-bottom:14px; flex-wrap:wrap; }
+.sc-count { font-size:12px; color:var(--text-muted); margin-left:auto; }
+
+.sc-dept-list { max-height:340px; overflow-y:auto; border:1px solid var(--border); border-radius:var(--radius); margin-bottom:16px; }
+.sc-dept { padding:10px 14px; border-bottom:1px solid var(--border); }
+.sc-dept:last-child { border-bottom:none; }
+.sc-dept-name { font-size:11px; font-weight:700; color:var(--text-muted); text-transform:uppercase; letter-spacing:.07em; margin-bottom:8px; }
+
+.sc-member { display:flex; align-items:center; gap:8px; padding:5px 0; cursor:pointer; }
+.sc-member:hover { opacity:.8; }
+.sc-checkbox { width:15px; height:15px; accent-color:var(--red); flex-shrink:0; cursor:pointer; }
+.sc-member-name  { font-size:13px; font-weight:500; color:var(--text); min-width:130px; }
+.sc-member-email { font-size:11px; color:var(--text-muted); }
 </style>
 
 <!-- ══════════════════════════════════════════
