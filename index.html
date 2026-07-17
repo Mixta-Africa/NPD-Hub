@@ -2188,10 +2188,8 @@ window.showWeeklyLog = async (productId) => {
 };
 window.saveWeeklyLog = async (productId, weekKey) => {
   const summary   = document.getElementById('wl-summary')?.value.trim() || '';
-  const completed = document.getElementById('wl-completed')?.value.split('
-').map(s=>s.trim()).filter(Boolean) || [];
-  const open      = document.getElementById('wl-open')?.value.split('
-').map(s=>s.trim()).filter(Boolean) || [];
+  const completed = document.getElementById('wl-completed')?.value.split('\n').map(s=>s.trim()).filter(Boolean) || [];
+  const open      = document.getElementById('wl-open')?.value.split('\n').map(s=>s.trim()).filter(Boolean) || [];
   try {
     await set(ref(db, `products/${productId}/weeklyLog/${weekKey}`), {
       summary, tasksCompleted: completed, tasksOpen: open,
