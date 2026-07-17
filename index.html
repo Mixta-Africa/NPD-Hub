@@ -1053,22 +1053,233 @@ function renderDocuments(el) {
     </div>`;
 }
 
+/* ══ REPORTS + DEADLINE ALERT TRIGGER ══════════════════════ */
 function renderReports(el) {
   el.innerHTML = `
     <div class="view-header">
       <div>
         <h1 class="view-title">Progress Reports</h1>
-        <p class="view-subtitle">Generate and send progress reports to all stakeholders</p>
+        <p class="view-subtitle">Deadline alerts run automatically every day at 7am WAT</p>
       </div>
     </div>
+
+    <div class="two-col" style="margin-bottom:16px;">
+      <div class="panel">
+        <div class="panel-header"><span class="panel-title">Deadline Alert Engine</span></div>
+        <div class="panel-body">
+          <p style="font-size:13px;color:var(--text-mid);line-height:1.7;margin-bottom:16px;">
+            Runs automatically every day at 7am WAT via GitHub Actions.<br/>
+            Sends targeted emails to the responsible department only — not all stakeholders.<br/>
+            Triggers: <strong>3 days before deadline</strong>, <strong>on the deadline day</strong>, and <strong>every day after if overdue</strong>.
+          </p>
+          ${currentRole === 'admin' ? `
+          <div class="alert-manual-section">
+            <div class="form-section-label" style="margin-bottom:10px;">Manual trigger</div>
+            <select id="alert-product-sel" class="select-field" style="width:100%;margin-bottom:10px;">
+              <option value="all">All active products</option>
+            </select>
+            <button class="btn-primary" onclick="triggerDeadlineCheck()" style="width:100%;">
+              Run deadline check now
+            </button>
+            <div id="alert-result" style="display:none;margin-top:12px;"></div>
+          </div>` : '<p style="font-size:12px;color:var(--text-muted);">Contact an admin to trigger a manual check.</p>'}
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-header"><span class="panel-title">Alert thresholds</span></div>
+        <div class="panel-body">
+          <div class="threshold-row">
+            <span class="leg-dot leg-amber" style="flex-shrink:0;"></span>
+            <div>
+              <div style="font-size:13px;font-weight:500;">3-day warning</div>
+              <div style="font-size:12px;color:var(--text-muted);">Email sent to pillar owner dept 3 days before deadline</div>
+            </div>
+          </div>
+          <div class="threshold-row">
+            <span class="leg-dot leg-red" style="flex-shrink:0;"></span>
+            <div>
+              <div style="font-size:13px;font-weight:500;">Deadline day</div>
+              <div style="font-size:12px;color:var(--text-muted);">Email sent on the day the deadline falls</div>
+            </div>
+          </div>
+          <div class="threshold-row">
+            <span class="leg-dot" style="background:#7C3AED;flex-shrink:0;"></span>
+            <div>
+              <div style="font-size:13px;font-weight:500;">Overdue (daily)</div>
+              <div style="font-size:12px;color:var(--text-muted);">Email sent every day the pillar remains overdue and incomplete</div>
+            </div>
+          </div>
+          <div class="threshold-row">
+            <span class="leg-dot leg-green" style="flex-shrink:0;"></span>
+            <div>
+              <div style="font-size:13px;font-weight:500;">Complete — no alert</div>
+              <div style="font-size:12px;color:var(--text-muted);">Pillars marked complete are excluded from all alerts</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <div class="panel">
-      <div class="empty-state">
-        <span class="empty-icon">📊</span>
-        <h3>Reports coming in Phase 6</h3>
-        <p>Admin can generate a formatted progress report per product — covering pillar statuses, overdue count, and completion percentage — and email it to all stakeholders with one click.</p>
+      <div class="panel-header"><span class="panel-title">Current deadline status — all products</span></div>
+      <div class="panel-body" id="deadline-status-list"><div class="loading-row">Loading...</div></div>
+    </div>
+
+    <div class="panel" style="margin-top:16px;">
+      <div class="panel-header"><span class="panel-title">Progress Reports</span></div>
+      <div class="panel-body">
+        <p style="font-size:13px;color:var(--text-mid);line-height:1.7;margin-bottom:16px;">
+          Full progress report generation — including PDF export and email delivery — is coming in Phase 6.
+        </p>
+        <div style="opacity:.5;">
+          <button class="btn-primary" disabled>Generate &amp; email report</button>
+        </div>
       </div>
     </div>`;
+
+  loadDeadlineStatus();
+  if (currentRole === 'admin') loadAlertProductList();
 }
+
+async function loadAlertProductList() {
+  const snap    = await get(ref(db, 'products'));
+  const products = snap.val() || {};
+  const sel     = document.getElementById('alert-product-sel');
+  if (!sel) return;
+  Object.values(products).filter(p => p.status !== 'archived').forEach(p => {
+    const opt = document.createElement('option');
+    opt.value = p.id; opt.textContent = p.name;
+    sel.appendChild(opt);
+  });
+}
+
+async function loadDeadlineStatus() {
+  const el = document.getElementById('deadline-status-list');
+  if (!el) return;
+  try {
+    const snap     = await get(ref(db, 'products'));
+    const products = snap.val() || {};
+    const today    = new Date(); today.setHours(0,0,0,0);
+    const alerts   = [];
+
+    Object.values(products).filter(p => p.status !== 'archived').forEach(prod => {
+      PILLARS.forEach(pl => {
+        const pd = prod.pillars?.[pl.id];
+        if (!pd?.deadline || pd?.taskStatus === 'complete') return;
+        const due  = new Date(pd.deadline); due.setHours(0,0,0,0);
+        const diff = Math.round((due - today) / 86400000);
+        if (diff <= 3) {
+          alerts.push({
+            productName: prod.name,
+            pillarName:  pl.name,
+            owner:       pl.owner,
+            deadline:    pd.deadline,
+            diff,
+            status: diff < 0 ? 'overdue' : diff === 0 ? 'due-today' : 'warning',
+          });
+        }
+      });
+    });
+
+    if (alerts.length === 0) {
+      el.innerHTML = '<div class="empty-state-sm"><span class="empty-icon">✅</span><p>No imminent deadlines. All pillars are on track or have no date set.</p></div>';
+      return;
+    }
+
+    alerts.sort((a,b) => a.diff - b.diff);
+    el.innerHTML = alerts.map(a => {
+      const label = a.diff < 0  ? `${Math.abs(a.diff)} day${Math.abs(a.diff)>1?'s':''} overdue`
+                  : a.diff === 0 ? 'Due today'
+                  : `Due in ${a.diff} day${a.diff>1?'s':''}`;
+      const cls   = a.diff < 0 ? 'pill-red' : a.diff === 0 ? 'pill-red' : 'pill-amber';
+      return `<div class="deadline-alert-row">
+        <div class="deadline-alert-info">
+          <div class="deadline-alert-pillar">${a.pillarName}</div>
+          <div class="deadline-alert-product">${a.productName} &nbsp;·&nbsp; Owner: ${a.owner}</div>
+        </div>
+        <div style="display:flex;align-items:center;gap:8px;">
+          <span class="pill ${cls}">${label}</span>
+          <span style="font-size:11px;color:var(--text-muted);">${formatDate(a.deadline)}</span>
+        </div>
+      </div>`;
+    }).join('');
+  } catch(e) {
+    el.innerHTML = '<div class="loading-row muted">Failed to load deadline status.</div>';
+  }
+}
+
+window.triggerDeadlineCheck = async () => {
+  const btn = document.querySelector('.alert-manual-section .btn-primary');
+  const resultEl = document.getElementById('alert-result');
+  if (btn) { btn.disabled = true; btn.textContent = 'Running...'; }
+  if (resultEl) resultEl.style.display = 'none';
+
+  try {
+    const productId = document.getElementById('alert-product-sel')?.value || 'all';
+    // Build alert payload from Firebase
+    const snap      = await get(ref(db, 'products'));
+    const products  = snap.val() || {};
+    const today     = new Date(); today.setHours(0,0,0,0);
+    const alerts    = [];
+
+    Object.values(products)
+      .filter(p => p.status !== 'archived' && (productId === 'all' || p.id === productId))
+      .forEach(prod => {
+        PILLARS.forEach(pl => {
+          const pd = prod.pillars?.[pl.id];
+          if (!pd?.deadline || pd?.taskStatus === 'complete') return;
+          const due  = new Date(pd.deadline); due.setHours(0,0,0,0);
+          const diff = Math.round((due - today) / 86400000);
+          if (diff > 3) return; // only send alerts for ≤3 days or overdue
+
+          // Find dept emails from STAKEHOLDERS
+          const deptEmails = STAKEHOLDERS
+            .filter(s => s.pillarIds.includes(pl.id))
+            .map(s => s.email);
+          if (deptEmails.length === 0) return;
+
+          alerts.push({
+            productName: prod.name,
+            productId:   prod.id,
+            pillarName:  pl.name,
+            pillarId:    pl.id,
+            ownerDept:   pl.owner,
+            deptEmails,
+            daysUntil:   diff,
+            deadline:    pd.deadline,
+            alertType:   diff < 0 ? 'overdue' : diff === 0 ? 'due' : 'warning',
+          });
+        });
+      });
+
+    if (alerts.length === 0) {
+      if (resultEl) {
+        resultEl.style.display = 'block';
+        resultEl.className = 'alert-result-box alert-result-ok';
+        resultEl.innerHTML = '✅ No alerts to send — all pillars are on track.';
+      }
+    } else {
+      const result = await callGAS('checkDeadlines', { alerts });
+      if (resultEl) {
+        resultEl.style.display = 'block';
+        resultEl.className = `alert-result-box ${result.ok ? 'alert-result-ok' : 'alert-result-err'}`;
+        resultEl.innerHTML = result.ok
+          ? `✅ ${result.sent || alerts.length} alert email${(result.sent||alerts.length)>1?'s':''} sent.`
+          : `❌ Error: ${result.error}`;
+      }
+      loadDeadlineStatus();
+    }
+  } catch(e) {
+    if (resultEl) {
+      resultEl.style.display = 'block';
+      resultEl.className = 'alert-result-box alert-result-err';
+      resultEl.innerHTML = '❌ ' + e.message;
+    }
+  }
+
+  if (btn) { btn.disabled = false; btn.textContent = 'Run deadline check now'; }
+};
 
 function renderSettings(el) {
   el.innerHTML = `
@@ -1227,6 +1438,7 @@ window.__npd_init({
   toggleAllStakeholders:   window.toggleAllStakeholders,
   skipGASSetup:            window.skipGASSetup,
   confirmAndLaunchGAS:     window.confirmAndLaunchGAS,
+  triggerDeadlineCheck:    window.triggerDeadlineCheck,
 });
 
 </script>
@@ -1697,6 +1909,21 @@ textarea.input-field { resize: vertical; line-height: 1.6; }
 .sc-checkbox { width:15px; height:15px; accent-color:var(--red); flex-shrink:0; cursor:pointer; }
 .sc-member-name  { font-size:13px; font-weight:500; color:var(--text); min-width:130px; }
 .sc-member-email { font-size:11px; color:var(--text-muted); }
+
+/* ─── PHASE 5: DEADLINE ALERTS + REPORTS ─── */
+.threshold-row { display:flex; align-items:flex-start; gap:10px; padding:10px 0; border-bottom:1px solid var(--border); }
+.threshold-row:last-child { border-bottom:none; }
+
+.deadline-alert-row { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:10px 0; border-bottom:1px solid var(--border); flex-wrap:wrap; }
+.deadline-alert-row:last-child { border-bottom:none; }
+.deadline-alert-info { flex:1; min-width:0; }
+.deadline-alert-pillar  { font-size:13px; font-weight:500; color:var(--text); }
+.deadline-alert-product { font-size:12px; color:var(--text-muted); margin-top:2px; }
+
+.alert-manual-section { background:var(--bg); border-radius:var(--radius); padding:14px; }
+.alert-result-box { padding:10px 14px; border-radius:var(--radius); font-size:13px; font-weight:500; }
+.alert-result-ok  { background:var(--green-light); color:var(--green); }
+.alert-result-err { background:var(--red-light);   color:var(--red);   }
 </style>
 
 <!-- ══════════════════════════════════════════
