@@ -367,6 +367,10 @@ function showApp() {
     badge.className   = 'role-badge ' + (currentRole === 'admin' ? 'role-admin' : 'role-viewer');
   }
 
+  // Load all app config (pillars, stakeholders, features, system config)
+  loadAppConfig().then(() => seedConfigToFirebase());
+  // Load all app config (pillars, stakeholders, features, system config)
+  loadAppConfig().then(() => seedConfigToFirebase());
   // Phase 7: load team members + ensure user profile exists
   loadTeamMembers();
   const userKey = sanitiseEmail(currentUser.email);
@@ -427,47 +431,50 @@ window.loadView = (view) => {
 ───────────────────────────────────────────── */
 
 /* ── PILLAR DEFINITIONS (12 SOP pillars from Mixta NPD guide) ── */
-const PILLARS = [
-  { id: 'p1',  name: 'New Product Case Assessment',         owner: 'Commercial Strategy', dept: 'commercial' },
-  { id: 'p2',  name: 'New Product Development Meetings',    owner: 'Commercial Strategy', dept: 'commercial' },
-  { id: 'p3',  name: 'Market Survey & Research',            owner: 'Commercial Strategy', dept: 'commercial' },
-  { id: 'p4',  name: 'Product Design & Development',        owner: 'Design',              dept: 'design'     },
-  { id: 'p5',  name: 'Product Financial & Profitability Analysis', owner: 'Financial Planning', dept: 'finplan' },
-  { id: 'p6',  name: 'Product AMC Meetings',                owner: 'Country Manager',     dept: 'amc'        },
-  { id: 'p7',  name: 'AMC Product Presentations',           owner: 'Country Manager',     dept: 'amc'        },
-  { id: 'p8',  name: 'IC Product Presentations',            owner: 'Country Manager',     dept: 'amc'        },
-  { id: 'p9',  name: 'Product Components: Factsheet, Legal & Layout', owner: 'Operations', dept: 'operations' },
-  { id: 'p10', name: 'Product Pricing Development',         owner: 'Financial Planning',  dept: 'finplan'    },
-  { id: 'p11', name: 'Product Marketing Materials',         owner: 'MCC',                 dept: 'mcc'        },
-  { id: 'p12', name: 'Project Execution Strategy',          owner: 'Country Manager',     dept: 'amc'        },
-];
+// PILLARS — loaded from Firebase /config/pillars at runtime
+// Default fallback used until Firebase loads
+let PILLARS = [
+  { id: 'p1',  name: 'New Product Case Assessment',              owner: 'Commercial Strategy', dept: 'commercial', enabled: true },
+  { id: 'p2',  name: 'New Product Development Meetings',         owner: 'Commercial Strategy', dept: 'commercial', enabled: true },
+  { id: 'p3',  name: 'Market Survey & Research',                 owner: 'Commercial Strategy', dept: 'commercial', enabled: true },
+  { id: 'p4',  name: 'Product Design & Development',             owner: 'Design',              dept: 'design',     enabled: true },
+  { id: 'p5',  name: 'Product Financial & Profitability Analysis',owner: 'Financial Planning', dept: 'finplan',    enabled: true },
+  { id: 'p6',  name: 'Product AMC Meetings',                     owner: 'Country Manager',     dept: 'amc',        enabled: true },
+  { id: 'p7',  name: 'AMC Product Presentations',                owner: 'Country Manager',     dept: 'amc',        enabled: true },
+  { id: 'p8',  name: 'IC Product Presentations',                 owner: 'Country Manager',     dept: 'amc',        enabled: true },
+  { id: 'p9',  name: 'Product Components: Factsheet, Legal & Layout', owner: 'Operations',   dept: 'operations',  enabled: true },
+  { id: 'p10', name: 'Product Pricing Development',              owner: 'Financial Planning',  dept: 'finplan',    enabled: true },
+  { id: 'p11', name: 'Product Marketing Materials',              owner: 'MCC',                 dept: 'mcc',        enabled: true },
+  { id: 'p12', name: 'Project Execution Strategy',               owner: 'Country Manager',     dept: 'amc',        enabled: true },
+]
 
 /* ══ STAKEHOLDER LIST (from Dashboard_Mailing_List_NPD.xlsx) ══ */
-const STAKEHOLDERS = [
-  { name: 'Design Team',        email: 'dcs_nigeria@mixtafrica.com',              dept: 'Design',              pillarIds: ['p4'] },
-  { name: 'Arokodare A.',       email: 'a.arokodare@mixtafrica.com',              dept: 'Design',              pillarIds: ['p4'] },
-  { name: 'Uwadiale C.',        email: 'c.uwadiale@mixtafrica.com',               dept: 'Design',              pillarIds: ['p4'] },
-  { name: 'Uwuigbe A.',         email: 'a.uwuigbe@mixtafrica.com',                dept: 'Design',              pillarIds: ['p4'] },
-  { name: 'Deji Alli',          email: 'deji.alli@mixtafrica.com',                dept: 'AMC',                 pillarIds: ['p6','p7','p8','p12'] },
-  { name: 'Sade Hughes',        email: 's.hughes@mixtafrica.com',                 dept: 'AMC',                 pillarIds: ['p6','p7','p8','p12'] },
-  { name: 'Busola Ajayi',       email: 'b.ajayi@mixtafrica.com',                 dept: 'AMC',                 pillarIds: ['p6','p7','p8','p12'] },
-  { name: 'Tola Akinsulire',    email: 't.akinsulire@mixtafrica.com',             dept: 'AMC',                 pillarIds: ['p6','p7','p8','p12'] },
-  { name: 'Peter Ozolua',       email: 'p.ozolua@mixtafrica.com',                 dept: 'AMC',                 pillarIds: ['p6','p7','p8','p12'] },
-  { name: 'Uche Ndubuisi',      email: 'u.ndubuisi@mixtafrica.com',               dept: 'AMC',                 pillarIds: ['p6','p7','p8','p12'] },
-  { name: 'IPD Team',           email: 'ipd_nigeria@mixtafrica.com',              dept: 'IPD',                 pillarIds: [] },
-  { name: 'PMO Team',           email: 'pmo_nigeria@mixtafrica.com',              dept: 'IPD/PMO',             pillarIds: ['p11'] },
-  { name: 'Wasiu Salami',       email: 'w.salami@mixtafrica.com',                 dept: 'IPD',                 pillarIds: [] },
-  { name: 'Tobi Banjo',         email: 't.banjo@mixtafrica.com',                  dept: 'IPD',                 pillarIds: [] },
-  { name: 'Herve Kacou',        email: 'h.kacou@mixtafrica.com',                  dept: 'IPD',                 pillarIds: [] },
-  { name: 'Costing & Procurement', email: 'mn_costingandprocurement@mixtafrica.com', dept: 'Costing',          pillarIds: ['p4','p5','p10'] },
-  { name: 'Olamide James',      email: 'o.james@mixtafrica.com',                  dept: 'Costing',             pillarIds: ['p4','p5','p10'] },
-  { name: 'Jumoke Olowe',       email: 'j.olowe@mixtafrica.com',                  dept: 'Costing',             pillarIds: ['p4','p5','p10'] },
-  { name: 'Opeyemi Ogunewu',    email: 'o.ogunewu@mixtafrica.com',                dept: 'Costing',             pillarIds: ['p4','p5','p10'] },
-  { name: 'Tobi Ibidokun',      email: 't.ibidokun@mixtafrica.com',               dept: 'Costing',             pillarIds: ['p4','p5','p10'] },
-  { name: 'MCC Team',           email: 'mcc@mixtafrica.com',                      dept: 'MCC',                 pillarIds: ['p3','p11'] },
-  { name: 'Kolawole O.',        email: 'o.kolawole@mixtafrica.com',               dept: 'MCC',                 pillarIds: ['p3','p11'] },
-  { name: 'Haastrup K.',        email: 'k.haastrup@mixtafrica.com',               dept: 'MCC',                 pillarIds: ['p3','p11'] },
-];
+// STAKEHOLDERS — loaded from Firebase /config/stakeholders at runtime
+let STAKEHOLDERS = [
+  { id: 's1',  name: 'Design Team',        email: 'dcs_nigeria@mixtafrica.com',              dept: 'Design',    pillarIds: ['p4'],               enabled: true },
+  { id: 's2',  name: 'Arokodare A.',       email: 'a.arokodare@mixtafrica.com',              dept: 'Design',    pillarIds: ['p4'],               enabled: true },
+  { id: 's3',  name: 'Uwadiale C.',        email: 'c.uwadiale@mixtafrica.com',               dept: 'Design',    pillarIds: ['p4'],               enabled: true },
+  { id: 's4',  name: 'Uwuigbe A.',         email: 'a.uwuigbe@mixtafrica.com',                dept: 'Design',    pillarIds: ['p4'],               enabled: true },
+  { id: 's5',  name: 'Deji Alli',          email: 'deji.alli@mixtafrica.com',                dept: 'AMC',       pillarIds: ['p6','p7','p8','p12'], enabled: true },
+  { id: 's6',  name: 'Sade Hughes',        email: 's.hughes@mixtafrica.com',                 dept: 'AMC',       pillarIds: ['p6','p7','p8','p12'], enabled: true },
+  { id: 's7',  name: 'Busola Ajayi',       email: 'b.ajayi@mixtafrica.com',                  dept: 'AMC',       pillarIds: ['p6','p7','p8','p12'], enabled: true },
+  { id: 's8',  name: 'Tola Akinsulire',    email: 't.akinsulire@mixtafrica.com',             dept: 'AMC',       pillarIds: ['p6','p7','p8','p12'], enabled: true },
+  { id: 's9',  name: 'Peter Ozolua',       email: 'p.ozolua@mixtafrica.com',                 dept: 'AMC',       pillarIds: ['p6','p7','p8','p12'], enabled: true },
+  { id: 's10', name: 'Uche Ndubuisi',      email: 'u.ndubuisi@mixtafrica.com',               dept: 'AMC',       pillarIds: ['p6','p7','p8','p12'], enabled: true },
+  { id: 's11', name: 'IPD Team',           email: 'ipd_nigeria@mixtafrica.com',              dept: 'IPD',       pillarIds: [],                    enabled: true },
+  { id: 's12', name: 'PMO Team',           email: 'pmo_nigeria@mixtafrica.com',              dept: 'IPD/PMO',   pillarIds: ['p11'],               enabled: true },
+  { id: 's13', name: 'Wasiu Salami',       email: 'w.salami@mixtafrica.com',                 dept: 'IPD',       pillarIds: [],                    enabled: true },
+  { id: 's14', name: 'Tobi Banjo',         email: 't.banjo@mixtafrica.com',                  dept: 'IPD',       pillarIds: [],                    enabled: true },
+  { id: 's15', name: 'Herve Kacou',        email: 'h.kacou@mixtafrica.com',                  dept: 'IPD',       pillarIds: [],                    enabled: true },
+  { id: 's16', name: 'Costing & Proc.',    email: 'mn_costingandprocurement@mixtafrica.com', dept: 'Costing',   pillarIds: ['p4','p5','p10'],     enabled: true },
+  { id: 's17', name: 'Olamide James',      email: 'o.james@mixtafrica.com',                  dept: 'Costing',   pillarIds: ['p4','p5','p10'],     enabled: true },
+  { id: 's18', name: 'Jumoke Olowe',       email: 'j.olowe@mixtafrica.com',                  dept: 'Costing',   pillarIds: ['p4','p5','p10'],     enabled: true },
+  { id: 's19', name: 'Opeyemi Ogunewu',    email: 'o.ogunewu@mixtafrica.com',                dept: 'Costing',   pillarIds: ['p4','p5','p10'],     enabled: true },
+  { id: 's20', name: 'Tobi Ibidokun',      email: 't.ibidokun@mixtafrica.com',               dept: 'Costing',   pillarIds: ['p4','p5','p10'],     enabled: true },
+  { id: 's21', name: 'MCC Team',           email: 'mcc@mixtafrica.com',                      dept: 'MCC',       pillarIds: ['p3','p11'],          enabled: true },
+  { id: 's22', name: 'Kolawole O.',        email: 'o.kolawole@mixtafrica.com',               dept: 'MCC',       pillarIds: ['p3','p11'],          enabled: true },
+  { id: 's23', name: 'Haastrup K.',        email: 'k.haastrup@mixtafrica.com',               dept: 'MCC',       pillarIds: ['p3','p11'],          enabled: true },
+]
 
 /* ══ PHASE 7: MULTI-USER WORKSPACE ══════════════════════════ */
 
@@ -508,10 +515,70 @@ async function loadTeamMembers() {
   }
 }
 
-// Call on app load
-window.__onAppReady = async () => {
-  await loadTeamMembers();
+// ── FEATURE FLAGS (defaults — overridden by Firebase /config/features) ──
+let FEATURES = {
+  deadlineAlerts:   true,
+  handoverSystem:   true,
+  weeklyLog:        true,
+  documentUploads:  true,
+  progressReports:  true,
+  sharing:          true,
+  calendarView:     true,
+  taskTracker:      true,
 };
+
+// ── SYSTEM CONFIG (defaults — overridden by Firebase /config/system) ──
+let SYS_CONFIG = {
+  saTimeoutMins:      30,
+  alertThresholdDays: 3,
+  appName:            'Mixta Africa NPD Hub',
+  appSubtitle:        'New Product Development Hub',
+};
+
+// ── Load all config from Firebase on startup ──────────────────
+async function loadAppConfig() {
+  try {
+    const [pillarsSnap, stkSnap, featSnap, sysSnap] = await Promise.all([
+      get(ref(db, 'config/pillars')),
+      get(ref(db, 'config/stakeholders')),
+      get(ref(db, 'config/features')),
+      get(ref(db, 'config/system')),
+    ]);
+    if (pillarsSnap.exists()) {
+      const p = pillarsSnap.val();
+      PILLARS = Array.isArray(p) ? p : Object.values(p);
+    }
+    if (stkSnap.exists()) {
+      const s = stkSnap.val();
+      STAKEHOLDERS = Array.isArray(s) ? s : Object.values(s);
+    }
+    if (featSnap.exists()) FEATURES    = { ...FEATURES, ...featSnap.val() };
+    if (sysSnap.exists())  SYS_CONFIG  = { ...SYS_CONFIG, ...sysSnap.val() };
+  } catch(e) {
+    console.warn('Config load failed, using defaults:', e.message);
+  }
+}
+
+// Seed default config to Firebase (run once — skips if already exists)
+async function seedConfigToFirebase() {
+  try {
+    const snap = await get(ref(db, 'config'));
+    if (!snap.exists()) {
+      await set(ref(db, 'config/pillars'),       PILLARS);
+      await set(ref(db, 'config/stakeholders'),  STAKEHOLDERS);
+      await set(ref(db, 'config/features'),      FEATURES);
+      await set(ref(db, 'config/system'),        SYS_CONFIG);
+      console.log('Config seeded to Firebase');
+    }
+  } catch(e) { console.warn('Config seed failed:', e.message); }
+}
+
+async function loadTeamMembers() {
+  try {
+    const snap = await get(ref(db, 'users'));
+    TEAM_MEMBERS = snap.val() || {};
+  } catch(e) { console.warn('Could not load team members:', e); }
+}
 
 
 /* ══ GAS HELPER — call GAS backend endpoint ══ */
@@ -2381,10 +2448,15 @@ function renderSuperAdmin(el) {
     </div>
 
     <div class="sa-tabs">
-      <button class="sa-tab active" onclick="switchSATab('health', this)">System Health</button>
+      <button class="sa-tab active" onclick="switchSATab('health', this)">Health</button>
       <button class="sa-tab" onclick="switchSATab('errors', this)">Error Log</button>
-      <button class="sa-tab" onclick="switchSATab('users', this)">User Management</button>
-      <button class="sa-tab" onclick="switchSATab('products', this)">Product Audit</button>
+      <button class="sa-tab" onclick="switchSATab('features', this)">Features</button>
+      <button class="sa-tab" onclick="switchSATab('pillars', this)">Pillars</button>
+      <button class="sa-tab" onclick="switchSATab('stakeholders', this)">Stakeholders</button>
+      <button class="sa-tab" onclick="switchSATab('config', this)">System Config</button>
+      <button class="sa-tab" onclick="switchSATab('audit', this)">Audit Log</button>
+      <button class="sa-tab" onclick="switchSATab('users', this)">Users</button>
+      <button class="sa-tab" onclick="switchSATab('products', this)">Products</button>
       <button class="sa-tab" onclick="switchSATab('maintenance', this)">Maintenance</button>
     </div>
 
@@ -2407,13 +2479,462 @@ async function loadSATab(tab) {
   el.innerHTML = '<div class="loading-row" style="padding:24px;">Loading...</div>';
 
   switch(tab) {
-    case 'health':      await renderSAHealth(el);      break;
-    case 'errors':      await renderSAErrors(el);      break;
-    case 'users':       await renderSAUsers(el);       break;
-    case 'products':    await renderSAProducts(el);    break;
-    case 'maintenance': await renderSAMaintenance(el); break;
+    case 'health':        await renderSAHealth(el);        break;
+    case 'errors':        await renderSAErrors(el);        break;
+    case 'features':      await renderSAFeatures(el);      break;
+    case 'pillars':       await renderSAPillars(el);       break;
+    case 'stakeholders':  await renderSAStakeholders(el);  break;
+    case 'config':        await renderSAConfig(el);        break;
+    case 'audit':         await renderSAAudit(el);         break;
+    case 'users':         await renderSAUsers(el);         break;
+    case 'products':      await renderSAProducts(el);      break;
+    case 'maintenance':   await renderSAMaintenance(el);   break;
   }
 }
+
+/* ══ CIRCUIT BOX — MASTER EDIT PANEL TABS ══════════════════ */
+
+/* ── TAB: FEATURES ──────────────────────────────────────── */
+async function renderSAFeatures(el) {
+  const FEATURE_META = [
+    { key: 'deadlineAlerts',  label: 'Deadline Alert Engine',   desc: 'Daily cron + manual trigger that emails pillar owners when deadlines are near or overdue' },
+    { key: 'handoverSystem',  label: 'Handover System',         desc: 'Allow product owners to initiate leave handovers with auto-generated briefing packages' },
+    { key: 'weeklyLog',       label: 'Weekly Task Log',         desc: 'Per-product weekly log of completed and open tasks, feeds into handover packages' },
+    { key: 'documentUploads', label: 'Document Upload Centre',  desc: 'File upload zones per SOP pillar, synced to Google Drive subfolders' },
+    { key: 'progressReports', label: 'Progress Reports',        desc: 'Generate and email formatted progress reports to all onboarded stakeholders' },
+    { key: 'sharing',         label: 'Product Sharing',         desc: 'Allow product owners to share access with team members at view or edit level' },
+    { key: 'calendarView',    label: 'Launch Calendar',         desc: 'Month-grid view of all pillar milestone dates with colour-coded status dots' },
+    { key: 'taskTracker',     label: 'Task Tracker',            desc: 'Per-product pillar status table with admin update controls and notes' },
+  ];
+
+  const rows = FEATURE_META.map(f => {
+    const on = FEATURES[f.key] !== false;
+    return `<div class="cb-feature-row">
+      <div class="cb-feature-info">
+        <div class="cb-feature-label">${f.label}</div>
+        <div class="cb-feature-desc">${f.desc}</div>
+      </div>
+      <label class="cb-toggle">
+        <input type="checkbox" ${on ? 'checked' : ''} onchange="toggleFeature('${f.key}', this.checked)"/>
+        <span class="cb-toggle-track"><span class="cb-toggle-thumb"></span></span>
+      </label>
+    </div>`;
+  }).join('');
+
+  el.innerHTML = `
+    <div class="panel">
+      <div class="panel-header">
+        <span class="panel-title">Feature flags</span>
+        <span style="font-size:12px;color:var(--text-muted);">Changes take effect immediately — no redeploy needed</span>
+      </div>
+      <div class="panel-body" style="padding:0;">${rows}</div>
+    </div>`;
+}
+
+window.toggleFeature = async (key, enabled) => {
+  try {
+    FEATURES[key] = enabled;
+    await set(ref(db, `config/features/${key}`), enabled);
+    showToast(`${key} ${enabled ? 'enabled' : 'disabled'}.`, 'success');
+  } catch(e) { showToast('Failed: ' + e.message, 'error'); }
+};
+
+/* ── TAB: PILLARS ────────────────────────────────────────── */
+async function renderSAPillars(el) {
+  el.innerHTML = `
+    <div class="panel" style="margin-bottom:14px;">
+      <div class="panel-header">
+        <span class="panel-title">SOP Pillars</span>
+        <button class="btn-primary-sm" onclick="showAddPillar()">+ Add pillar</button>
+      </div>
+      <div class="panel-body" style="padding:0;">
+        ${PILLARS.map((pl, i) => `
+          <div class="cb-pillar-row ${pl.enabled===false ? 'cb-row-disabled' : ''}">
+            <div class="cb-pillar-num">${i+1}</div>
+            <div class="cb-pillar-info">
+              <div class="cb-pillar-name">${pl.name}</div>
+              <div class="cb-pillar-owner">${pl.owner} · ${pl.dept}</div>
+            </div>
+            <div class="cb-pillar-actions">
+              <button class="btn-secondary-sm" onclick="editPillar('${pl.id}')">Edit</button>
+              <button class="btn-secondary-sm" onclick="togglePillar('${pl.id}',${pl.enabled!==false})">
+                ${pl.enabled===false ? 'Enable' : 'Disable'}
+              </button>
+              <button class="btn-danger-xs" onclick="deletePillar('${pl.id}')">Delete</button>
+            </div>
+          </div>`).join('')}
+      </div>
+    </div>
+    <div id="pillar-edit-panel"></div>`;
+}
+
+window.editPillar = (id) => {
+  const pl  = PILLARS.find(p => p.id === id);
+  if (!pl) return;
+  const el  = document.getElementById('pillar-edit-panel');
+  if (!el) return;
+  el.innerHTML = `
+    <div class="panel">
+      <div class="panel-header"><span class="panel-title">Edit pillar — ${pl.name}</span></div>
+      <div class="panel-body">
+        <div class="form-row"><label class="form-label">Name</label>
+          <input id="pe-name" class="input-field" value="${pl.name}"/></div>
+        <div class="form-row"><label class="form-label">Owner department</label>
+          <input id="pe-owner" class="input-field" value="${pl.owner}"/></div>
+        <div class="form-row"><label class="form-label">Dept key</label>
+          <input id="pe-dept" class="input-field" value="${pl.dept}"/></div>
+        <div class="form-actions">
+          <button class="btn-outline" onclick="document.getElementById('pillar-edit-panel').innerHTML=''">Cancel</button>
+          <button class="btn-primary" onclick="savePillar('${id}')">Save changes</button>
+        </div>
+      </div>
+    </div>`;
+  el.scrollIntoView({ behavior: 'smooth' });
+};
+
+window.savePillar = async (id) => {
+  const idx = PILLARS.findIndex(p => p.id === id);
+  if (idx === -1) return;
+  PILLARS[idx].name  = document.getElementById('pe-name')?.value.trim()  || PILLARS[idx].name;
+  PILLARS[idx].owner = document.getElementById('pe-owner')?.value.trim() || PILLARS[idx].owner;
+  PILLARS[idx].dept  = document.getElementById('pe-dept')?.value.trim()  || PILLARS[idx].dept;
+  try {
+    await set(ref(db, 'config/pillars'), PILLARS);
+    showToast('Pillar updated.', 'success');
+    loadSATab('pillars');
+  } catch(e) { showToast('Save failed: ' + e.message, 'error'); }
+};
+
+window.togglePillar = async (id, currentlyEnabled) => {
+  const idx = PILLARS.findIndex(p => p.id === id);
+  if (idx === -1) return;
+  PILLARS[idx].enabled = !currentlyEnabled;
+  try {
+    await set(ref(db, 'config/pillars'), PILLARS);
+    showToast(`Pillar ${PILLARS[idx].enabled ? 'enabled' : 'disabled'}.`, 'success');
+    loadSATab('pillars');
+  } catch(e) { showToast('Failed: ' + e.message, 'error'); }
+};
+
+window.deletePillar = async (id) => {
+  if (!confirm('Delete this pillar? This cannot be undone and will affect all products.')) return;
+  PILLARS = PILLARS.filter(p => p.id !== id);
+  try {
+    await set(ref(db, 'config/pillars'), PILLARS);
+    showToast('Pillar deleted.', 'success');
+    loadSATab('pillars');
+  } catch(e) { showToast('Failed: ' + e.message, 'error'); }
+};
+
+window.showAddPillar = () => {
+  const el = document.getElementById('pillar-edit-panel');
+  if (!el) return;
+  const newId = 'p' + (Date.now());
+  el.innerHTML = `
+    <div class="panel">
+      <div class="panel-header"><span class="panel-title">Add new pillar</span></div>
+      <div class="panel-body">
+        <div class="form-row"><label class="form-label">Name <span class="req">*</span></label>
+          <input id="pe-name" class="input-field" placeholder="e.g. Legal Review"/></div>
+        <div class="form-row"><label class="form-label">Owner department</label>
+          <input id="pe-owner" class="input-field" placeholder="e.g. Legal"/></div>
+        <div class="form-row"><label class="form-label">Dept key</label>
+          <input id="pe-dept" class="input-field" placeholder="e.g. legal"/></div>
+        <div class="form-actions">
+          <button class="btn-outline" onclick="document.getElementById('pillar-edit-panel').innerHTML=''">Cancel</button>
+          <button class="btn-primary" onclick="addNewPillar('${newId}')">Add pillar</button>
+        </div>
+      </div>
+    </div>`;
+  el.scrollIntoView({ behavior: 'smooth' });
+};
+
+window.addNewPillar = async (id) => {
+  const name  = document.getElementById('pe-name')?.value.trim();
+  const owner = document.getElementById('pe-owner')?.value.trim() || 'Commercial Strategy';
+  const dept  = document.getElementById('pe-dept')?.value.trim() || 'commercial';
+  if (!name) { showToast('Name is required.', 'error'); return; }
+  PILLARS.push({ id, name, owner, dept, enabled: true });
+  try {
+    await set(ref(db, 'config/pillars'), PILLARS);
+    showToast('Pillar added.', 'success');
+    loadSATab('pillars');
+  } catch(e) { showToast('Failed: ' + e.message, 'error'); }
+};
+
+/* ── TAB: STAKEHOLDERS ───────────────────────────────────── */
+async function renderSAStakeholders(el) {
+  const depts = [...new Set(STAKEHOLDERS.map(s => s.dept))];
+  el.innerHTML = `
+    <div class="panel" style="margin-bottom:14px;">
+      <div class="panel-header">
+        <span class="panel-title">Stakeholder list (${STAKEHOLDERS.length})</span>
+        <button class="btn-primary-sm" onclick="showAddStakeholder()">+ Add</button>
+      </div>
+      <div class="panel-body" style="padding:0;overflow:auto;">
+        <table class="tracker-table" style="min-width:600px;">
+          <thead><tr>
+            <th>Name</th><th>Email</th><th>Dept</th>
+            <th>Pillars</th><th style="width:120px;"></th>
+          </tr></thead>
+          <tbody>
+            ${STAKEHOLDERS.map(s => `<tr class="tracker-row ${s.enabled===false?'tracker-row-done':''}">
+              <td class="tracker-pillar"><div class="tracker-pillar-name">${s.name}</div></td>
+              <td style="font-size:12px;color:var(--text-muted);">${s.email}</td>
+              <td><span class="pill pill-grey" style="font-size:11px;">${s.dept}</span></td>
+              <td style="font-size:11px;color:var(--text-muted);">${(s.pillarIds||[]).join(', ')||'All'}</td>
+              <td>
+                <div style="display:flex;gap:6px;">
+                  <button class="btn-secondary-sm" onclick="editStakeholder('${s.id}')">Edit</button>
+                  <button class="btn-danger-xs" onclick="deleteStakeholder('${s.id}')">✕</button>
+                </div>
+              </td>
+            </tr>`).join('')}
+          </tbody>
+        </table>
+      </div>
+    </div>
+    <div id="stakeholder-edit-panel"></div>`;
+}
+
+window.editStakeholder = (id) => {
+  const s  = STAKEHOLDERS.find(x => x.id === id);
+  if (!s) return;
+  const el = document.getElementById('stakeholder-edit-panel');
+  if (!el) return;
+  el.innerHTML = `
+    <div class="panel">
+      <div class="panel-header"><span class="panel-title">Edit — ${s.name}</span></div>
+      <div class="panel-body">
+        <div class="form-row"><label class="form-label">Name</label>
+          <input id="se-name" class="input-field" value="${s.name}"/></div>
+        <div class="form-row"><label class="form-label">Email</label>
+          <input id="se-email" class="input-field" value="${s.email}"/></div>
+        <div class="form-row"><label class="form-label">Department</label>
+          <input id="se-dept" class="input-field" value="${s.dept}"/></div>
+        <div class="form-row"><label class="form-label">Pillar IDs <span class="form-hint">— comma separated e.g. p3,p11</span></label>
+          <input id="se-pillars" class="input-field" value="${(s.pillarIds||[]).join(',')}"/></div>
+        <div class="form-actions">
+          <button class="btn-outline" onclick="document.getElementById('stakeholder-edit-panel').innerHTML=''">Cancel</button>
+          <button class="btn-primary" onclick="saveStakeholder('${id}')">Save</button>
+        </div>
+      </div>
+    </div>`;
+  el.scrollIntoView({ behavior: 'smooth' });
+};
+
+window.saveStakeholder = async (id) => {
+  const idx = STAKEHOLDERS.findIndex(s => s.id === id);
+  if (idx === -1) return;
+  const pillarsRaw = document.getElementById('se-pillars')?.value || '';
+  STAKEHOLDERS[idx] = {
+    ...STAKEHOLDERS[idx],
+    name:      document.getElementById('se-name')?.value.trim()  || STAKEHOLDERS[idx].name,
+    email:     document.getElementById('se-email')?.value.trim() || STAKEHOLDERS[idx].email,
+    dept:      document.getElementById('se-dept')?.value.trim()  || STAKEHOLDERS[idx].dept,
+    pillarIds: pillarsRaw.split(',').map(p => p.trim()).filter(Boolean),
+  };
+  try {
+    await set(ref(db, 'config/stakeholders'), STAKEHOLDERS);
+    showToast('Stakeholder updated.', 'success');
+    loadSATab('stakeholders');
+  } catch(e) { showToast('Failed: ' + e.message, 'error'); }
+};
+
+window.deleteStakeholder = async (id) => {
+  if (!confirm('Remove this stakeholder from the list?')) return;
+  STAKEHOLDERS = STAKEHOLDERS.filter(s => s.id !== id);
+  try {
+    await set(ref(db, 'config/stakeholders'), STAKEHOLDERS);
+    showToast('Stakeholder removed.', 'success');
+    loadSATab('stakeholders');
+  } catch(e) { showToast('Failed: ' + e.message, 'error'); }
+};
+
+window.showAddStakeholder = () => {
+  const el = document.getElementById('stakeholder-edit-panel');
+  if (!el) return;
+  const newId = 's' + Date.now();
+  el.innerHTML = `
+    <div class="panel">
+      <div class="panel-header"><span class="panel-title">Add stakeholder</span></div>
+      <div class="panel-body">
+        <div class="form-row"><label class="form-label">Name <span class="req">*</span></label>
+          <input id="se-name" class="input-field" placeholder="Full name"/></div>
+        <div class="form-row"><label class="form-label">Email <span class="req">*</span></label>
+          <input id="se-email" class="input-field" placeholder="name@mixtafrica.com"/></div>
+        <div class="form-row"><label class="form-label">Department</label>
+          <input id="se-dept" class="input-field" placeholder="e.g. Design"/></div>
+        <div class="form-row"><label class="form-label">Pillar IDs <span class="form-hint">— comma separated</span></label>
+          <input id="se-pillars" class="input-field" placeholder="e.g. p3,p11"/></div>
+        <div class="form-actions">
+          <button class="btn-outline" onclick="document.getElementById('stakeholder-edit-panel').innerHTML=''">Cancel</button>
+          <button class="btn-primary" onclick="addNewStakeholder('${newId}')">Add</button>
+        </div>
+      </div>
+    </div>`;
+  el.scrollIntoView({ behavior: 'smooth' });
+};
+
+window.addNewStakeholder = async (id) => {
+  const name  = document.getElementById('se-name')?.value.trim();
+  const email = document.getElementById('se-email')?.value.trim();
+  if (!name || !email) { showToast('Name and email are required.', 'error'); return; }
+  const pillarsRaw = document.getElementById('se-pillars')?.value || '';
+  STAKEHOLDERS.push({
+    id, name, email,
+    dept:      document.getElementById('se-dept')?.value.trim() || 'Commercial Strategy',
+    pillarIds: pillarsRaw.split(',').map(p => p.trim()).filter(Boolean),
+    enabled:   true,
+  });
+  try {
+    await set(ref(db, 'config/stakeholders'), STAKEHOLDERS);
+    showToast('Stakeholder added.', 'success');
+    loadSATab('stakeholders');
+  } catch(e) { showToast('Failed: ' + e.message, 'error'); }
+};
+
+/* ── TAB: SYSTEM CONFIG ──────────────────────────────────── */
+async function renderSAConfig(el) {
+  el.innerHTML = `
+    <div class="panel" style="margin-bottom:14px;">
+      <div class="panel-header"><span class="panel-title">System configuration</span></div>
+      <div class="panel-body">
+        <div class="form-row">
+          <label class="form-label">App name</label>
+          <input id="cfg-appname" class="input-field" value="${SYS_CONFIG.appName || 'Mixta Africa NPD Hub'}"/>
+        </div>
+        <div class="form-row">
+          <label class="form-label">App subtitle</label>
+          <input id="cfg-subtitle" class="input-field" value="${SYS_CONFIG.appSubtitle || 'New Product Development Hub'}"/>
+        </div>
+        <div class="form-row">
+          <label class="form-label">Super admin session timeout <span class="form-hint">— minutes (default: 30)</span></label>
+          <input id="cfg-satimeout" class="input-field" type="number" min="5" max="480" value="${SYS_CONFIG.saTimeoutMins || 30}" style="width:120px;"/>
+        </div>
+        <div class="form-row">
+          <label class="form-label">Deadline alert threshold <span class="form-hint">— days before deadline to send warning (default: 3)</span></label>
+          <input id="cfg-alertdays" class="input-field" type="number" min="1" max="14" value="${SYS_CONFIG.alertThresholdDays || 3}" style="width:120px;"/>
+        </div>
+        <div class="form-row">
+          <label class="form-label">GAS endpoint URL</label>
+          <input id="cfg-gas" class="input-field" value="${typeof GAS_ENDPOINT !== 'undefined' ? GAS_ENDPOINT : ''}" style="font-size:11px;font-family:monospace;"/>
+          <div style="font-size:11px;color:var(--text-muted);margin-top:4px;">⚠ Changing this here updates Firebase only. The deployed HTML still uses the GitHub Secret — update both if the GAS URL changes.</div>
+        </div>
+        <div class="form-actions">
+          <button class="btn-primary" onclick="saveSystemConfig()">Save configuration</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-header"><span class="panel-title">Danger zone</span></div>
+      <div class="panel-body">
+        <div class="threshold-row">
+          <div>
+            <div style="font-size:13px;font-weight:500;">Reset all config to defaults</div>
+            <div style="font-size:12px;color:var(--text-muted);">Rewrites Pillars, Stakeholders, Features and System Config in Firebase back to the built-in defaults</div>
+          </div>
+          <button class="btn-danger-sm" onclick="resetAllConfig()">Reset defaults</button>
+        </div>
+        <div class="threshold-row">
+          <div>
+            <div style="font-size:13px;font-weight:500;">Export all data as JSON</div>
+            <div style="font-size:12px;color:var(--text-muted);">Downloads a full snapshot of all products, users, config and logs from Firebase</div>
+          </div>
+          <button class="btn-secondary-sm" onclick="exportAllData()">Export JSON</button>
+        </div>
+      </div>
+    </div>`;
+}
+
+window.saveSystemConfig = async () => {
+  const cfg = {
+    appName:            document.getElementById('cfg-appname')?.value.trim()  || SYS_CONFIG.appName,
+    appSubtitle:        document.getElementById('cfg-subtitle')?.value.trim() || SYS_CONFIG.appSubtitle,
+    saTimeoutMins:      parseInt(document.getElementById('cfg-satimeout')?.value) || 30,
+    alertThresholdDays: parseInt(document.getElementById('cfg-alertdays')?.value) || 3,
+    gasEndpointOverride: document.getElementById('cfg-gas')?.value.trim() || '',
+  };
+  try {
+    await set(ref(db, 'config/system'), cfg);
+    SYS_CONFIG = { ...SYS_CONFIG, ...cfg };
+    showToast('System config saved.', 'success');
+  } catch(e) { showToast('Save failed: ' + e.message, 'error'); }
+};
+
+window.resetAllConfig = async () => {
+  if (!confirm('Reset ALL config to built-in defaults? This will overwrite your Firebase config.')) return;
+  try {
+    await set(ref(db, 'config'), {
+      pillars:      PILLARS,
+      stakeholders: STAKEHOLDERS,
+      features:     FEATURES,
+      system:       SYS_CONFIG,
+    });
+    showToast('Config reset to defaults.', 'success');
+    loadSATab('config');
+  } catch(e) { showToast('Reset failed: ' + e.message, 'error'); }
+};
+
+window.exportAllData = async () => {
+  try {
+    const snap = await get(ref(db, '/'));
+    const data = snap.val();
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement('a');
+    a.href = url; a.download = 'npd-hub-export-' + new Date().toISOString().split('T')[0] + '.json';
+    a.click(); URL.revokeObjectURL(url);
+    showToast('Export downloaded.', 'success');
+  } catch(e) { showToast('Export failed: ' + e.message, 'error'); }
+};
+
+/* ── TAB: AUDIT LOG ──────────────────────────────────────── */
+async function renderSAAudit(el) {
+  el.innerHTML = '<div class="loading-row" style="padding:24px;">Loading audit log...</div>';
+  try {
+    const snap  = await get(ref(db, 'sa_log'));
+    const saLog = snap.val() || {};
+    const entries = Object.entries(saLog)
+      .sort(([a],[b]) => b - a)
+      .slice(0, 100);
+
+    if (entries.length === 0) {
+      el.innerHTML = '<div class="empty-state-sm"><p>No audit events logged yet.</p></div>';
+      return;
+    }
+
+    el.innerHTML = `
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+        <span style="font-size:13px;color:var(--text-mid);">${entries.length} events (most recent 100)</span>
+        <button class="btn-danger-sm" onclick="clearAuditLog()">Clear log</button>
+      </div>
+      <div class="sa-error-list">
+        ${entries.map(([ts, e]) => `
+          <div class="sa-error-row">
+            <div class="sa-error-meta">
+              <span class="sa-error-time">${new Date(parseInt(ts)).toLocaleString('en-GB')}</span>
+              <span class="sa-error-user" style="color:${e.action&&e.action.includes('FAIL')?'var(--red)':'var(--green)'};">
+                ${e.action || 'event'}
+              </span>
+              <span class="sa-error-view">${e.user || ''}</span>
+            </div>
+            ${e.productName ? '<div class="sa-error-msg" style="color:var(--text);">'+e.productName+'</div>' : ''}
+            ${e.detail ? '<div class="sa-error-stack">'+e.detail+'</div>' : ''}
+          </div>`).join('')}
+      </div>`;
+  } catch(e) {
+    el.innerHTML = '<div class="loading-row muted">Failed to load audit log.</div>';
+  }
+}
+
+window.clearAuditLog = async () => {
+  if (!confirm('Clear the audit log?')) return;
+  await set(ref(db, 'sa_log'), null);
+  showToast('Audit log cleared.', 'success');
+  loadSATab('audit');
+};
 
 /* ── TAB 1: SYSTEM HEALTH ─────────────────────────────────── */
 async function renderSAHealth(el) {
@@ -2558,7 +3079,12 @@ async function renderSAUsers(el) {
       <td style="font-size:13px;">${owned} owned · ${shared} shared</td>
       <td style="font-size:13px;">${handover ? `<span class="pill pill-amber">Covering ${handover.name}</span>` : '—'}</td>
       <td>
-        <button class="btn-danger-xs" onclick="saResetUser('${key}')">Reset</button>
+        <div style="display:flex;gap:4px;">
+          <button class="btn-secondary-sm" style="font-size:10px;" onclick="saToggleRole('${key}','${al.role}')">
+            ${al.role === 'admin' ? '↓ Member' : '↑ Admin'}
+          </button>
+          <button class="btn-danger-xs" onclick="saResetUser('${key}')">Reset</button>
+        </div>
       </td>
     </tr>`;
   }).join('');
@@ -2574,6 +3100,16 @@ async function renderSAUsers(el) {
       </table>
     </div>`;
 }
+
+window.saToggleRole = async (userKey, currentRole) => {
+  const newRole = currentRole === 'admin' ? 'member' : 'admin';
+  if (!confirm(`Change this user to ${newRole}?`)) return;
+  try {
+    await set(ref(db, `allowlist/${userKey}/role`), newRole);
+    showToast(`Role updated to ${newRole}.`, 'success');
+    loadSATab('users');
+  } catch(e) { showToast('Failed: ' + e.message, 'error'); }
+};
 
 window.saResetUser = async (userKey) => {
   if (!confirm('Reset this user? This clears their active handovers and shared access.')) return;
@@ -2639,11 +3175,26 @@ async function renderSAProducts(el) {
               <div class="deadline-alert-pillar">${p.name}</div>
               <div class="deadline-alert-product">Owner: ${p.ownerName || 'Unassigned'} · Status: ${p.status || 'active'} · Launch: ${p.launchDate || '—'}</div>
             </div>
-            <span class="pill ${p.status === 'active' ? 'pill-green' : 'pill-grey'}">${p.status || 'active'}</span>
+            <div style="display:flex;gap:6px;align-items:center;">
+              <span class="pill ${p.status === 'active' ? 'pill-green' : 'pill-grey'}">${p.status || 'active'}</span>
+              <button class="btn-danger-xs" onclick="saToggleProductStatus('${p.id}','${p.status||'active'}')">
+                ${p.status === 'archived' ? 'Restore' : 'Archive'}
+              </button>
+            </div>
           </div>`).join('')}
       </div>
     </div>`;
 }
+
+window.saToggleProductStatus = async (productId, currentStatus) => {
+  const newStatus = currentStatus === 'archived' ? 'active' : 'archived';
+  if (!confirm(`${newStatus === 'archived' ? 'Archive' : 'Restore'} this product?`)) return;
+  try {
+    await set(ref(db, `products/${productId}/status`), newStatus);
+    showToast(`Product ${newStatus}.`, 'success');
+    loadSATab('products');
+  } catch(e) { showToast('Failed: ' + e.message, 'error'); }
+};
 
 window.saClearHandover = async (productId) => {
   try {
@@ -2784,6 +3335,24 @@ window.__npd_init({
   saPingGAS:               window.saPingGAS,
   saClearAccessLog:        window.saClearAccessLog,
   clearErrorLog:           window.clearErrorLog,
+  toggleFeature:           window.toggleFeature,
+  editPillar:              window.editPillar,
+  savePillar:              window.savePillar,
+  togglePillar:            window.togglePillar,
+  deletePillar:            window.deletePillar,
+  showAddPillar:           window.showAddPillar,
+  addNewPillar:            window.addNewPillar,
+  editStakeholder:         window.editStakeholder,
+  saveStakeholder:         window.saveStakeholder,
+  deleteStakeholder:       window.deleteStakeholder,
+  showAddStakeholder:      window.showAddStakeholder,
+  addNewStakeholder:       window.addNewStakeholder,
+  saveSystemConfig:        window.saveSystemConfig,
+  resetAllConfig:          window.resetAllConfig,
+  exportAllData:           window.exportAllData,
+  clearAuditLog:           window.clearAuditLog,
+  saToggleRole:            window.saToggleRole,
+  saToggleProductStatus:   window.saToggleProductStatus,
 });
 
 </script>
@@ -3342,6 +3911,44 @@ textarea.input-field { resize: vertical; line-height: 1.6; }
 
 .sa-challenge-wrap { text-align:center; padding:8px 0; }
 .sa-challenge-icon { font-size:40px; margin-bottom:16px; }
+
+/* ─── CIRCUIT BOX — MASTER EDIT PANEL ─── */
+.cb-feature-row {
+  display:flex; align-items:flex-start; justify-content:space-between;
+  gap:16px; padding:14px 18px; border-bottom:1px solid var(--border);
+}
+.cb-feature-row:last-child { border-bottom:none; }
+.cb-feature-info { flex:1; }
+.cb-feature-label { font-size:13px; font-weight:500; color:var(--text); margin-bottom:3px; }
+.cb-feature-desc  { font-size:12px; color:var(--text-muted); line-height:1.5; }
+
+/* Toggle switch */
+.cb-toggle { position:relative; display:inline-flex; align-items:center; cursor:pointer; flex-shrink:0; margin-top:2px; }
+.cb-toggle input { opacity:0; width:0; height:0; position:absolute; }
+.cb-toggle-track {
+  width:40px; height:22px; background:var(--border-mid); border-radius:99px;
+  transition:background .2s; position:relative; display:block;
+}
+.cb-toggle input:checked + .cb-toggle-track { background:var(--green); }
+.cb-toggle-thumb {
+  position:absolute; top:3px; left:3px; width:16px; height:16px;
+  background:white; border-radius:50%; transition:transform .2s;
+  box-shadow:0 1px 3px rgba(0,0,0,.2);
+}
+.cb-toggle input:checked + .cb-toggle-track .cb-toggle-thumb { transform:translateX(18px); }
+
+/* Pillar rows */
+.cb-pillar-row {
+  display:flex; align-items:center; gap:12px; padding:10px 18px;
+  border-bottom:1px solid var(--border);
+}
+.cb-pillar-row:last-child { border-bottom:none; }
+.cb-row-disabled { opacity:.45; }
+.cb-pillar-num  { width:24px; height:24px; border-radius:50%; background:var(--bg); color:var(--text-muted); font-size:11px; font-weight:600; display:flex; align-items:center; justify-content:center; flex-shrink:0; }
+.cb-pillar-info { flex:1; }
+.cb-pillar-name  { font-size:13px; font-weight:500; color:var(--text); }
+.cb-pillar-owner { font-size:11px; color:var(--text-muted); margin-top:1px; }
+.cb-pillar-actions { display:flex; gap:6px; flex-shrink:0; }
 </style>
 
 <!-- ══════════════════════════════════════════
