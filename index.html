@@ -72,6 +72,7 @@ const firebaseConfig = {
 
 // GAS endpoint — injected at deploy time
 const GAS_ENDPOINT = '__GAS_ENDPOINT__';
+const TEST_EMAIL   = 'o.olasunkanmi@mixtafrica.com';
 
 // Super admin password hash — injected at deploy time (SHA-256, never stored as plaintext)
 const SA_PASSWORD_HASH = '__SUPER_ADMIN_HASH__';
@@ -995,6 +996,13 @@ function buildStakeholderConfirm(product) {
       <span class="sc-count" id="sc-count">${STAKEHOLDERS.length} selected</span>
     </div>
     <div class="sc-dept-list">${deptRows}</div>
+    <div class="form-row" style="margin-bottom:12px;">
+      <label class="form-label">Send mode</label>
+      <select id="onboard-send-mode" class="select-field" style="width:100%;">
+        <option value="real">Live — send to selected stakeholders</option>
+        <option value="test">Test — o.olasunkanmi@mixtafrica.com only</option>
+      </select>
+    </div>
     <div class="form-actions">
       <button class="btn-outline" onclick="skipGASSetup()">Skip (do later)</button>
       <button class="btn-primary" onclick="confirmAndLaunchGAS()">
@@ -1032,6 +1040,7 @@ window.skipGASSetup = () => {
 
 window.confirmAndLaunchGAS = async () => {
   if (!pendingProduct) return;
+  const testMode = document.getElementById('onboard-send-mode')?.value === 'test';
   if (selectedStakeholders.length === 0) {
     showToast('Select at least one stakeholder, or click Skip.', 'error'); return;
   }
@@ -1068,6 +1077,7 @@ window.confirmAndLaunchGAS = async () => {
       createdBy:         pendingProduct.createdBy,
       stakeholders:      STAKEHOLDERS.filter(s => selectedStakeholders.includes(s.email)),
       pillars:           PILLARS,
+      testMode,
     });
 
     // Save onboarding timestamp
@@ -1075,7 +1085,8 @@ window.confirmAndLaunchGAS = async () => {
     await set(ref(db, `products/${pendingProduct.id}/onboardedEmails`), selectedStakeholders);
 
     closeProductModal();
-    showToast(`Done. ${selectedStakeholders.length} stakeholders notified.`, 'success');
+    const modeLabel = testMode ? `[TEST → ${TEST_EMAIL}]` : `${selectedStakeholders.length} stakeholders`;
+    showToast(`Done. ${modeLabel} notified.`, 'success');
     loadProductList();
   } catch(e) {
     showToast('GAS setup failed: ' + e.message + '. Product saved — retry from Settings.', 'error');
@@ -1629,7 +1640,13 @@ function renderReports(el) {
             <select id="alert-product-sel" class="select-field" style="width:100%;margin-bottom:10px;">
               <option value="all">All active products</option>
             </select>
-            <button class="btn-primary" onclick="triggerDeadlineCheck()" style="width:100%;">
+            <div style="margin-bottom:10px;">
+            <select id="alert-send-mode" class="select-field" style="width:100%;">
+              <option value="real">Live — send to responsible departments</option>
+              <option value="test">Test — send only to o.olasunkanmi@mixtafrica.com</option>
+            </select>
+          </div>
+          <button class="btn-primary" onclick="triggerDeadlineCheck()" style="width:100%;">
               Run deadline check now
             </button>
             <div id="alert-result" style="display:none;margin-top:12px;"></div>
@@ -1693,6 +1710,13 @@ function renderReports(el) {
           <div class="form-row">
             <label class="form-label">Report notes <span class="form-hint">— optional context to include</span></label>
             <textarea id="report-notes" class="input-field" rows="3" placeholder="e.g. Focus areas, escalations, key decisions this week..."></textarea>
+          </div>
+          <div class="form-row">
+            <label class="form-label">Send mode</label>
+            <select id="report-send-mode" class="select-field" style="width:100%;">
+              <option value="real">Live — all onboarded stakeholders</option>
+              <option value="test">Test — o.olasunkanmi@mixtafrica.com only</option>
+            </select>
           </div>
           <button class="btn-primary" onclick="generateProgressReport()" style="width:100%;">Generate & email report</button>
           <div id="report-result" style="display:none;margin-top:12px;"></div>
@@ -1832,6 +1856,8 @@ window.generateProgressReport = async () => {
       onboardedEmails:      prod.onboardedEmails || [],
       allStakeholderEmails: STAKEHOLDERS.filter(s => s.enabled !== false).map(s => s.email),
       driveUrl:             prod.driveUrl || null,
+      testMode:             document.getElementById('report-send-mode')?.value === 'test',
+      testMode:             document.getElementById('report-send-mode')?.value === 'test',
     };
 
     const result = await callGAS('sendProgressReport', reportPayload);
@@ -2016,7 +2042,8 @@ window.triggerDeadlineCheck = async () => {
         resultEl.innerHTML = '✅ No alerts to send — all pillars are on track.';
       }
     } else {
-      const result = await callGAS('checkDeadlines', { alerts });
+      const testMode = document.getElementById('alert-send-mode')?.value === 'test';
+    const result = await callGAS('checkDeadlines', { alerts, testMode });
       if (resultEl) {
         resultEl.style.display = 'block';
         resultEl.className = `alert-result-box ${result.ok ? 'alert-result-ok' : 'alert-result-err'}`;
