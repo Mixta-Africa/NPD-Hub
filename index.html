@@ -573,12 +573,7 @@ async function seedConfigToFirebase() {
   } catch(e) { console.warn('Config seed failed:', e.message); }
 }
 
-async function loadTeamMembers() {
-  try {
-    const snap = await get(ref(db, 'users'));
-    TEAM_MEMBERS = snap.val() || {};
-  } catch(e) { console.warn('Could not load team members:', e); }
-}
+// loadTeamMembers defined above
 
 
 /* ══ GAS HELPER — call GAS backend endpoint ══ */
