@@ -812,6 +812,7 @@ function renderProductCard(p) {
       <div class="pcf-actions">
         <button class="btn-secondary-sm" onclick="viewProduct('${p.id}')">View pillars</button>
         ${canEdit(p) ? `<button class="btn-secondary-sm" onclick="showWeeklyLog('${p.id}')">Weekly log</button>` : ''}
+        ${canEdit(p) && !p.onboardedAt ? `<button class="btn-secondary-sm" style="color:var(--amber);border-color:var(--amber);" onclick="reOnboardProduct('${p.id}')">⚠ Onboard</button>` : ''}
         ${editBtn}
         ${canEdit(p) ? `<button class="btn-secondary-sm" onclick="showShareModal('${p.id}')">Share</button>` : ''}
         ${getProductAccess(p) === 'owner' || currentRole === 'admin' ? `<button class="btn-secondary-sm" onclick="showHandoverModal('${p.id}')">Handover</button>` : ''}
@@ -1828,8 +1829,9 @@ window.generateProgressReport = async () => {
       overdue,
       notes,
       pillarSummary,
-      onboardedEmails: prod.onboardedEmails || [],
-      driveUrl:        prod.driveUrl || null,
+      onboardedEmails:      prod.onboardedEmails || [],
+      allStakeholderEmails: STAKEHOLDERS.filter(s => s.enabled !== false).map(s => s.email),
+      driveUrl:             prod.driveUrl || null,
     };
 
     const result = await callGAS('sendProgressReport', reportPayload);
@@ -3282,6 +3284,14 @@ window.saClearAccessLog = async () => {
   loadSAAccessLog();
 };
 
+/* ── RE-ONBOARD: trigger stakeholder confirm for existing product ── */
+window.reOnboardProduct = (productId) => {
+  const prod = productListCache[productId];
+  if (!prod) return;
+  // Reuse the existing stakeholder confirm flow
+  showStakeholderConfirm(prod);
+};
+
 // Register all real functions with the global dispatcher
 window.__npd_init({
   handleSignIn,
@@ -3321,6 +3331,7 @@ window.__npd_init({
   saveWeeklyLog:           window.saveWeeklyLog,
   showHandoverModal:       window.showHandoverModal,
   confirmHandover:         window.confirmHandover,
+  reOnboardProduct:        window.reOnboardProduct,
   showSAChallenge:         window.showSAChallenge,
   verifySAPassword:        window.verifySAPassword,
   exitSASession:           window.exitSASession,
