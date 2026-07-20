@@ -624,10 +624,26 @@ function renderDashboard(el) {
       ${currentRole === 'admin' ? `<button class="btn-primary" onclick="loadView('products')">+ New product</button>` : ''}
     </div>
     <div class="stats-row">
-      <div class="stat-card"><div class="stat-label">Active Products</div><div class="stat-value" id="stat-active">—</div></div>
-      <div class="stat-card"><div class="stat-label">Pillars On Track</div><div class="stat-value green" id="stat-ontrack">—</div></div>
-      <div class="stat-card"><div class="stat-label">Overdue</div><div class="stat-value red" id="stat-overdue">—</div></div>
-      <div class="stat-card"><div class="stat-label">Deadlines This Week</div><div class="stat-value amber" id="stat-week">—</div></div>
+      <div class="stat-card stat-card-link" onclick="loadView('products')" title="Go to Products">
+        <div class="stat-label">Active Products</div>
+        <div class="stat-value" id="stat-active">—</div>
+        <div class="stat-nav-hint">View all →</div>
+      </div>
+      <div class="stat-card stat-card-link" onclick="dashNavToTracker('ontrack')" title="View on-track pillars">
+        <div class="stat-label">Pillars On Track</div>
+        <div class="stat-value green" id="stat-ontrack">—</div>
+        <div class="stat-nav-hint">View tracker →</div>
+      </div>
+      <div class="stat-card stat-card-link" onclick="dashNavToTracker('overdue')" title="View overdue pillars">
+        <div class="stat-label">Overdue</div>
+        <div class="stat-value red" id="stat-overdue">—</div>
+        <div class="stat-nav-hint">View tracker →</div>
+      </div>
+      <div class="stat-card stat-card-link" onclick="loadView('calendar')" title="View launch calendar">
+        <div class="stat-label">Deadlines This Week</div>
+        <div class="stat-value amber" id="stat-week">—</div>
+        <div class="stat-nav-hint">View calendar →</div>
+      </div>
     </div>
     <div class="two-col">
       <div class="panel">
@@ -672,7 +688,7 @@ async function loadDashboardStats() {
         const due = new Date(pd.deadline); due.setHours(0,0,0,0);
         if (due >= today && due <= weekEnd) {
           thisWeek++;
-          upcomingDeadlines.push({ product: prod.name, pillar: pillar.name, date: pd.deadline, status: st });
+          upcomingDeadlines.push({ product: prod.name, productId: prod.id, pillar: pillar.name, pillarId: pillar.id, date: pd.deadline, status: st });
         }
       });
     });
@@ -709,6 +725,11 @@ async function loadDashboardStats() {
             <div class="deadline-pillar">${d.pillar}</div>
             <div class="deadline-product">${d.product} — ${formatDate(d.date)}</div>
           </div>
+          <button class="deadline-remind-btn"
+            onclick="showReminderModal('${d.productId}','${d.pillarId}','${d.pillar}','${d.product}','${d.date}')"
+            title="Send reminder email">
+            &#128276; Remind
+          </button>
         </div>`).join('');
     }
   } catch(e) {
@@ -1325,7 +1346,7 @@ async function loadTrackerProducts() {
   const sel = document.getElementById('tracker-product-sel');
   if (!sel) return;
   active.forEach(p => { const o=document.createElement('option'); o.value=p.id; o.textContent=p.name; sel.appendChild(o); });
-  if (active.length > 0) { sel.value=active[0].id; trackerSelectedProduct=active[0].id; renderTrackerTable(active[0]); }
+  if (active.length > 0) { sel.value=active[0].id; trackerSelectedProduct=active[0].id; renderTrackerTable(active[0], window._trackerFilter); window._trackerFilter=null; }
   else document.getElementById('tracker-body').innerHTML =
     '<div class="panel"><div class="empty-state"><span class="empty-icon">📋</span><h3>No products yet</h3><p>Create a product first.</p></div></div>';
 }
@@ -1338,7 +1359,7 @@ window.trackerSelectProduct = () => {
   if (prod) renderTrackerTable(prod);
 };
 
-function renderTrackerTable(prod) {
+function renderTrackerTable(prod, filter) {
   const body = document.getElementById('tracker-body');
   if (!body) return;
   const complete = PILLARS.filter(pl => prod.pillars?.[pl.id]?.taskStatus === 'complete').length;
@@ -1379,6 +1400,21 @@ function renderTrackerTable(prod) {
   }).join('');
 
   const overdueHtml = overdue > 0 ? `<span style="color:var(--red)">${overdue} overdue</span>` : '0 overdue';
+  // Apply filter from dashboard navigation
+  if (filter) {
+    setTimeout(() => {
+      document.querySelectorAll('.tracker-row').forEach(row => {
+        const statusCell = row.querySelector('.tracker-status');
+        const statusSel  = statusCell?.querySelector('select');
+        const statusSpan = statusCell?.querySelector('.task-status');
+        const st = statusSel?.value || statusSpan?.textContent?.toLowerCase().replace(' ','-') || '';
+        const isOntrack  = !['complete','overdue'].includes(st) && st !== 'not-started' || st === 'in-progress';
+        const isOverdue  = row.querySelector('.pill-red') !== null;
+        if (filter === 'ontrack' && !isOntrack) row.style.opacity = '0.3';
+        if (filter === 'overdue' && !isOverdue) row.style.opacity = '0.3';
+      });
+    }, 50);
+  }
   body.innerHTML = `
     <div class="tracker-summary">
       <div class="tracker-summary-name">${prod.name}</div>
@@ -3319,6 +3355,95 @@ window.reOnboardProduct = (productId) => {
   showStakeholderConfirm(prod);
 };
 
+/* ── DASHBOARD NAV HELPERS ── */
+window.dashNavToTracker = (filter) => {
+  // Store filter for tracker to read on load
+  window._trackerFilter = filter;
+  loadView('tracker');
+};
+
+/* ── DASHBOARD: DEADLINE REMINDER MODAL ── */
+window.showReminderModal = (productId, pillarId, pillarName, productName, deadline) => {
+  // Find responsible stakeholders for this pillar
+  const deptEmails = STAKEHOLDERS
+    .filter(s => s.enabled !== false && (s.pillarIds||[]).includes(pillarId))
+    .map(s => s.email);
+  const deptNames  = [...new Set(STAKEHOLDERS
+    .filter(s => s.enabled !== false && (s.pillarIds||[]).includes(pillarId))
+    .map(s => s.dept))];
+
+  // Build modal using the SA modal pattern (works from any view)
+  let modal = document.getElementById('sa-modal');
+  if (!modal) {
+    modal = document.createElement('div');
+    modal.id = 'sa-modal';
+    modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.45);display:flex;align-items:center;justify-content:center;z-index:2000;padding:20px;';
+    document.body.appendChild(modal);
+  }
+
+  modal.innerHTML = `
+    <div style="background:#fff;border-radius:12px;width:100%;max-width:500px;overflow:hidden;box-shadow:0 8px 40px rgba(0,0,0,0.2);">
+      <div style="background:#C0282D;padding:18px 24px;">
+        <div style="color:white;font-size:11px;letter-spacing:.1em;text-transform:uppercase;margin-bottom:2px;">Deadline Reminder</div>
+        <div style="color:white;font-size:17px;font-weight:700;">${pillarName}</div>
+        <div style="color:rgba(255,255,255,.8);font-size:13px;margin-top:2px;">${productName} — Due ${formatDate(deadline)}</div>
+      </div>
+      <div style="padding:22px;">
+        <div style="background:var(--bg);border-radius:8px;padding:12px 16px;margin-bottom:16px;font-size:13px;">
+          <div style="color:var(--text-muted);font-size:11px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">Responsible departments</div>
+          <div style="font-weight:500;">${deptNames.length > 0 ? deptNames.join(', ') : 'No dept assigned'}</div>
+          <div style="font-size:12px;color:var(--text-muted);margin-top:2px;">${deptEmails.length} recipient${deptEmails.length !== 1 ? 's' : ''}</div>
+        </div>
+        <div class="form-row">
+          <label class="form-label">Custom message <span class="form-hint">— added to the reminder email</span></label>
+          <textarea id="reminder-msg" class="input-field" rows="3"
+            placeholder="e.g. Please update the task status and share your latest progress..."></textarea>
+        </div>
+        <div class="form-row">
+          <label class="form-label">Send mode</label>
+          <select id="reminder-send-mode" class="select-field" style="width:100%;">
+            <option value="real">Live — send to responsible departments</option>
+            <option value="test">Test — o.olasunkanmi@mixtafrica.com only</option>
+          </select>
+        </div>
+        <div class="form-actions">
+          <button class="btn-outline" onclick="document.getElementById('sa-modal').style.display='none'">Cancel</button>
+          <button class="btn-primary" onclick="sendReminder('${productId}','${pillarId}','${pillarName}','${productName}','${deadline}')">
+            Send reminder
+          </button>
+        </div>
+      </div>
+    </div>`;
+  modal.style.display = 'flex';
+};
+
+window.sendReminder = async (productId, pillarId, pillarName, productName, deadline) => {
+  const msg      = document.getElementById('reminder-msg')?.value.trim() || '';
+  const testMode = document.getElementById('reminder-send-mode')?.value === 'test';
+  const btn      = document.querySelector('#sa-modal .btn-primary');
+  if (btn) { btn.disabled = true; btn.textContent = 'Sending...'; }
+
+  try {
+    const deptEmails = STAKEHOLDERS
+      .filter(s => s.enabled !== false && (s.pillarIds||[]).includes(pillarId))
+      .map(s => s.email);
+
+    const result = await callGAS('sendDeadlineReminder', {
+      productName, productId, pillarName, pillarId, deadline,
+      customMessage: msg,
+      deptEmails,
+      testMode,
+    });
+
+    if (!result.ok) throw new Error(result.error || 'Send failed');
+    document.getElementById('sa-modal').style.display = 'none';
+    showToast(`Reminder sent${testMode ? ' (test)' : ''} to ${testMode ? 'o.olasunkanmi@mixtafrica.com' : deptEmails.length + ' recipients'}.`, 'success');
+  } catch(e) {
+    showToast('Reminder failed: ' + e.message, 'error');
+    if (btn) { btn.disabled = false; btn.textContent = 'Send reminder'; }
+  }
+};
+
 // Register all real functions with the global dispatcher
 window.__npd_init({
   handleSignIn,
@@ -3386,6 +3511,9 @@ window.__npd_init({
   clearAuditLog:           window.clearAuditLog,
   saToggleRole:            window.saToggleRole,
   saToggleProductStatus:   window.saToggleProductStatus,
+  dashNavToTracker:        window.dashNavToTracker,
+  showReminderModal:       window.showReminderModal,
+  sendReminder:            window.sendReminder,
 });
 
 </script>
@@ -3982,6 +4110,34 @@ textarea.input-field { resize: vertical; line-height: 1.6; }
 .cb-pillar-name  { font-size:13px; font-weight:500; color:var(--text); }
 .cb-pillar-owner { font-size:11px; color:var(--text-muted); margin-top:1px; }
 .cb-pillar-actions { display:flex; gap:6px; flex-shrink:0; }
+
+/* ─── INTERACTIVE STAT CARDS ─── */
+.stat-card-link {
+  cursor: pointer; transition: box-shadow .15s, transform .1s;
+  position: relative;
+}
+.stat-card-link:hover {
+  box-shadow: 0 4px 14px rgba(0,0,0,0.10);
+  transform: translateY(-1px);
+}
+.stat-nav-hint {
+  font-size: 11px; color: var(--text-muted); margin-top: 8px;
+  font-weight: 500; letter-spacing: .03em;
+}
+.stat-card-link:hover .stat-nav-hint { color: var(--red); }
+
+/* ─── DEADLINE REMINDER BUTTON ─── */
+.deadline-remind-btn {
+  font-size: 11px; font-weight: 500; padding: 4px 10px;
+  background: none; border: 1px solid var(--border-mid);
+  border-radius: 6px; color: var(--text-mid); cursor: pointer;
+  white-space: nowrap; flex-shrink: 0;
+  transition: background .12s, color .12s, border-color .12s;
+  font-family: inherit;
+}
+.deadline-remind-btn:hover {
+  background: var(--red-light); color: var(--red); border-color: var(--red-mid);
+}
 </style>
 
 <!-- ══════════════════════════════════════════
