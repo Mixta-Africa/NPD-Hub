@@ -1163,6 +1163,10 @@ let calCurrentMonth    = new Date().getMonth();
 let calCurrentYear     = new Date().getFullYear();
 let calProductsCache   = {};
 
+/* ── CALENDAR STATE ── */
+let calViewMode = 'month'; // 'month' | 'gantt'
+let ganttMonths = 3;       // how many months the gantt spans
+
 function renderCalendar(el) {
   const dayHeaders = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'].map(d => `<div class="cal-day-hdr">${d}</div>`).join('');
   el.innerHTML = `
@@ -1171,9 +1175,15 @@ function renderCalendar(el) {
         <h1 class="view-title">Launch Calendar</h1>
         <p class="view-subtitle">Milestone timeline across all active products</p>
       </div>
-      <select id="cal-product-filter" class="select-field" onchange="calFilterChange()">
-        <option value="all">All products</option>
-      </select>
+      <div style="display:flex;gap:8px;align-items:center;">
+        <select id="cal-product-filter" class="select-field" onchange="calFilterChange()">
+          <option value="all">All products</option>
+        </select>
+        <div class="cal-view-toggle">
+          <button class="cal-view-btn active" id="btn-month-view" onclick="setCalView('month')">Month</button>
+          <button class="cal-view-btn" id="btn-gantt-view" onclick="setCalView('gantt')">Gantt</button>
+        </div>
+      </div>
     </div>
     <div class="cal-legend">
       <span class="leg-item"><span class="leg-dot leg-green"></span>On track</span>
@@ -1181,6 +1191,7 @@ function renderCalendar(el) {
       <span class="leg-item"><span class="leg-dot leg-red"></span>Overdue</span>
       <span class="leg-item"><span class="leg-dot leg-blue"></span>Complete</span>
     </div>
+    <div id="cal-month-view">
     <div class="panel" style="margin-bottom:16px;">
       <div class="cal-nav">
         <button class="cal-nav-btn" onclick="calMove(-1)">&#8592;</button>
@@ -1196,8 +1207,134 @@ function renderCalendar(el) {
     <div class="panel" id="cal-upcoming-panel">
       <div class="panel-header"><span class="panel-title">All milestones this month</span></div>
       <div class="panel-body" id="cal-milestone-list"><div class="loading-row">Loading...</div></div>
+    </div>
+    </div><!-- /cal-month-view -->
+    <div id="cal-gantt-view" style="display:none;">
+      <div class="panel" style="margin-bottom:16px;">
+        <div class="cal-nav">
+          <span class="cal-month-label">Gantt — next</span>
+          <select id="gantt-months-sel" class="select-field" onchange="setGanttMonths(parseInt(this.value))" style="font-size:13px;">
+            <option value="2">2 months</option>
+            <option value="3" selected>3 months</option>
+            <option value="6">6 months</option>
+          </select>
+          <button class="cal-today-btn" onclick="drawGantt()">Refresh</button>
+        </div>
+        <div id="gantt-container" style="overflow-x:auto;padding:14px 18px;"></div>
+      </div>
     </div>`;
   loadCalendarData();
+}
+
+window.setCalView = (mode) => {
+  calViewMode = mode;
+  const monthView = document.getElementById('cal-month-view');
+  const ganttView = document.getElementById('cal-gantt-view');
+  const btnMonth  = document.getElementById('btn-month-view');
+  const btnGantt  = document.getElementById('btn-gantt-view');
+  if (!monthView || !ganttView) return;
+  if (mode === 'month') {
+    monthView.style.display = 'block';
+    ganttView.style.display = 'none';
+    if (btnMonth) { btnMonth.classList.add('active'); btnGantt.classList.remove('active'); }
+    drawCalendar(); drawMilestoneList();
+  } else {
+    monthView.style.display = 'none';
+    ganttView.style.display = 'block';
+    if (btnGantt) { btnGantt.classList.add('active'); btnMonth.classList.remove('active'); }
+    drawGantt();
+  }
+};
+
+window.setGanttMonths = (n) => {
+  ganttMonths = n;
+  drawGantt();
+};
+
+function drawGantt() {
+  const container = document.getElementById('gantt-container');
+  if (!container) return;
+
+  const milestones = getCalMilestones();
+  if (milestones.length === 0) {
+    container.innerHTML = '<div class="empty-state-sm"><p>No milestones to display.</p></div>';
+    return;
+  }
+
+  // Build date range: today → today + ganttMonths months
+  const startDate = new Date(); startDate.setHours(0,0,0,0);
+  const endDate   = new Date(startDate);
+  endDate.setMonth(endDate.getMonth() + ganttMonths);
+  const totalDays = Math.round((endDate - startDate) / 86400000);
+
+  // Group milestones by product
+  const byProduct = {};
+  milestones.forEach(m => {
+    if (!byProduct[m.productId]) byProduct[m.productId] = { name: m.productName, milestones: [] };
+    byProduct[m.productId].milestones.push(m);
+  });
+
+  // Build month header labels
+  const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  let monthLabels = '';
+  let cur = new Date(startDate);
+  while (cur < endDate) {
+    const daysInView = Math.min(
+      Math.round((new Date(cur.getFullYear(), cur.getMonth()+1, 1) - cur) / 86400000),
+      totalDays - Math.round((cur - startDate) / 86400000)
+    );
+    const pct = (daysInView / totalDays) * 100;
+    monthLabels += `<div class="gantt-month-hdr" style="width:${pct}%">${MONTHS[cur.getMonth()]} ${cur.getFullYear()}</div>`;
+    cur = new Date(cur.getFullYear(), cur.getMonth()+1, 1);
+  }
+
+  // Today marker position
+  const todayPct = 0; // today is at 0% of range
+
+  // Build rows
+  const rows = Object.values(byProduct).map(prod => {
+    const dots = prod.milestones.map(m => {
+      const mDate = new Date(m.date); mDate.setHours(0,0,0,0);
+      if (mDate < startDate || mDate > endDate) return '';
+      const dayOffset = Math.round((mDate - startDate) / 86400000);
+      const pct       = (dayOffset / totalDays) * 100;
+      const cls = m.deadlineStatus === 'complete' ? 'gantt-dot-blue'
+                : m.deadlineStatus === 'overdue'  ? 'gantt-dot-red'
+                : m.deadlineStatus === 'warning'  ? 'gantt-dot-amber'
+                : 'gantt-dot-green';
+      return `<div class="gantt-dot ${cls}" style="left:${pct}%" title="${m.pillarName} — ${formatDate(m.date)}">
+        <div class="gantt-tooltip">${m.pillarName}<br/>${formatDate(m.date)}</div>
+      </div>`;
+    }).join('');
+
+    // Draw a connecting line from first to last milestone in range
+    const inRange = prod.milestones.filter(m => {
+      const d = new Date(m.date); d.setHours(0,0,0,0);
+      return d >= startDate && d <= endDate;
+    }).sort((a,b) => new Date(a.date) - new Date(b.date));
+
+    let line = '';
+    if (inRange.length >= 2) {
+      const firstPct = (Math.round((new Date(inRange[0].date) - startDate) / 86400000) / totalDays) * 100;
+      const lastPct  = (Math.round((new Date(inRange[inRange.length-1].date) - startDate) / 86400000) / totalDays) * 100;
+      line = `<div class="gantt-line" style="left:${firstPct}%;width:${lastPct-firstPct}%"></div>`;
+    }
+
+    return `<div class="gantt-row">
+      <div class="gantt-label">${prod.name}</div>
+      <div class="gantt-track">
+        <div class="gantt-today-line"></div>
+        ${line}${dots}
+      </div>
+    </div>`;
+  }).join('');
+
+  container.innerHTML = `
+    <div class="gantt-header">
+      <div class="gantt-label-col"></div>
+      <div class="gantt-months">${monthLabels}</div>
+    </div>
+    ${rows}`;
 }
 
 window.calFilterChange = () => {
@@ -1362,35 +1499,69 @@ window.trackerSelectProduct = () => {
 function renderTrackerTable(prod, filter) {
   const body = document.getElementById('tracker-body');
   if (!body) return;
-  const complete = PILLARS.filter(pl => prod.pillars?.[pl.id]?.taskStatus === 'complete').length;
-  const pct      = Math.round((complete / PILLARS.length) * 100);
-  const overdue  = PILLARS.filter(pl => {
+  const complete  = PILLARS.filter(pl => prod.pillars?.[pl.id]?.taskStatus === 'complete').length;
+  const delayed   = PILLARS.filter(pl => prod.pillars?.[pl.id]?.taskStatus === 'delayed').length;
+  const onTrack   = PILLARS.filter(pl => {
+    const st = prod.pillars?.[pl.id]?.taskStatus || 'on-track';
+    return st === 'on-track' || st === 'in-progress' || st === 'not-started';
+  }).length;
+  const pct       = Math.round((complete / PILLARS.length) * 100);
+  const overdue   = PILLARS.filter(pl => {
     const pd = prod.pillars?.[pl.id];
     return pd?.deadline && pd?.taskStatus !== 'complete' && getPillarStatus(pd.deadline) === 'overdue';
   }).length;
 
   const rows = PILLARS.map((pl, i) => {
     const pd = prod.pillars?.[pl.id] || {};
-    const st = pd.taskStatus || 'not-started';
-    const dst = pd.deadline ? getPillarStatus(pd.deadline) : 'no-date';
-    const isComplete = st === 'complete';
+    // Map legacy statuses to new 3-status system
+    const rawSt = pd.taskStatus || 'on-track';
+    const st = rawSt === 'not-started' ? 'on-track'
+             : rawSt === 'in-progress' ? 'on-track'
+             : rawSt === 'complete'    ? 'complete'
+             : rawSt === 'delayed'     ? 'delayed'
+             : rawSt;  // on-track, delayed, complete
+
+    // Calculate delayed days if deadline passed and not complete
+    const today = new Date(); today.setHours(0,0,0,0);
+    let delayedDays = 0;
+    if (pd.deadline && st !== 'complete') {
+      const due = new Date(pd.deadline); due.setHours(0,0,0,0);
+      const diff = Math.round((today - due) / 86400000);
+      if (diff > 0) delayedDays = diff;
+    }
+
+    const isComplete  = st === 'complete';
+    const isDelayed   = st === 'delayed';
+    const isOnTrack   = st === 'on-track';
+
+    // Deadline pill
     const deadlinePill = !pd.deadline
       ? '<span class="pill pill-grey">No date</span>'
       : isComplete ? `<span class="pill pill-blue">${formatDate(pd.deadline)}</span>`
-      : dst==='overdue' ? `<span class="pill pill-red">Overdue — ${formatDate(pd.deadline)}</span>`
-      : dst==='warning' ? `<span class="pill pill-amber">Due soon — ${formatDate(pd.deadline)}</span>`
+      : delayedDays > 0 ? `<span class="pill pill-red">${delayedDays}d overdue — ${formatDate(pd.deadline)}</span>`
+      : getPillarStatus(pd.deadline) === 'warning' ? `<span class="pill pill-amber">Due soon — ${formatDate(pd.deadline)}</span>`
       : `<span class="pill pill-green">${formatDate(pd.deadline)}</span>`;
+
+    // Status button group — 3 states, colour-coded
+    const delayLabel = delayedDays > 0 ? ` (${delayedDays}d)` : '';
     const statusCtrl = currentRole === 'admin'
-      ? `<select class="status-select" onchange="updatePillarStatus('${prod.id}','${pl.id}',this.value)">
-          <option value="not-started" ${st==='not-started'?'selected':''}>Not started</option>
-          <option value="in-progress" ${st==='in-progress'?'selected':''}>In progress</option>
-          <option value="complete"    ${st==='complete'   ?'selected':''}>Complete</option>
-        </select>`
-      : `<span class="task-status task-${st}">${statusLabel(st)}</span>`;
+      ? `<div class="status-btn-group">
+          <button class="status-btn status-btn-ontrack ${isOnTrack ? 'active' : ''}"
+            onclick="updatePillarStatus('${prod.id}','${pl.id}','on-track')">On Track</button>
+          <button class="status-btn status-btn-delayed ${isDelayed ? 'active' : ''}"
+            onclick="updatePillarStatus('${prod.id}','${pl.id}','delayed')">Delayed${delayLabel}</button>
+          <button class="status-btn status-btn-complete ${isComplete ? 'active' : ''}"
+            onclick="updatePillarStatus('${prod.id}','${pl.id}','complete')">Complete</button>
+        </div>`
+      : `<div class="status-btn-group">
+          <span class="status-btn ${isOnTrack ? 'status-btn-ontrack active' : isDelayed ? 'status-btn-delayed active' : 'status-btn-complete active'}">
+            ${isOnTrack ? 'On Track' : isDelayed ? 'Delayed' + delayLabel : 'Complete'}
+          </span>
+        </div>`;
     const notesCtrl = currentRole === 'admin'
       ? `<input type="text" class="notes-input" placeholder="Add note..." value="${pd.notes||''}" onblur="updatePillarNotes('${prod.id}','${pl.id}',this.value)"/>`
       : `<span class="notes-text">${pd.notes||'—'}</span>`;
-    return `<tr class="tracker-row${isComplete?' tracker-row-done':''}">
+    return `<tr class="tracker-row${isComplete?' tracker-row-done':isDelayed?' tracker-row-delayed':''}">
       <td class="tracker-num">${i+1}</td>
       <td class="tracker-pillar"><div class="tracker-pillar-name">${pl.name}</div><div class="tracker-pillar-owner">${pl.owner}</div></td>
       <td class="tracker-deadline">${deadlinePill}</td>
@@ -1410,16 +1581,32 @@ function renderTrackerTable(prod, filter) {
         const st = statusSel?.value || statusSpan?.textContent?.toLowerCase().replace(' ','-') || '';
         const isOntrack  = !['complete','overdue'].includes(st) && st !== 'not-started' || st === 'in-progress';
         const isOverdue  = row.querySelector('.pill-red') !== null;
-        if (filter === 'ontrack' && !isOntrack) row.style.opacity = '0.3';
-        if (filter === 'overdue' && !isOverdue) row.style.opacity = '0.3';
+        const statusBtns = row.querySelectorAll('.status-btn.active');
+        const activeSt   = [...statusBtns].map(b => b.textContent.trim().toLowerCase())[0] || '';
+        if (filter === 'ontrack' && !activeSt.includes('on track')) row.style.opacity = '0.3';
+        if (filter === 'overdue' && !row.querySelector('.pill-red')) row.style.opacity = '0.3';
       });
     }, 50);
   }
   body.innerHTML = `
     <div class="tracker-summary">
-      <div class="tracker-summary-name">${prod.name}</div>
-      <div class="tracker-summary-meta">Launch: ${formatDate(prod.launchDate)} &nbsp;&middot;&nbsp; ${complete}/12 complete &nbsp;&middot;&nbsp; ${overdueHtml}</div>
-      <div class="progress-bar-wrap" style="margin-top:10px;"><div class="progress-bar-fill" style="width:${pct}%"></div></div>
+      <div class="tracker-summary-top">
+        <div>
+          <div class="tracker-summary-name">${prod.name}</div>
+          <div class="tracker-summary-meta">Launch: ${formatDate(prod.launchDate)}</div>
+        </div>
+        <div class="tracker-pct-badge">${pct}%</div>
+      </div>
+      <div class="tracker-progress-wrap">
+        <div class="tracker-progress-fill" style="width:${pct}%"></div>
+        <div class="tracker-progress-delayed" style="width:${Math.round((delayed/PILLARS.length)*100)}%;left:${pct}%"></div>
+      </div>
+      <div class="tracker-stats-row">
+        <span class="tracker-stat tracker-stat-green"><span class="tracker-stat-num">${complete}</span> Complete</span>
+        <span class="tracker-stat tracker-stat-blue"><span class="tracker-stat-num">${onTrack}</span> On Track</span>
+        <span class="tracker-stat tracker-stat-red"><span class="tracker-stat-num">${delayed}</span> Delayed</span>
+        ${overdue > 0 ? '<span class="tracker-stat tracker-stat-grey"><span class="tracker-stat-num">'+overdue+'</span> Deadline overdue</span>' : ''}
+      </div>
     </div>
     <div class="panel" style="overflow:auto;">
       <table class="tracker-table">
@@ -1977,7 +2164,7 @@ async function renderReadOnlyPage(productId) {
         : dst==='overdue' ? `<span class="pill pill-red">Overdue — ${formatDate(pd.deadline)}</span>`
         : dst==='warning' ? `<span class="pill pill-amber">Due soon — ${formatDate(pd.deadline)}</span>`
         : `<span class="pill pill-green">${formatDate(pd.deadline)}</span>`;
-      return `<tr class="tracker-row${isComplete?' tracker-row-done':''}">
+      return `<tr class="tracker-row${isComplete?' tracker-row-done':isDelayed?' tracker-row-delayed':''}">
         <td class="tracker-num">${i+1}</td>
         <td class="tracker-pillar"><div class="tracker-pillar-name">${pl.name}</div><div class="tracker-pillar-owner">${pl.owner}</div></td>
         <td class="tracker-deadline">${deadlinePill}</td>
@@ -3514,6 +3701,8 @@ window.__npd_init({
   dashNavToTracker:        window.dashNavToTracker,
   showReminderModal:       window.showReminderModal,
   sendReminder:            window.sendReminder,
+  setCalView:              window.setCalView,
+  setGanttMonths:          window.setGanttMonths,
 });
 
 </script>
@@ -4138,6 +4327,94 @@ textarea.input-field { resize: vertical; line-height: 1.6; }
 .deadline-remind-btn:hover {
   background: var(--red-light); color: var(--red); border-color: var(--red-mid);
 }
+
+/* ─── TRACKER: 3-BUTTON STATUS SYSTEM ─── */
+.status-btn-group { display:flex; gap:4px; flex-wrap:nowrap; }
+.status-btn {
+  font-size:11px; font-weight:600; padding:5px 10px; border-radius:6px;
+  border:1.5px solid transparent; cursor:pointer; background:none;
+  font-family:inherit; transition:all .15s; white-space:nowrap;
+  color:var(--text-muted); border-color:var(--border-mid);
+}
+.status-btn:hover { opacity:.8; }
+.status-btn-ontrack        { color:var(--green);  border-color:var(--green);  }
+.status-btn-ontrack.active { background:var(--green); color:white; border-color:var(--green); }
+.status-btn-delayed        { color:var(--red);    border-color:var(--red);    }
+.status-btn-delayed.active { background:var(--red);   color:white; border-color:var(--red);   }
+.status-btn-complete        { color:var(--blue);   border-color:var(--blue);   }
+.status-btn-complete.active { background:var(--blue);  color:white; border-color:var(--blue);  }
+
+.tracker-row-delayed { background:rgba(192,40,45,.03); }
+
+/* ─── TRACKER: PROGRESS SUMMARY ─── */
+.tracker-summary-top  { display:flex; align-items:flex-start; justify-content:space-between; margin-bottom:10px; }
+.tracker-pct-badge    { font-size:28px; font-weight:700; color:var(--text); line-height:1; }
+.tracker-progress-wrap {
+  position:relative; height:8px; background:var(--border); border-radius:99px;
+  overflow:visible; margin-bottom:12px;
+}
+.tracker-progress-fill {
+  position:absolute; left:0; top:0; height:100%;
+  background:var(--green); border-radius:99px; transition:width .4s;
+}
+.tracker-progress-delayed {
+  position:absolute; top:0; height:100%;
+  background:var(--red); border-radius:99px; opacity:.7; transition:width .4s;
+}
+.tracker-stats-row    { display:flex; gap:16px; flex-wrap:wrap; }
+.tracker-stat         { font-size:12px; color:var(--text-mid); display:flex; align-items:center; gap:5px; }
+.tracker-stat-num     { font-weight:700; font-size:15px; }
+.tracker-stat-green .tracker-stat-num { color:var(--green); }
+.tracker-stat-blue  .tracker-stat-num { color:var(--blue);  }
+.tracker-stat-red   .tracker-stat-num { color:var(--red);   }
+.tracker-stat-grey  .tracker-stat-num { color:var(--text-muted); }
+
+/* ─── CALENDAR: VIEW TOGGLE ─── */
+.cal-view-toggle { display:flex; border:1px solid var(--border-mid); border-radius:8px; overflow:hidden; }
+.cal-view-btn    { padding:6px 14px; font-size:12px; font-weight:500; background:none; border:none; cursor:pointer; color:var(--text-mid); font-family:inherit; transition:background .12s; }
+.cal-view-btn:hover  { background:var(--bg); }
+.cal-view-btn.active { background:var(--red); color:white; }
+
+/* ─── GANTT CHART ─── */
+.gantt-header   { display:flex; margin-bottom:4px; }
+.gantt-label-col { width:160px; flex-shrink:0; }
+.gantt-months   { flex:1; display:flex; }
+.gantt-month-hdr { font-size:11px; font-weight:600; color:var(--text-muted); text-transform:uppercase; letter-spacing:.05em; padding:4px 6px; border-left:1px solid var(--border); }
+
+.gantt-row    { display:flex; align-items:center; margin-bottom:10px; }
+.gantt-label  { width:160px; flex-shrink:0; font-size:12px; font-weight:500; color:var(--text); padding-right:12px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.gantt-track  { flex:1; position:relative; height:28px; background:var(--bg); border-radius:4px; border:1px solid var(--border); }
+
+.gantt-today-line {
+  position:absolute; top:0; bottom:0; left:0; width:2px;
+  background:var(--red); opacity:.4; z-index:1;
+}
+.gantt-line {
+  position:absolute; top:50%; height:3px; margin-top:-1.5px;
+  background:var(--border-mid); border-radius:99px; z-index:1;
+}
+.gantt-dot {
+  position:absolute; top:50%; transform:translate(-50%,-50%);
+  width:12px; height:12px; border-radius:50%; z-index:2; cursor:pointer;
+  transition:transform .15s;
+}
+.gantt-dot:hover { transform:translate(-50%,-50%) scale(1.5); z-index:10; }
+.gantt-dot-green  { background:var(--green); }
+.gantt-dot-amber  { background:var(--amber); }
+.gantt-dot-red    { background:var(--red);   }
+.gantt-dot-blue   { background:var(--blue);  }
+
+.gantt-tooltip {
+  display:none; position:absolute; bottom:calc(100% + 8px); left:50%;
+  transform:translateX(-50%); background:#1a1a18; color:white;
+  font-size:11px; padding:6px 10px; border-radius:6px; white-space:nowrap;
+  pointer-events:none; z-index:20; line-height:1.5;
+}
+.gantt-tooltip::after {
+  content:''; position:absolute; top:100%; left:50%; transform:translateX(-50%);
+  border:5px solid transparent; border-top-color:#1a1a18;
+}
+.gantt-dot:hover .gantt-tooltip { display:block; }
 </style>
 
 <!-- ══════════════════════════════════════════
