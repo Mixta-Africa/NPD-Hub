@@ -368,12 +368,9 @@ function showApp() {
     badge.className   = 'role-badge ' + (currentRole === 'admin' ? 'role-admin' : 'role-viewer');
   }
 
-  // Load all app config (pillars, stakeholders, features, system config)
+  // Load all app config, templates, and team members
   loadAppConfig().then(() => seedConfigToFirebase());
-  // Load all app config (pillars, stakeholders, features, system config)
-  loadAppConfig().then(() => seedConfigToFirebase());
-  // Phase 7: load team members + ensure user profile exists
-  loadTeamMembers();
+  loadTemplatesAndConfig();
   const userKey = sanitiseEmail(currentUser.email);
   get(ref(db, `users/${userKey}`)).then(snap => {
     if (!snap.exists()) {
@@ -505,6 +502,111 @@ function getWeekKey() {
   const jan1 = new Date(now.getFullYear(), 0, 1);
   const week = Math.ceil(((now - jan1) / 86400000 + jan1.getDay() + 1) / 7);
   return `week_${now.getFullYear()}-${String(week).padStart(2,'0')}`;
+}
+
+/* ══ TASK SYSTEM — UTILITIES ════════════════════════════════ */
+
+let SAVED_TEMPLATES  = {};   // loaded from Firebase /templates/
+let _editingTasks    = [];   // live task list during product creation
+let _taskCounter     = 0;    // for generating temp task IDs
+
+function generateTaskId() {
+  return 'task_' + Date.now() + '_' + (++_taskCounter);
+}
+
+function isProductLocked(prod) {
+  // Locked when the earliest task deadline has lapsed
+  if (!prod) return false;
+  if (prod.tasksLockedAt) return true;
+  const tasks = Object.values(prod.tasks || prod.pillars || {});
+  const today = new Date(); today.setHours(0,0,0,0);
+  const firstPast = tasks.find(t => {
+    const d = t.deadline; if (!d) return false;
+    const due = new Date(d); due.setHours(0,0,0,0);
+    return due < today;
+  });
+  return !!firstPast;
+}
+
+function canEditTask(prod, taskId) {
+  if (currentRole === 'admin' || isSuperAdmin) return true;
+  if (isProductLocked(prod)) return false;
+  return true;
+}
+
+function pillarsToTasks(pillars) {
+  // Convert legacy pillar map to task array
+  return PILLARS.map((pl, i) => {
+    const pd = pillars?.[pl.id] || {};
+    return {
+      id:          pl.id,
+      title:       pl.name,
+      description: '',
+      owner:       pl.owner,
+      ownerEmails: STAKEHOLDERS.filter(s => s.enabled !== false && (s.pillarIds||[]).includes(pl.id)).map(s => s.email),
+      deadline:    pd.deadline || '',
+      startDate:   '',
+      status:      pd.taskStatus || 'on-track',
+      notes:       pd.notes || '',
+      predecessors:[],
+      locked:      false,
+      pillarId:    pl.id,
+      order:       i,
+      kanbanCol:   pd.taskStatus === 'complete' ? 'done' : pd.taskStatus === 'delayed' ? 'in-progress' : 'todo',
+      createdAt:   Date.now(),
+      createdBy:   'system',
+    };
+  });
+}
+
+function getProductTasks(prod) {
+  // Return unified task array — handles both old pillar format and new task format
+  if (prod.tasks && Object.keys(prod.tasks).length > 0) {
+    return Object.values(prod.tasks).sort((a,b) => (a.order||0) - (b.order||0));
+  }
+  // Legacy: convert pillars to tasks on the fly
+  return pillarsToTasks(prod.pillars || {});
+}
+
+async function loadSavedTemplates() {
+  try {
+    const snap = await get(ref(db, 'templates'));
+    SAVED_TEMPLATES = snap.val() || {};
+  } catch(e) { SAVED_TEMPLATES = {}; }
+}
+
+async function saveAsTemplate(name, tasks) {
+  const id = 'tmpl_' + Date.now();
+  const tmpl = {
+    id, name,
+    createdBy: currentUser.email,
+    createdAt: Date.now(),
+    tasks: tasks.map(t => ({
+      title:       t.title,
+      description: t.description || '',
+      owner:       t.owner || '',
+      predecessors:[],
+      order:       t.order || 0,
+    })),
+  };
+  await set(ref(db, 'templates/' + id), tmpl);
+  SAVED_TEMPLATES[id] = tmpl;
+  return tmpl;
+}
+
+async function checkAndLockProduct(productId) {
+  // Call after any task status update — lock if first milestone has lapsed
+  const prod = productListCache[productId];
+  if (!prod || prod.tasksLockedAt) return;
+  if (isProductLocked(prod)) {
+    await set(ref(db, 'products/' + productId + '/tasksLockedAt'), Date.now());
+    if (productListCache[productId]) productListCache[productId].tasksLockedAt = Date.now();
+  }
+}
+
+async function loadTemplatesAndConfig() {
+  await loadTeamMembers();
+  await loadSavedTemplates();
 }
 
 async function loadTeamMembers() {
@@ -862,57 +964,286 @@ window.closeProductModal = () => {
 };
 
 function buildProductForm(p) {
-  const v  = (field) => p ? (p[field] || '') : '';
-  const pd = (pillarId) => p?.pillars?.[pillarId]?.deadline || '';
-  const existingId = p?.id || '';
-  const btnLabel   = p ? 'Save changes' : 'Create product';
+  // For existing products — just show edit dates form (legacy)
+  if (p) return buildEditProductForm(p);
+  // For new products — show template chooser first
+  return buildTemplateChooser();
+}
 
-  const pillarRows = PILLARS.map((pl, i) => `
-    <div class="pillar-date-row">
+function buildTemplateChooser() {
+  const templateOptions = Object.values(SAVED_TEMPLATES).map(t =>
+    `<div class="template-card" onclick="selectTemplate('${t.id}')">
+      <div class="template-name">${t.name}</div>
+      <div class="template-meta">${t.tasks?.length || 0} tasks · Saved by ${t.createdBy?.split('@')[0]}</div>
+    </div>`
+  ).join('');
+
+  return `
+    <div class="tmpl-chooser">
+      <p style="font-size:13px;color:var(--text-mid);margin-bottom:20px;line-height:1.7;">
+        Choose how to set up tasks for this product. You can edit tasks freely at creation.
+        Once the first deadline passes, tasks are locked — only new tasks can be added.
+      </p>
+      <div class="tmpl-options">
+        <div class="tmpl-option" onclick="selectTemplate('sop')">
+          <div class="tmpl-option-icon">📋</div>
+          <div class="tmpl-option-title">Default SOP</div>
+          <div class="tmpl-option-desc">Pre-filled with Mixta's 12 standard product development pillars</div>
+        </div>
+        <div class="tmpl-option" onclick="selectTemplate('blank')">
+          <div class="tmpl-option-icon">✏️</div>
+          <div class="tmpl-option-title">Blank</div>
+          <div class="tmpl-option-desc">Start from scratch and build your own task structure</div>
+        </div>
+        ${Object.keys(SAVED_TEMPLATES).length > 0 ? `
+        <div class="tmpl-section-label">Saved templates</div>
+        ${templateOptions}` : ''}
+      </div>
+    </div>`;
+}
+
+window.selectTemplate = (templateId) => {
+  // Pre-fill _editingTasks based on template choice
+  if (templateId === 'sop') {
+    _editingTasks = PILLARS.map((pl, i) => ({
+      id: generateTaskId(), title: pl.name, description: '',
+      owner: pl.owner, ownerEmails: [],
+      deadline: '', startDate: '', status: 'on-track',
+      predecessors: [], locked: false, pillarId: pl.id,
+      order: i, kanbanCol: 'todo',
+    }));
+  } else if (templateId === 'blank') {
+    _editingTasks = [];
+  } else {
+    // Saved template
+    const tmpl = SAVED_TEMPLATES[templateId];
+    if (!tmpl) return;
+    _editingTasks = (tmpl.tasks || []).map((t, i) => ({
+      ...t, id: generateTaskId(), status: 'on-track',
+      deadline: '', startDate: '', order: i, kanbanCol: 'todo',
+      predecessors: [], locked: false,
+    }));
+  }
+  document.getElementById('modal-body-content').innerHTML = buildTaskEditorForm();
+};
+
+function buildTaskEditorForm() {
+  const taskRows = _editingTasks.map((t, i) => buildTaskRow(t, i)).join('');
+  return `
+    <div class="form-section-label">Product details</div>
+    <div class="form-row">
+      <label class="form-label">Product name <span class="req">*</span></label>
+      <input type="text" id="f-name" class="input-field" placeholder="e.g. Lakowe Garden Terrace Phase 3"/>
+    </div>
+    <div class="form-row">
+      <label class="form-label">Description</label>
+      <textarea id="f-desc" class="input-field" rows="2" placeholder="Brief description..."></textarea>
+    </div>
+    <div class="form-row">
+      <label class="form-label">Target launch date <span class="req">*</span></label>
+      <input type="date" id="f-launch" class="input-field"/>
+    </div>
+    ${buildOwnerField(null)}
+
+    <div class="form-section-label" style="margin-top:20px;display:flex;align-items:center;justify-content:space-between;">
+      <span>Tasks <span class="form-hint">— ${_editingTasks.length} task${_editingTasks.length!==1?'s':''}</span></span>
+      <button class="btn-primary-sm" onclick="addNewTaskRow()">+ Add task</button>
+    </div>
+    <div id="task-editor-list">${taskRows || '<div class="muted" style="padding:12px 0;font-size:13px;">No tasks yet. Click + Add task to begin.</div>'}</div>
+
+    <div class="form-actions" style="flex-direction:column;gap:8px;">
+      <div style="display:flex;gap:10px;justify-content:flex-end;">
+        <button class="btn-outline" onclick="showCreateProduct()">← Back</button>
+        <button class="btn-outline" onclick="saveAsTemplatePrompt()">Save as template</button>
+        <button class="btn-primary" onclick="saveProduct('')">Create product</button>
+      </div>
+    </div>`;
+}
+
+function buildTaskRow(t, i) {
+  const predOptions = _editingTasks
+    .filter(x => x.id !== t.id)
+    .map(x => `<option value="${x.id}" ${(t.predecessors||[]).includes(x.id)?'selected':''}>${x.title||'Untitled'}</option>`)
+    .join('');
+
+  return `<div class="task-edit-row" id="terow-${t.id}">
+    <div class="task-edit-header">
+      <div class="task-edit-num">${i+1}</div>
+      <input type="text" class="input-field task-edit-title" placeholder="Task name"
+        value="${t.title}" onblur="updateEditingTask('${t.id}','title',this.value)"/>
+      <button class="btn-danger-xs" onclick="removeEditingTask('${t.id}')">✕</button>
+    </div>
+    <div class="task-edit-body">
+      <div class="task-edit-col">
+        <label class="form-label">Start date</label>
+        <input type="date" class="input-field" value="${t.startDate||''}"
+          onchange="updateEditingTask('${t.id}','startDate',this.value)"/>
+      </div>
+      <div class="task-edit-col">
+        <label class="form-label">Deadline</label>
+        <input type="date" class="input-field" value="${t.deadline||''}"
+          onchange="updateEditingTask('${t.id}','deadline',this.value)"/>
+      </div>
+      <div class="task-edit-col">
+        <label class="form-label">Owner dept</label>
+        <input type="text" class="input-field" placeholder="e.g. Design" value="${t.owner||''}"
+          onblur="updateEditingTask('${t.id}','owner',this.value)"/>
+      </div>
+      ${predOptions ? `<div class="task-edit-col task-edit-col-wide">
+        <label class="form-label">Depends on</label>
+        <select class="select-field" multiple style="height:60px;"
+          onchange="updateEditingTaskPreds('${t.id}',this)">${predOptions}</select>
+      </div>` : ''}
+    </div>
+  </div>`;
+}
+
+window.addNewTaskRow = () => {
+  const t = {
+    id: generateTaskId(), title: '', description: '', owner: '',
+    ownerEmails: [], deadline: '', startDate: '', status: 'on-track',
+    predecessors: [], locked: false, pillarId: null,
+    order: _editingTasks.length, kanbanCol: 'todo',
+  };
+  _editingTasks.push(t);
+  document.getElementById('task-editor-list').innerHTML = _editingTasks.map(buildTaskRow).join('');
+};
+
+window.removeEditingTask = (id) => {
+  _editingTasks = _editingTasks.filter(t => t.id !== id);
+  document.getElementById('task-editor-list').innerHTML = _editingTasks.map(buildTaskRow).join('') ||
+    '<div class="muted" style="padding:12px 0;font-size:13px;">No tasks yet.</div>';
+};
+
+window.updateEditingTask = (id, field, value) => {
+  const t = _editingTasks.find(x => x.id === id);
+  if (t) t[field] = value;
+};
+
+window.updateEditingTaskPreds = (id, sel) => {
+  const t = _editingTasks.find(x => x.id === id);
+  if (t) t.predecessors = [...sel.selectedOptions].map(o => o.value);
+};
+
+window.saveAsTemplatePrompt = async () => {
+  const name = prompt('Template name:');
+  if (!name) return;
+  await saveAsTemplate(name, _editingTasks);
+  showToast('Template saved: ' + name, 'success');
+};
+
+function buildEditProductForm(p) {
+  // Edit mode — show existing tasks with locked status
+  const tasks = getProductTasks(p);
+  const locked = isProductLocked(p);
+  const taskRows = tasks.map((t, i) => {
+    const isLocked = t.locked || locked;
+    const preds = t.predecessors?.length > 0
+      ? '<span style="font-size:11px;color:var(--text-muted);">Depends on: ' +
+        t.predecessors.map(pid => {
+          const dep = tasks.find(x => x.id === pid);
+          return dep ? dep.title : pid;
+        }).join(', ') + '</span>'
+      : '';
+    return `<div class="pillar-date-row ${isLocked ? 'task-locked-row' : ''}">
       <div class="pillar-date-num">${i+1}</div>
-      <div class="pillar-date-name">${pl.name}<span class="pillar-owner">${pl.owner}</span></div>
-      <input type="date" id="f-${pl.id}" class="input-field pillar-date-input" value="${pd(pl.id)}"/>
-    </div>`).join('');
+      <div class="pillar-date-name">
+        ${isLocked ? '🔒 ' : ''}${t.title}
+        <span class="pillar-owner">${t.owner || ''}</span>
+        ${preds}
+      </div>
+      ${!isLocked
+        ? `<input type="date" id="f-task-${t.id}" class="input-field pillar-date-input" value="${t.deadline||''}"/>`
+        : `<span class="pill pill-grey" style="font-size:11px;">${t.deadline ? t.deadline : 'No date'}</span>`
+      }
+    </div>`;
+  }).join('');
 
-  // Build owner dropdown for admin
+  const ownerKey = p?.ownerId || sanitiseEmail(currentUser.email);
+  const ownerMember = TEAM_MEMBERS[ownerKey];
+
+  return `
+    <div class="form-section-label">Product details</div>
+    <div class="form-row"><label class="form-label">Product name <span class="req">*</span></label>
+      <input type="text" id="f-name" class="input-field" value="${p.name||''}"/></div>
+    <div class="form-row"><label class="form-label">Description</label>
+      <textarea id="f-desc" class="input-field" rows="2">${p.description||''}</textarea></div>
+    <div class="form-row"><label class="form-label">Target launch date <span class="req">*</span></label>
+      <input type="date" id="f-launch" class="input-field" value="${p.launchDate||''}"/></div>
+    ${buildOwnerField(p)}
+    <div class="form-section-label" style="margin-top:20px;display:flex;align-items:center;justify-content:space-between;">
+      <span>Tasks ${locked ? '<span class="pill pill-red" style="font-size:10px;">Locked</span>' : ''}</span>
+      <button class="btn-primary-sm" onclick="showAddTaskToProduct('${p.id}')">+ Add task</button>
+    </div>
+    <div>${taskRows}</div>
+    <div class="form-actions">
+      <button class="btn-outline" onclick="closeProductModal()">Cancel</button>
+      <button class="btn-primary" onclick="saveProduct('${p.id}')">Save changes</button>
+    </div>`;
+}
+
+function buildOwnerField(p) {
   const ownerOptions = currentRole === 'admin'
     ? Object.entries(TEAM_MEMBERS).map(([key, m]) =>
         `<option value="${key}" ${(p?.ownerId || sanitiseEmail(currentUser.email)) === key ? 'selected' : ''}>${m.name}</option>`
       ).join('')
+    : `<option value="${sanitiseEmail(currentUser.email)}">${currentUser.displayName || currentUser.email}</option>`;
+  return currentRole === 'admin'
+    ? `<div class="form-row"><label class="form-label">Product owner</label>
+        <select id="f-owner" class="select-field" style="width:100%;">${ownerOptions || '<option>No team members yet</option>'}</select></div>`
     : '';
-  const ownerField = currentRole === 'admin'
-    ? `<div class="form-row">
-        <label class="form-label">Product owner</label>
-        <select id="f-owner" class="select-field" style="width:100%;">
-          ${ownerOptions || `<option value="${sanitiseEmail(currentUser.email)}">${currentUser.displayName || currentUser.email}</option>`}
-        </select>
-       </div>`
-    : '';
+}
 
-  return `
-    <div class="form-section-label">Product details</div>
-    ${ownerField}
-    <div class="form-row">
-      <label class="form-label">Product name <span class="req">*</span></label>
-      <input type="text" id="f-name" class="input-field" placeholder="e.g. Lakowe Garden Terrace Phase 3" value="${v('name')}"/>
-    </div>
-    <div class="form-row">
-      <label class="form-label">Description</label>
-      <textarea id="f-desc" class="input-field" rows="2" placeholder="Brief description of the product...">${v('description')}</textarea>
-    </div>
-    <div class="form-row">
-      <label class="form-label">Target launch date <span class="req">*</span></label>
-      <input type="date" id="f-launch" class="input-field" value="${v('launchDate')}"/>
-    </div>
-    <div class="form-section-label" style="margin-top:20px;">
-      SOP pillar milestone dates <span class="form-hint">— all optional, set now or later</span>
-    </div>
-    ${pillarRows}
+window.showAddTaskToProduct = (productId) => {
+  const prod = productListCache[productId];
+  if (!prod) return;
+  document.getElementById('modal-title-text').textContent = 'Add task — ' + prod.name;
+  document.getElementById('modal-body-content').innerHTML = `
+    <p style="font-size:13px;color:var(--text-mid);margin-bottom:16px;line-height:1.7;">
+      Add a new task to this product. Existing tasks cannot be deleted once the first deadline has passed.
+    </p>
+    <div class="form-row"><label class="form-label">Task name <span class="req">*</span></label>
+      <input type="text" id="at-title" class="input-field" placeholder="e.g. Regulatory approval"/></div>
+    <div class="form-row"><label class="form-label">Owner department</label>
+      <input type="text" id="at-owner" class="input-field" placeholder="e.g. Legal"/></div>
+    <div class="form-row"><label class="form-label">Start date</label>
+      <input type="date" id="at-start" class="input-field"/></div>
+    <div class="form-row"><label class="form-label">Deadline</label>
+      <input type="date" id="at-deadline" class="input-field"/></div>
     <div class="form-actions">
       <button class="btn-outline" onclick="closeProductModal()">Cancel</button>
-      <button class="btn-primary" onclick="saveProduct('${existingId}')">${btnLabel}</button>
+      <button class="btn-primary" onclick="addTaskToProduct('${productId}')">Add task</button>
     </div>`;
-}
+  document.getElementById('create-product-modal').style.display = 'flex';
+};
+
+window.addTaskToProduct = async (productId) => {
+  const title    = document.getElementById('at-title')?.value.trim();
+  const owner    = document.getElementById('at-owner')?.value.trim() || '';
+  const startDate= document.getElementById('at-start')?.value || '';
+  const deadline = document.getElementById('at-deadline')?.value || '';
+  if (!title) { showToast('Task name required.', 'error'); return; }
+
+  const prod   = productListCache[productId];
+  const tasks  = getProductTasks(prod);
+  const taskId = generateTaskId();
+  const task   = {
+    id: taskId, title, owner, startDate, deadline,
+    status: 'on-track', predecessors: [], locked: false,
+    pillarId: null, order: tasks.length, kanbanCol: 'todo',
+    createdAt: Date.now(), createdBy: currentUser.email,
+  };
+
+  await set(ref(db, 'products/' + productId + '/tasks/' + taskId), task);
+  if (!productListCache[productId].tasks) productListCache[productId].tasks = {};
+  productListCache[productId].tasks[taskId] = task;
+
+  closeProductModal();
+  showToast('Task added.', 'success');
+  // Refresh tracker if open
+  if (currentView === 'tracker') renderTrackerTable(productListCache[productId], null);
+};
+
 
 window.saveProduct = async (existingId) => {
   const name       = document.getElementById('f-name')?.value.trim();
@@ -922,19 +1253,10 @@ window.saveProduct = async (existingId) => {
   if (!name)       { showToast('Product name is required.', 'error');  return; }
   if (!launchDate) { showToast('Launch date is required.', 'error');   return; }
 
-  const pillars = {};
-  PILLARS.forEach(pl => {
-    const d = document.getElementById('f-' + pl.id)?.value;
-    pillars[pl.id] = {
-      deadline:   d || null,
-      taskStatus: existingId ? (productListCache[existingId]?.pillars?.[pl.id]?.taskStatus || 'not-started') : 'not-started',
-      notes:      existingId ? (productListCache[existingId]?.pillars?.[pl.id]?.notes || '') : ''
-    };
-  });
+  const id    = existingId || generateId();
+  const isNew = !existingId;
 
-  const id      = existingId || generateId();
-  const isNew   = !existingId;
-  // Owner: if admin is creating for a team member, ownerField will be set
+  // Owner
   const ownerFieldEl = document.getElementById('f-owner');
   const ownerKey     = isNew
     ? (ownerFieldEl?.value || sanitiseEmail(currentUser.email))
@@ -942,15 +1264,35 @@ window.saveProduct = async (existingId) => {
   const ownerMember  = TEAM_MEMBERS[ownerKey];
   const ownerName    = ownerMember?.name || currentUser.displayName || currentUser.email.split('@')[0];
 
+  // Tasks — new products use _editingTasks, existing update date inputs only
+  const tasks = {};
+  if (isNew) {
+    _editingTasks.forEach(t => {
+      const titleEl = document.querySelector('#terow-' + t.id + ' .task-edit-title');
+      if (titleEl) t.title = titleEl.value.trim() || t.title;
+      tasks[t.id] = { ...t, createdAt: Date.now(), createdBy: currentUser.email };
+    });
+  } else {
+    const existingTaskArr = getProductTasks(productListCache[existingId] || {});
+    existingTaskArr.forEach(t => {
+      const d = document.getElementById('f-task-' + t.id)?.value;
+      tasks[t.id] = { ...t, deadline: d || t.deadline, updatedAt: Date.now() };
+    });
+    const existingFBTasks = productListCache[existingId]?.tasks || {};
+    Object.keys(existingFBTasks).forEach(tid => { if (!tasks[tid]) tasks[tid] = existingFBTasks[tid]; });
+  }
+
   const payload = {
     id, name, description: desc, launchDate,
-    pillars, status: 'active',
-    ownerId:   ownerKey,
-    ownerName: ownerName,
+    tasks,
+    status:     'active',
+    taskSchema: isNew ? (_editingTasks.length > 0 && _editingTasks[0].pillarId ? 'sop' : 'custom') : (productListCache[existingId]?.taskSchema || 'sop'),
+    ownerId:    ownerKey,
+    ownerName:  ownerName,
     sharedWith: isNew ? {} : (productListCache[existingId]?.sharedWith || {}),
-    createdAt: isNew ? Date.now() : (productListCache[existingId]?.createdAt || Date.now()),
-    updatedAt: Date.now(),
-    createdBy: isNew ? currentUser.email : (productListCache[existingId]?.createdBy || currentUser.email),
+    createdAt:  isNew ? Date.now() : (productListCache[existingId]?.createdAt || Date.now()),
+    updatedAt:  Date.now(),
+    createdBy:  isNew ? currentUser.email : (productListCache[existingId]?.createdBy || currentUser.email),
   };
 
   try {
@@ -1499,17 +1841,17 @@ window.trackerSelectProduct = () => {
 function renderTrackerTable(prod, filter) {
   const body = document.getElementById('tracker-body');
   if (!body) return;
-  const complete  = PILLARS.filter(pl => prod.pillars?.[pl.id]?.taskStatus === 'complete').length;
-  const delayed   = PILLARS.filter(pl => prod.pillars?.[pl.id]?.taskStatus === 'delayed').length;
-  const onTrack   = PILLARS.filter(pl => {
-    const st = prod.pillars?.[pl.id]?.taskStatus || 'on-track';
-    return st === 'on-track' || st === 'in-progress' || st === 'not-started';
+  // Use unified task system
+  const allTasks  = getProductTasks(prod);
+  const total     = allTasks.length || 1;
+  const complete  = allTasks.filter(t => t.status === 'complete').length;
+  const delayed   = allTasks.filter(t => t.status === 'delayed').length;
+  const onTrack   = allTasks.filter(t => t.status === 'on-track' || t.status === 'in-progress' || t.status === 'not-started').length;
+  const pct       = Math.round((complete / total) * 100);
+  const overdue   = allTasks.filter(t => {
+    return t.deadline && t.status !== 'complete' && getPillarStatus(t.deadline) === 'overdue';
   }).length;
-  const pct       = Math.round((complete / PILLARS.length) * 100);
-  const overdue   = PILLARS.filter(pl => {
-    const pd = prod.pillars?.[pl.id];
-    return pd?.deadline && pd?.taskStatus !== 'complete' && getPillarStatus(pd.deadline) === 'overdue';
-  }).length;
+  const locked    = isProductLocked(prod);
 
   const rows = PILLARS.map((pl, i) => {
     const pd = prod.pillars?.[pl.id] || {};
@@ -1544,26 +1886,33 @@ function renderTrackerTable(prod, filter) {
 
     // Status button group — 3 states, colour-coded
     const delayLabel = delayedDays > 0 ? ` (${delayedDays}d)` : '';
-    const statusCtrl = currentRole === 'admin'
-      ? `<div class="status-btn-group">
-          <button class="status-btn status-btn-ontrack ${isOnTrack ? 'active' : ''}"
-            onclick="updatePillarStatus('${prod.id}','${pl.id}','on-track')">On Track</button>
-          <button class="status-btn status-btn-delayed ${isDelayed ? 'active' : ''}"
-            onclick="updatePillarStatus('${prod.id}','${pl.id}','delayed')">Delayed${delayLabel}</button>
-          <button class="status-btn status-btn-complete ${isComplete ? 'active' : ''}"
-            onclick="updatePillarStatus('${prod.id}','${pl.id}','complete')">Complete</button>
-        </div>`
-      : `<div class="status-btn-group">
-          <span class="status-btn ${isOnTrack ? 'status-btn-ontrack active' : isDelayed ? 'status-btn-delayed active' : 'status-btn-complete active'}">
-            ${isOnTrack ? 'On Track' : isDelayed ? 'Delayed' + delayLabel : 'Complete'}
-          </span>
-        </div>`;
+    const taskId = pl.id;
+    const statusCtrl = isBlocked
+      ? `<div class="status-btn-group"><span class="status-btn" style="opacity:.5;cursor:not-allowed;">🔗 Blocked</span></div>`
+      : currentRole === 'admin' || !taskLocked
+        ? `<div class="status-btn-group">
+            <button class="status-btn status-btn-ontrack ${isOnTrack ? 'active' : ''}"
+              onclick="updatePillarStatus('${prod.id}','${taskId}','on-track')">On Track</button>
+            <button class="status-btn status-btn-delayed ${isDelayed ? 'active' : ''}"
+              onclick="updatePillarStatus('${prod.id}','${taskId}','delayed')">Delayed${delayLabel}</button>
+            <button class="status-btn status-btn-complete ${isComplete ? 'active' : ''}"
+              onclick="updatePillarStatus('${prod.id}','${taskId}','complete')">Complete</button>
+          </div>`
+        : `<div class="status-btn-group">
+            <span class="status-btn ${isOnTrack ? 'status-btn-ontrack active' : isDelayed ? 'status-btn-delayed active' : 'status-btn-complete active'}">
+              ${isOnTrack ? 'On Track' : isDelayed ? 'Delayed' + delayLabel : 'Complete'}
+            </span>
+          </div>`;
     const notesCtrl = currentRole === 'admin'
       ? `<input type="text" class="notes-input" placeholder="Add note..." value="${pd.notes||''}" onblur="updatePillarNotes('${prod.id}','${pl.id}',this.value)"/>`
       : `<span class="notes-text">${pd.notes||'—'}</span>`;
-    return `<tr class="tracker-row${isComplete?' tracker-row-done':isDelayed?' tracker-row-delayed':''}">
+    return `<tr class="tracker-row${isComplete?' tracker-row-done':isDelayed?' tracker-row-delayed':''}${isBlocked?' tracker-row-blocked':''}">
       <td class="tracker-num">${i+1}</td>
-      <td class="tracker-pillar"><div class="tracker-pillar-name">${pl.name}</div><div class="tracker-pillar-owner">${pl.owner}</div></td>
+      <td class="tracker-pillar">
+        <div class="tracker-pillar-name">${taskLocked ? '🔒 ' : ''}${pl.title||pl.name}</div>
+        <div class="tracker-pillar-owner">${pl.owner||''}</div>
+        ${blockedLabel}
+      </td>
       <td class="tracker-deadline">${deadlinePill}</td>
       <td class="tracker-status">${statusCtrl}</td>
       <td class="tracker-notes">${notesCtrl}</td>
@@ -1621,20 +1970,37 @@ function renderTrackerTable(prod, filter) {
     </div>`;
 }
 
-window.updatePillarStatus = async (productId, pillarId, newStatus) => {
+window.updatePillarStatus = async (productId, taskId, newStatus) => {
   try {
-    await set(ref(db, `products/${productId}/pillars/${pillarId}/taskStatus`), newStatus);
-    if (trackerProductsCache[productId]?.pillars?.[pillarId])
-      trackerProductsCache[productId].pillars[pillarId].taskStatus = newStatus;
+    const prod = trackerProductsCache[productId] || productListCache[productId];
+    // Support both old pillars format and new tasks format
+    if (prod?.tasks?.[taskId]) {
+      await set(ref(db, `products/${productId}/tasks/${taskId}/status`), newStatus);
+      prod.tasks[taskId].status = newStatus;
+    } else {
+      // Legacy pillars
+      await set(ref(db, `products/${productId}/pillars/${taskId}/taskStatus`), newStatus);
+      if (prod?.pillars?.[taskId]) prod.pillars[taskId].taskStatus = newStatus;
+    }
+    // Check if product should now be locked
+    await checkAndLockProduct(productId);
+    // Refresh tracker
+    const p = trackerProductsCache[productId];
+    if (p) renderTrackerTable(p, null);
     showToast('Status updated.', 'success');
   } catch(e) { showToast('Update failed: ' + e.message, 'error'); }
 };
 
-window.updatePillarNotes = async (productId, pillarId, notes) => {
+window.updatePillarNotes = async (productId, taskId, notes) => {
   try {
-    await set(ref(db, `products/${productId}/pillars/${pillarId}/notes`), notes);
-    if (trackerProductsCache[productId]?.pillars?.[pillarId])
-      trackerProductsCache[productId].pillars[pillarId].notes = notes;
+    const prod = trackerProductsCache[productId] || productListCache[productId];
+    if (prod?.tasks?.[taskId]) {
+      await set(ref(db, `products/${productId}/tasks/${taskId}/notes`), notes);
+      prod.tasks[taskId].notes = notes;
+    } else {
+      await set(ref(db, `products/${productId}/pillars/${taskId}/notes`), notes);
+      if (prod?.pillars?.[taskId]) prod.pillars[taskId].notes = notes;
+    }
   } catch(e) { showToast('Note save failed.', 'error'); }
 };
 
@@ -3703,6 +4069,14 @@ window.__npd_init({
   sendReminder:            window.sendReminder,
   setCalView:              window.setCalView,
   setGanttMonths:          window.setGanttMonths,
+  selectTemplate:          window.selectTemplate,
+  addNewTaskRow:           window.addNewTaskRow,
+  removeEditingTask:       window.removeEditingTask,
+  updateEditingTask:       window.updateEditingTask,
+  updateEditingTaskPreds:  window.updateEditingTaskPreds,
+  saveAsTemplatePrompt:    window.saveAsTemplatePrompt,
+  showAddTaskToProduct:    window.showAddTaskToProduct,
+  addTaskToProduct:        window.addTaskToProduct,
 });
 
 </script>
@@ -4415,6 +4789,41 @@ textarea.input-field { resize: vertical; line-height: 1.6; }
   border:5px solid transparent; border-top-color:#1a1a18;
 }
 .gantt-dot:hover .gantt-tooltip { display:block; }
+
+/* ─── PHASE A: TASK CREATION SYSTEM ─── */
+.tmpl-chooser { padding:4px 0; }
+.tmpl-options { display:grid; grid-template-columns:repeat(3,1fr); gap:12px; margin-bottom:16px; }
+@media(max-width:500px) { .tmpl-options { grid-template-columns:1fr; } }
+.tmpl-option {
+  border:1.5px solid var(--border-mid); border-radius:10px; padding:18px 16px;
+  cursor:pointer; text-align:center; transition:all .15s;
+}
+.tmpl-option:hover { border-color:var(--red); background:var(--red-light); }
+.tmpl-option-icon  { font-size:28px; margin-bottom:10px; }
+.tmpl-option-title { font-size:14px; font-weight:600; color:var(--text); margin-bottom:6px; }
+.tmpl-option-desc  { font-size:12px; color:var(--text-muted); line-height:1.5; }
+
+.template-card {
+  border:1px solid var(--border); border-radius:8px; padding:12px 14px;
+  cursor:pointer; transition:all .15s;
+}
+.template-card:hover { border-color:var(--red); background:var(--red-light); }
+.template-name { font-size:13px; font-weight:500; }
+.template-meta { font-size:11px; color:var(--text-muted); margin-top:2px; }
+.tmpl-section-label { font-size:11px; font-weight:600; color:var(--text-muted); text-transform:uppercase; letter-spacing:.07em; margin:16px 0 8px; grid-column:1/-1; }
+
+/* Task editor rows */
+.task-edit-row   { border:1px solid var(--border); border-radius:8px; margin-bottom:8px; overflow:hidden; }
+.task-edit-header { display:flex; align-items:center; gap:8px; padding:10px 12px; background:var(--bg); border-bottom:1px solid var(--border); }
+.task-edit-num   { width:22px; height:22px; border-radius:50%; background:var(--red-light); color:var(--red); font-size:11px; font-weight:700; display:flex; align-items:center; justify-content:center; flex-shrink:0; }
+.task-edit-title { flex:1; font-weight:500; }
+.task-edit-body  { display:grid; grid-template-columns:repeat(3,1fr); gap:10px; padding:10px 12px; }
+.task-edit-col   { display:flex; flex-direction:column; gap:4px; }
+.task-edit-col-wide { grid-column:span 2; }
+@media(max-width:500px) { .task-edit-body { grid-template-columns:1fr; } .task-edit-col-wide { grid-column:1; } }
+
+.task-locked-row { opacity:.65; }
+.tracker-row-blocked { background:rgba(251,191,36,.04); }
 </style>
 
 <!-- ══════════════════════════════════════════
