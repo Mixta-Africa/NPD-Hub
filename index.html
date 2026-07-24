@@ -1620,70 +1620,87 @@ function drawGantt() {
     return;
   }
 
-  // Build date range: today → today + ganttMonths months
-  const startDate = new Date(); startDate.setHours(0,0,0,0);
-  const endDate   = new Date(startDate);
-  endDate.setMonth(endDate.getMonth() + ganttMonths);
-  const totalDays = Math.round((endDate - startDate) / 86400000);
+  // Date range: earliest to latest milestone + padding
+  const allDates = milestones.map(m => new Date(m.date));
+  const today    = new Date(); today.setHours(0,0,0,0);
+  let rangeStart = new Date(Math.min(...allDates.map(d => d.getTime())));
+  let rangeEnd   = new Date(Math.max(...allDates.map(d => d.getTime())));
+  rangeStart.setDate(rangeStart.getDate() - 7);
+  rangeEnd.setDate(rangeEnd.getDate() + 14);
+  rangeStart.setHours(0,0,0,0); rangeEnd.setHours(0,0,0,0);
 
-  // Group milestones by product
-  const byProduct = {};
-  milestones.forEach(m => {
-    if (!byProduct[m.productId]) byProduct[m.productId] = { name: m.productName, milestones: [] };
-    byProduct[m.productId].milestones.push(m);
-  });
+  // Also respect ganttMonths minimum
+  const minEnd = new Date(today);
+  minEnd.setMonth(minEnd.getMonth() + ganttMonths);
+  if (minEnd > rangeEnd) rangeEnd = minEnd;
 
-  // Build month header labels
-  const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-  let monthLabels = '';
-  let cur = new Date(startDate);
-  while (cur < endDate) {
-    const daysInView = Math.min(
-      Math.round((new Date(cur.getFullYear(), cur.getMonth()+1, 1) - cur) / 86400000),
-      totalDays - Math.round((cur - startDate) / 86400000)
-    );
-    const pct = (daysInView / totalDays) * 100;
-    monthLabels += `<div class="gantt-month-hdr" style="width:${pct}%">${MONTHS[cur.getMonth()]} ${cur.getFullYear()}</div>`;
-    cur = new Date(cur.getFullYear(), cur.getMonth()+1, 1);
+  const totalDays = Math.max(Math.round((rangeEnd - rangeStart) / 86400000), 1);
+
+  function pctOf(dateStr) {
+    if (!dateStr) return null;
+    const d = new Date(dateStr); d.setHours(0,0,0,0);
+    return Math.max(0, Math.min(100, (Math.round((d - rangeStart) / 86400000) / totalDays) * 100));
   }
 
-  // Today marker position
-  const todayPct = 0; // today is at 0% of range
+  // Month header labels
+  const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  let monthLabels = '';
+  let cur = new Date(rangeStart.getFullYear(), rangeStart.getMonth(), 1);
+  while (cur <= rangeEnd) {
+    const monthEnd  = new Date(cur.getFullYear(), cur.getMonth() + 1, 1);
+    const clipStart = Math.max(cur.getTime(), rangeStart.getTime());
+    const clipEnd   = Math.min(monthEnd.getTime(), rangeEnd.getTime());
+    const days      = Math.round((clipEnd - clipStart) / 86400000);
+    const w         = (days / totalDays) * 100;
+    monthLabels    += `<div class="gantt-month-hdr" style="width:${w}%">${MONTHS[cur.getMonth()]} ${cur.getFullYear()}</div>`;
+    cur = monthEnd;
+  }
 
-  // Build rows
+  const todayPct = pctOf(today.toISOString().split('T')[0]);
+
+  // Group by product — one bar per product spanning first→last milestone
+  const byProduct = {};
+  milestones.forEach(m => {
+    if (!byProduct[m.productId]) byProduct[m.productId] = { name: m.productName, items: [] };
+    byProduct[m.productId].items.push(m);
+  });
+
   const rows = Object.values(byProduct).map(prod => {
-    const dots = prod.milestones.map(m => {
-      const mDate = new Date(m.date); mDate.setHours(0,0,0,0);
-      if (mDate < startDate || mDate > endDate) return '';
-      const dayOffset = Math.round((mDate - startDate) / 86400000);
-      const pct       = (dayOffset / totalDays) * 100;
-      const cls = m.deadlineStatus === 'complete' ? 'gantt-dot-blue'
-                : m.deadlineStatus === 'overdue'  ? 'gantt-dot-red'
-                : m.deadlineStatus === 'warning'  ? 'gantt-dot-amber'
-                : 'gantt-dot-green';
-      return `<div class="gantt-dot ${cls}" style="left:${pct}%" title="${m.pillarName} — ${formatDate(m.date)}">
+    const sorted   = [...prod.items].sort((a, b) => new Date(a.date) - new Date(b.date));
+    const firstPct = pctOf(sorted[0].date) ?? 0;
+    const lastPct  = pctOf(sorted[sorted.length - 1].date) ?? firstPct;
+    const barWidth = Math.max(lastPct - firstPct, 0.5);
+
+    // Colour bar by worst status across milestones
+    const hasOverdue  = sorted.some(m => m.deadlineStatus === 'overdue');
+    const hasWarning  = sorted.some(m => m.deadlineStatus === 'warning');
+    const allComplete = sorted.every(m => m.deadlineStatus === 'complete');
+    const barCls = allComplete ? 'tg-bar-complete'
+                 : hasOverdue  ? 'tg-bar-delayed'
+                 : hasWarning  ? 'tg-bar-blocked'
+                 : 'tg-bar-ontrack';
+
+    // Individual milestone dots on top of bar
+    const dots = sorted.map(m => {
+      const dp = pctOf(m.date);
+      if (dp === null) return '';
+      const dotCls = m.deadlineStatus === 'complete' ? 'gantt-dot-blue'
+                   : m.deadlineStatus === 'overdue'  ? 'gantt-dot-red'
+                   : m.deadlineStatus === 'warning'  ? 'gantt-dot-amber'
+                   : 'gantt-dot-green';
+      return `<div class="gantt-dot ${dotCls}" style="left:${dp}%;z-index:3;" title="${m.pillarName} — ${formatDate(m.date)}">
         <div class="gantt-tooltip">${m.pillarName}<br/>${formatDate(m.date)}</div>
       </div>`;
     }).join('');
 
-    // Draw a connecting line from first to last milestone in range
-    const inRange = prod.milestones.filter(m => {
-      const d = new Date(m.date); d.setHours(0,0,0,0);
-      return d >= startDate && d <= endDate;
-    }).sort((a,b) => new Date(a.date) - new Date(b.date));
-
-    let line = '';
-    if (inRange.length >= 2) {
-      const firstPct = (Math.round((new Date(inRange[0].date) - startDate) / 86400000) / totalDays) * 100;
-      const lastPct  = (Math.round((new Date(inRange[inRange.length-1].date) - startDate) / 86400000) / totalDays) * 100;
-      line = `<div class="gantt-line" style="left:${firstPct}%;width:${lastPct-firstPct}%"></div>`;
-    }
-
     return `<div class="gantt-row">
-      <div class="gantt-label">${prod.name}</div>
+      <div class="gantt-label" title="${prod.name}">${prod.name}</div>
       <div class="gantt-track">
-        <div class="gantt-today-line"></div>
-        ${line}${dots}
+        ${todayPct !== null ? `<div class="gantt-today-line" style="left:${todayPct}%"></div>` : ''}
+        <div class="tg-bar ${barCls}" style="left:${firstPct}%;width:${barWidth}%;top:8px;bottom:8px;">
+          <div class="gantt-tooltip">${prod.name}<br/>${formatDate(sorted[0].date)} → ${formatDate(sorted[sorted.length-1].date)}</div>
+        </div>
+        ${dots}
       </div>
     </div>`;
   }).join('');
@@ -1853,9 +1870,13 @@ window.setTrackerView = (mode) => {
   });
   const prod = trackerProductsCache[trackerSelectedProduct];
   if (!prod) return;
-  if (mode === 'table')  renderTrackerTable(prod, null);
-  if (mode === 'kanban') renderKanban(prod);
-  if (mode === 'gantt')  renderTrackerGantt(prod);
+  const body = document.getElementById('tracker-body');
+  if (body) body.innerHTML = '<div class="loading-row" style="padding:16px;">Loading...</div>';
+  setTimeout(() => {
+    if (mode === 'table')  renderTrackerTable(prod, null);
+    if (mode === 'kanban') renderKanban(prod);
+    if (mode === 'gantt')  renderTrackerGantt(prod);
+  }, 30);
 };
 
 async function loadTrackerProducts() {
@@ -1896,17 +1917,31 @@ function renderTrackerTable(prod, filter) {
   }).length;
   const locked    = isProductLocked(prod);
 
-  const rows = PILLARS.map((pl, i) => {
-    const pd = prod.pillars?.[pl.id] || {};
-    // Map legacy statuses to new 3-status system
-    const rawSt = pd.taskStatus || 'on-track';
-    const st = rawSt === 'not-started' ? 'on-track'
-             : rawSt === 'in-progress' ? 'on-track'
-             : rawSt === 'complete'    ? 'complete'
-             : rawSt === 'delayed'     ? 'delayed'
-             : rawSt;  // on-track, delayed, complete
+  const rows = allTasks.map((pl, i) => {
+    // pl is a task object from getProductTasks()
+    const pd       = pl;
+    const rawSt    = pl.status || 'on-track';
+    const st       = rawSt === 'not-started' ? 'on-track'
+                   : rawSt === 'in-progress' ? 'on-track'
+                   : rawSt === 'complete'    ? 'complete'
+                   : rawSt === 'delayed'     ? 'delayed'
+                   : rawSt;
 
-    // Calculate delayed days if deadline passed and not complete
+    // Blocked by incomplete predecessors?
+    const blockedBy  = (pl.predecessors || []).filter(pid => {
+      const dep = allTasks.find(t => t.id === pid);
+      return dep && dep.status !== 'complete';
+    });
+    const isBlocked  = blockedBy.length > 0;
+    const blockedLabel = isBlocked
+      ? `<div style="font-size:11px;color:var(--amber);margin-top:3px;">
+          🔗 Blocked by: ${blockedBy.map(pid => allTasks.find(t => t.id === pid)?.title || pid).join(', ')}
+         </div>`
+      : '';
+
+    const taskLocked = locked && !isSuperAdmin && currentRole !== 'admin';
+
+    // Delayed days
     const today = new Date(); today.setHours(0,0,0,0);
     let delayedDays = 0;
     if (pd.deadline && st !== 'complete') {
@@ -1915,24 +1950,24 @@ function renderTrackerTable(prod, filter) {
       if (diff > 0) delayedDays = diff;
     }
 
-    const isComplete  = st === 'complete';
-    const isDelayed   = st === 'delayed';
-    const isOnTrack   = st === 'on-track';
+    const isComplete = st === 'complete';
+    const isDelayed  = st === 'delayed';
+    const isOnTrack  = st === 'on-track';
 
     // Deadline pill
     const deadlinePill = !pd.deadline
       ? '<span class="pill pill-grey">No date</span>'
-      : isComplete ? `<span class="pill pill-blue">${formatDate(pd.deadline)}</span>`
+      : isComplete     ? `<span class="pill pill-blue">${formatDate(pd.deadline)}</span>`
       : delayedDays > 0 ? `<span class="pill pill-red">${delayedDays}d overdue — ${formatDate(pd.deadline)}</span>`
       : getPillarStatus(pd.deadline) === 'warning' ? `<span class="pill pill-amber">Due soon — ${formatDate(pd.deadline)}</span>`
       : `<span class="pill pill-green">${formatDate(pd.deadline)}</span>`;
 
-    // Status button group — 3 states, colour-coded
+    // Status buttons
     const delayLabel = delayedDays > 0 ? ` (${delayedDays}d)` : '';
-    const taskId = pl.id;
+    const taskId     = pl.id;
     const statusCtrl = isBlocked
       ? `<div class="status-btn-group"><span class="status-btn" style="opacity:.5;cursor:not-allowed;">🔗 Blocked</span></div>`
-      : currentRole === 'admin' || !taskLocked
+      : (currentRole === 'admin' || isSuperAdmin || !taskLocked)
         ? `<div class="status-btn-group">
             <button class="status-btn status-btn-ontrack ${isOnTrack ? 'active' : ''}"
               onclick="updatePillarStatus('${prod.id}','${taskId}','on-track')">On Track</button>
@@ -1946,13 +1981,16 @@ function renderTrackerTable(prod, filter) {
               ${isOnTrack ? 'On Track' : isDelayed ? 'Delayed' + delayLabel : 'Complete'}
             </span>
           </div>`;
-    const notesCtrl = currentRole === 'admin'
-      ? `<input type="text" class="notes-input" placeholder="Add note..." value="${pd.notes||''}" onblur="updatePillarNotes('${prod.id}','${pl.id}',this.value)"/>`
+
+    const notesCtrl = (currentRole === 'admin' || isSuperAdmin || !taskLocked)
+      ? `<input type="text" class="notes-input" placeholder="Add note..." value="${pd.notes||''}"
+           onblur="updatePillarNotes('${prod.id}','${taskId}',this.value)"/>`
       : `<span class="notes-text">${pd.notes||'—'}</span>`;
+
     return `<tr class="tracker-row${isComplete?' tracker-row-done':isDelayed?' tracker-row-delayed':''}${isBlocked?' tracker-row-blocked':''}">
       <td class="tracker-num">${i+1}</td>
       <td class="tracker-pillar">
-        <div class="tracker-pillar-name">${taskLocked ? '🔒 ' : ''}${pl.title||pl.name}</div>
+        <div class="tracker-pillar-name">${taskLocked ? '🔒 ' : ''}${pl.title||pl.name||'Untitled'}</div>
         <div class="tracker-pillar-owner">${pl.owner||''}</div>
         ${blockedLabel}
       </td>
@@ -1960,7 +1998,7 @@ function renderTrackerTable(prod, filter) {
       <td class="tracker-status">${statusCtrl}</td>
       <td class="tracker-notes">${notesCtrl}</td>
     </tr>`;
-  }).join('');
+  }).join('')
 
   const overdueHtml = overdue > 0 ? `<span style="color:var(--red)">${overdue} overdue</span>` : '0 overdue';
   // Apply filter from dashboard navigation
@@ -2042,9 +2080,13 @@ window.updatePillarStatus = async (productId, taskId, newStatus) => {
     }
     // Check if product should now be locked
     await checkAndLockProduct(productId);
-    // Refresh tracker
+    // Refresh current tracker view
     const p = trackerProductsCache[productId];
-    if (p) renderTrackerTable(p, null);
+    if (p && currentView === 'tracker') {
+      if (trackerViewMode === 'kanban') renderKanban(p);
+      else if (trackerViewMode === 'gantt') renderTrackerGantt(p);
+      else renderTrackerTable(p, null);
+    }
     showToast('Status updated.', 'success');
   } catch(e) { showToast('Update failed: ' + e.message, 'error'); }
 };
