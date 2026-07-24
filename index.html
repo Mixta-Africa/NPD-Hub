@@ -1803,20 +1803,43 @@ function buildMilestoneRow(m) {
 let trackerProductsCache   = {};
 let trackerSelectedProduct = '';
 
+/* ── TRACKER VIEW STATE ── */
+let trackerViewMode = 'table'; // 'table' | 'kanban' | 'gantt'
+
 function renderTracker(el) {
   el.innerHTML = `
     <div class="view-header">
       <div>
         <h1 class="view-title">Task Tracker</h1>
-        <p class="view-subtitle">Per-pillar status across all active products</p>
+        <p class="view-subtitle">Per-task status across all active products</p>
       </div>
-      <select id="tracker-product-sel" class="select-field" onchange="trackerSelectProduct()">
-        <option value="">Select a product...</option>
-      </select>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+        <select id="tracker-product-sel" class="select-field" onchange="trackerSelectProduct()">
+          <option value="">Select a product...</option>
+        </select>
+        <div class="cal-view-toggle">
+          <button class="cal-view-btn active" id="tv-btn-table"  onclick="setTrackerView('table')">Table</button>
+          <button class="cal-view-btn"        id="tv-btn-kanban" onclick="setTrackerView('kanban')">Kanban</button>
+          <button class="cal-view-btn"        id="tv-btn-gantt"  onclick="setTrackerView('gantt')">Gantt</button>
+        </div>
+      </div>
     </div>
     <div id="tracker-body"><div class="loading-row" style="padding:24px;">Loading products...</div></div>`;
   loadTrackerProducts();
 }
+
+window.setTrackerView = (mode) => {
+  trackerViewMode = mode;
+  ['table','kanban','gantt'].forEach(m => {
+    const btn = document.getElementById('tv-btn-' + m);
+    if (btn) btn.classList.toggle('active', m === mode);
+  });
+  const prod = trackerProductsCache[trackerSelectedProduct];
+  if (!prod) return;
+  if (mode === 'table')  renderTrackerTable(prod, null);
+  if (mode === 'kanban') renderKanban(prod);
+  if (mode === 'gantt')  renderTrackerGantt(prod);
+};
 
 async function loadTrackerProducts() {
   const snap = await get(ref(db, 'products'));
@@ -1835,7 +1858,10 @@ window.trackerSelectProduct = () => {
   if (!id) return;
   trackerSelectedProduct = id;
   const prod = trackerProductsCache[id];
-  if (prod) renderTrackerTable(prod);
+  if (!prod) return;
+  if (trackerViewMode === 'kanban') renderKanban(prod);
+  else if (trackerViewMode === 'gantt') renderTrackerGantt(prod);
+  else renderTrackerTable(prod, null);
 };
 
 function renderTrackerTable(prod, filter) {
@@ -3997,6 +4023,240 @@ window.sendReminder = async (productId, pillarId, pillarName, productName, deadl
   }
 };
 
+/* ══ PHASE B: KANBAN VIEW ═══════════════════════════════════ */
+
+function renderKanban(prod) {
+  const body = document.getElementById('tracker-body');
+  if (!body) return;
+
+  const tasks  = getProductTasks(prod);
+  const locked = isProductLocked(prod);
+  const canEdit = currentRole === 'admin' || isSuperAdmin || !locked;
+
+  const cols = [
+    { id: 'todo',        label: 'To Do',       cls: 'kb-col-todo'     },
+    { id: 'in-progress', label: 'In Progress',  cls: 'kb-col-progress' },
+    { id: 'done',        label: 'Done',         cls: 'kb-col-done'     },
+  ];
+
+  // Map task status to kanban column
+  function taskToCol(t) {
+    const st = t.status || 'on-track';
+    if (st === 'complete') return 'done';
+    if (st === 'delayed')  return 'in-progress';
+    return 'todo';
+  }
+
+  const columns = cols.map(col => {
+    const colTasks = tasks.filter(t => taskToCol(t) === col.id);
+    const cards    = colTasks.map(t => {
+      const today    = new Date(); today.setHours(0,0,0,0);
+      const isLocked = locked && !isSuperAdmin && currentRole !== 'admin';
+      const blocked  = (t.predecessors||[]).some(pid => {
+        const dep = tasks.find(x => x.id === pid);
+        return dep && dep.status !== 'complete';
+      });
+      const deadlineChip = t.deadline
+        ? (() => {
+            const due = new Date(t.deadline); due.setHours(0,0,0,0);
+            const diff = Math.round((due - today) / 86400000);
+            const cls  = t.status === 'complete' ? 'pill-blue'
+                       : diff < 0  ? 'pill-red'
+                       : diff <= 3 ? 'pill-amber'
+                       : 'pill-green';
+            return `<span class="pill ${cls}" style="font-size:10px;">${formatDate(t.deadline)}</span>`;
+          })()
+        : '';
+
+      const statusBtns = canEdit && !blocked ? `
+        <div class="kb-card-actions">
+          ${col.id !== 'todo'        ? `<button class="kb-move-btn" onclick="moveKanbanTask('${prod.id}','${t.id}','on-track')">← To Do</button>` : ''}
+          ${col.id !== 'in-progress' ? `<button class="kb-move-btn" onclick="moveKanbanTask('${prod.id}','${t.id}','delayed')">In Progress</button>` : ''}
+          ${col.id !== 'done'        ? `<button class="kb-move-btn kb-move-done" onclick="moveKanbanTask('${prod.id}','${t.id}','complete')">✓ Done</button>` : ''}
+        </div>` : blocked ? `<div style="font-size:10px;color:var(--amber);margin-top:6px;">🔗 Blocked</div>` : '';
+
+      return `<div class="kb-card ${blocked ? 'kb-card-blocked' : ''}" draggable="${canEdit && !blocked}" 
+               ondragstart="kbDragStart(event,'${t.id}')"
+               ondragover="event.preventDefault()"
+               ondrop="kbDrop(event,'${prod.id}','${col.id}')">
+        <div class="kb-card-title">${isLocked ? '🔒 ' : ''}${t.title||t.name||'Untitled'}</div>
+        <div class="kb-card-meta">
+          ${t.owner ? `<span class="kb-card-owner">${t.owner}</span>` : ''}
+          ${deadlineChip}
+        </div>
+        ${statusBtns}
+      </div>`;
+    }).join('') || `<div class="kb-empty">No tasks</div>`;
+
+    return `<div class="kb-col ${col.cls}"
+      ondragover="event.preventDefault()"
+      ondrop="kbDrop(event,'${prod.id}','${col.id}')">
+      <div class="kb-col-header">
+        <span class="kb-col-label">${col.label}</span>
+        <span class="kb-col-count">${colTasks.length}</span>
+      </div>
+      <div class="kb-col-body">${cards}</div>
+    </div>`;
+  }).join('');
+
+  const complete = tasks.filter(t => t.status === 'complete').length;
+  const pct      = Math.round((complete / (tasks.length||1)) * 100);
+
+  body.innerHTML = `
+    <div class="tracker-summary">
+      <div class="tracker-summary-top">
+        <div>
+          <div class="tracker-summary-name">${prod.name}</div>
+          <div class="tracker-summary-meta">Launch: ${formatDate(prod.launchDate)} &nbsp;·&nbsp; ${tasks.length} tasks</div>
+        </div>
+        <div class="tracker-pct-badge">${pct}%</div>
+      </div>
+      <div class="tracker-progress-wrap">
+        <div class="tracker-progress-fill" style="width:${pct}%"></div>
+      </div>
+    </div>
+    <div class="kb-board">${columns}</div>`;
+}
+
+/* ── Drag & Drop state ── */
+let _kbDragging = null;
+window.kbDragStart = (e, taskId) => { _kbDragging = taskId; e.dataTransfer.effectAllowed = 'move'; };
+window.kbDrop     = async (e, productId, colId) => {
+  e.preventDefault();
+  if (!_kbDragging) return;
+  const statusMap = { 'todo': 'on-track', 'in-progress': 'delayed', 'done': 'complete' };
+  await updatePillarStatus(productId, _kbDragging, statusMap[colId] || 'on-track');
+  _kbDragging = null;
+  renderKanban(trackerProductsCache[productId]);
+};
+
+window.moveKanbanTask = async (productId, taskId, newStatus) => {
+  await updatePillarStatus(productId, taskId, newStatus);
+  renderKanban(trackerProductsCache[productId] || productListCache[productId]);
+};
+
+/* ══ PHASE B: TRACKER GANTT (task bars) ═════════════════════ */
+
+function renderTrackerGantt(prod) {
+  const body = document.getElementById('tracker-body');
+  if (!body) return;
+
+  const tasks = getProductTasks(prod);
+  if (tasks.length === 0) {
+    body.innerHTML = '<div class="empty-state-sm"><p>No tasks to display.</p></div>';
+    return;
+  }
+
+  // Determine date range from all tasks
+  const allDates = tasks.flatMap(t => [t.startDate, t.deadline].filter(Boolean))
+    .map(d => new Date(d));
+  if (allDates.length === 0) {
+    body.innerHTML = '<div class="empty-state-sm"><p>No dates set on tasks yet.</p></div>';
+    return;
+  }
+
+  const today = new Date(); today.setHours(0,0,0,0);
+  let rangeStart = new Date(Math.min(...allDates.map(d => d.getTime())));
+  let rangeEnd   = new Date(Math.max(...allDates.map(d => d.getTime())));
+  // Pad by 7 days either side
+  rangeStart.setDate(rangeStart.getDate() - 7);
+  rangeEnd.setDate(rangeEnd.getDate() + 14);
+  rangeStart.setHours(0,0,0,0);
+  rangeEnd.setHours(0,0,0,0);
+  const totalDays = Math.max(Math.round((rangeEnd - rangeStart) / 86400000), 1);
+
+  function pctOf(date) {
+    if (!date) return null;
+    const d = new Date(date); d.setHours(0,0,0,0);
+    return Math.max(0, Math.min(100, (Math.round((d - rangeStart) / 86400000) / totalDays) * 100));
+  }
+
+  // Month headers
+  const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  let monthLabels = '';
+  let cur = new Date(rangeStart.getFullYear(), rangeStart.getMonth(), 1);
+  while (cur <= rangeEnd) {
+    const monthEnd   = new Date(cur.getFullYear(), cur.getMonth()+1, 1);
+    const clipStart  = Math.max(cur, rangeStart);
+    const clipEnd    = Math.min(monthEnd, rangeEnd);
+    const daysInView = Math.round((clipEnd - clipStart) / 86400000);
+    const pct        = (daysInView / totalDays) * 100;
+    monthLabels += `<div class="gantt-month-hdr" style="width:${pct}%">${MONTHS[cur.getMonth()]} ${cur.getFullYear()}</div>`;
+    cur = monthEnd;
+  }
+
+  // Today line position
+  const todayPct = pctOf(today.toISOString().split('T')[0]);
+
+  const rows = tasks.map((t, i) => {
+    const startPct   = pctOf(t.startDate) ?? pctOf(t.deadline) ?? 0;
+    const endPct     = pctOf(t.deadline)  ?? startPct;
+    const barWidth   = Math.max(endPct - startPct, 1);
+
+    const blocked    = (t.predecessors||[]).some(pid => {
+      const dep = tasks.find(x => x.id === pid);
+      return dep && dep.status !== 'complete';
+    });
+
+    const barCls = t.status === 'complete' ? 'tg-bar-complete'
+                 : t.status === 'delayed'   ? 'tg-bar-delayed'
+                 : blocked                  ? 'tg-bar-blocked'
+                 : 'tg-bar-ontrack';
+
+    // Predecessor arrows (simple connector line)
+    const predLines = (t.predecessors||[]).map(pid => {
+      const dep = tasks.find(x => x.id === pid);
+      if (!dep?.deadline) return '';
+      const fromPct = pctOf(dep.deadline) ?? 0;
+      const width   = Math.abs(startPct - fromPct);
+      const left    = Math.min(fromPct, startPct);
+      return `<div class="tg-link" style="left:${left}%;width:${width}%;" title="Depends on: ${dep.title}"></div>`;
+    }).join('');
+
+    const statusDot = t.status === 'complete' ? '✓'
+                    : t.status === 'delayed'   ? '!'
+                    : blocked ? '🔗' : '·';
+
+    return `<div class="gantt-row">
+      <div class="gantt-label" title="${t.title||t.name}">
+        <span class="tg-status-dot tg-dot-${t.status||'on-track'}">${statusDot}</span>
+        ${t.title||t.name||'Untitled'}
+      </div>
+      <div class="gantt-track">
+        ${todayPct !== null ? `<div class="gantt-today-line" style="left:${todayPct}%"></div>` : ''}
+        ${predLines}
+        <div class="tg-bar ${barCls}" style="left:${startPct}%;width:${barWidth}%;">
+          <div class="gantt-tooltip">${t.title||t.name}<br/>${t.startDate||'?'} → ${t.deadline||'?'}</div>
+        </div>
+      </div>
+    </div>`;
+  }).join('');
+
+  const complete = tasks.filter(t => t.status === 'complete').length;
+  const pct      = Math.round((complete / (tasks.length||1)) * 100);
+
+  body.innerHTML = `
+    <div class="tracker-summary" style="margin-bottom:14px;">
+      <div class="tracker-summary-top">
+        <div>
+          <div class="tracker-summary-name">${prod.name}</div>
+          <div class="tracker-summary-meta">Launch: ${formatDate(prod.launchDate)}</div>
+        </div>
+        <div class="tracker-pct-badge">${pct}%</div>
+      </div>
+      <div class="tracker-progress-wrap">
+        <div class="tracker-progress-fill" style="width:${pct}%"></div>
+      </div>
+    </div>
+    <div class="panel" style="overflow-x:auto;padding:14px 18px;">
+      <div class="gantt-header">
+        <div class="gantt-label-col"></div>
+        <div class="gantt-months">${monthLabels}</div>
+      </div>
+      ${rows}
+    </div>`;
+}
+
 // Register all real functions with the global dispatcher
 window.__npd_init({
   handleSignIn,
@@ -4077,6 +4337,10 @@ window.__npd_init({
   saveAsTemplatePrompt:    window.saveAsTemplatePrompt,
   showAddTaskToProduct:    window.showAddTaskToProduct,
   addTaskToProduct:        window.addTaskToProduct,
+  setTrackerView:          window.setTrackerView,
+  moveKanbanTask:          window.moveKanbanTask,
+  kbDragStart:             window.kbDragStart,
+  kbDrop:                  window.kbDrop,
 });
 
 </script>
@@ -4824,6 +5088,63 @@ textarea.input-field { resize: vertical; line-height: 1.6; }
 
 .task-locked-row { opacity:.65; }
 .tracker-row-blocked { background:rgba(251,191,36,.04); }
+
+/* ─── PHASE B: KANBAN BOARD ─── */
+.kb-board { display:grid; grid-template-columns:repeat(3,1fr); gap:14px; min-width:480px; }
+@media(max-width:700px) { .kb-board { grid-template-columns:1fr; } }
+
+.kb-col { border-radius:10px; min-height:200px; display:flex; flex-direction:column; }
+.kb-col-todo     { background:#F3F4F6; }
+.kb-col-progress { background:#FEF3C7; }
+.kb-col-done     { background:#DCFCE7; }
+
+.kb-col-header { display:flex; align-items:center; justify-content:space-between; padding:10px 14px; border-radius:10px 10px 0 0; }
+.kb-col-label  { font-size:12px; font-weight:700; text-transform:uppercase; letter-spacing:.06em; color:var(--text-mid); }
+.kb-col-count  { font-size:11px; background:rgba(0,0,0,.08); color:var(--text-mid); padding:2px 8px; border-radius:99px; font-weight:600; }
+.kb-col-body   { flex:1; padding:8px 10px; display:flex; flex-direction:column; gap:8px; }
+.kb-empty      { font-size:12px; color:var(--text-muted); text-align:center; padding:20px 0; }
+
+.kb-card {
+  background:white; border-radius:8px; padding:12px 12px 8px;
+  box-shadow:0 1px 3px rgba(0,0,0,.08); cursor:grab; border:1.5px solid transparent;
+  transition:box-shadow .15s, border-color .15s;
+}
+.kb-card:hover      { box-shadow:0 3px 10px rgba(0,0,0,.12); border-color:var(--border-mid); }
+.kb-card:active     { cursor:grabbing; }
+.kb-card-blocked    { opacity:.6; cursor:not-allowed; border-color:var(--amber); }
+.kb-card-title      { font-size:13px; font-weight:500; color:var(--text); margin-bottom:6px; line-height:1.4; }
+.kb-card-meta       { display:flex; align-items:center; gap:6px; flex-wrap:wrap; margin-bottom:6px; }
+.kb-card-owner      { font-size:11px; color:var(--text-muted); background:var(--bg); padding:2px 7px; border-radius:99px; }
+.kb-card-actions    { display:flex; gap:4px; flex-wrap:wrap; margin-top:6px; padding-top:6px; border-top:1px solid var(--border); }
+.kb-move-btn        { font-size:10px; padding:3px 8px; border:1px solid var(--border-mid); border-radius:5px; background:none; cursor:pointer; color:var(--text-mid); font-family:inherit; transition:background .1s; }
+.kb-move-btn:hover  { background:var(--bg); }
+.kb-move-done       { color:var(--green); border-color:var(--green); }
+.kb-move-done:hover { background:var(--green-light); }
+
+/* ─── PHASE B: TRACKER GANTT (task bars) ─── */
+.tg-bar {
+  position:absolute; top:6px; bottom:6px; border-radius:4px;
+  min-width:6px; cursor:pointer; transition:opacity .15s;
+}
+.tg-bar:hover { opacity:.8; }
+.tg-bar:hover .gantt-tooltip { display:block; }
+.tg-bar-ontrack  { background:var(--green); }
+.tg-bar-delayed  { background:var(--red); }
+.tg-bar-complete { background:var(--blue); }
+.tg-bar-blocked  { background:var(--amber); }
+
+.tg-link {
+  position:absolute; top:50%; height:2px; margin-top:-1px;
+  background:var(--border-mid); border-radius:99px;
+  z-index:0; pointer-events:none;
+}
+
+.tg-status-dot { display:inline-flex; align-items:center; justify-content:center; width:16px; height:16px; border-radius:50%; font-size:9px; font-weight:700; margin-right:4px; flex-shrink:0; }
+.tg-dot-complete    { background:var(--blue);  color:white; }
+.tg-dot-delayed     { background:var(--red);   color:white; }
+.tg-dot-on-track    { background:var(--green); color:white; }
+.tg-dot-on\\-track { background:var(--green); color:white; }
+.tg-dot-blocked     { background:var(--amber); color:white; }
 </style>
 
 <!-- ══════════════════════════════════════════
