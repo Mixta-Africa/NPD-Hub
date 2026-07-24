@@ -618,6 +618,18 @@ async function loadTeamMembers() {
   }
 }
 
+// ── DEPARTMENTS (editable from Circuit Box) ──────────────────
+let DEPARTMENTS = {
+  commercial: { name: 'Commercial Strategy', colour: '#2563EB', emails: [] },
+  design:     { name: 'Design',              colour: '#7C3AED', emails: [] },
+  finplan:    { name: 'Financial Planning',  colour: '#059669', emails: [] },
+  amc:        { name: 'AMC',                 colour: '#C0282D', emails: [] },
+  operations: { name: 'Operations',          colour: '#D97706', emails: [] },
+  mcc:        { name: 'MCC',                 colour: '#0891B2', emails: [] },
+  legal:      { name: 'Legal',               colour: '#6B7280', emails: [] },
+  ipd:        { name: 'IPD',                 colour: '#9D174D', emails: [] },
+};
+
 // ── FEATURE FLAGS (defaults — overridden by Firebase /config/features) ──
 let FEATURES = {
   deadlineAlerts:   true,
@@ -641,11 +653,12 @@ let SYS_CONFIG = {
 // ── Load all config from Firebase on startup ──────────────────
 async function loadAppConfig() {
   try {
-    const [pillarsSnap, stkSnap, featSnap, sysSnap] = await Promise.all([
+    const [pillarsSnap, stkSnap, featSnap, sysSnap, deptSnap] = await Promise.all([
       get(ref(db, 'config/pillars')),
       get(ref(db, 'config/stakeholders')),
       get(ref(db, 'config/features')),
       get(ref(db, 'config/system')),
+      get(ref(db, 'config/departments')),
     ]);
     if (pillarsSnap.exists()) {
       const p = pillarsSnap.val();
@@ -657,6 +670,7 @@ async function loadAppConfig() {
     }
     if (featSnap.exists()) FEATURES    = { ...FEATURES, ...featSnap.val() };
     if (sysSnap.exists())  SYS_CONFIG  = { ...SYS_CONFIG, ...sysSnap.val() };
+    if (deptSnap.exists()) DEPARTMENTS = { ...DEPARTMENTS, ...deptSnap.val() };
   } catch(e) {
     console.warn('Config load failed, using defaults:', e.message);
   }
@@ -1089,11 +1103,14 @@ function buildTaskRow(t, i) {
         <input type="text" class="input-field" placeholder="e.g. Design" value="${t.owner||''}"
           onblur="updateEditingTask('${t.id}','owner',this.value)"/>
       </div>
-      ${predOptions ? `<div class="task-edit-col task-edit-col-wide">
-        <label class="form-label">Depends on</label>
-        <select class="select-field" multiple style="height:60px;"
-          onchange="updateEditingTaskPreds('${t.id}',this)">${predOptions}</select>
-      </div>` : ''}
+      <div class="task-edit-col task-edit-col-wide">
+        <label class="form-label">Depends on <span class="form-hint">— hold Ctrl/Cmd to select multiple</span></label>
+        <select class="select-field" multiple style="height:56px;font-size:12px;"
+          onchange="updateEditingTaskPreds('${t.id}',this)">
+          <option value="" disabled style="color:var(--text-muted);">No dependency</option>
+          ${predOptions}
+        </select>
+      </div>
     </div>
   </div>`;
 }
@@ -1998,7 +2015,22 @@ function renderTrackerTable(prod, filter) {
 
 window.updatePillarStatus = async (productId, taskId, newStatus) => {
   try {
-    const prod = trackerProductsCache[productId] || productListCache[productId];
+    const prod  = trackerProductsCache[productId] || productListCache[productId];
+    const tasks = getProductTasks(prod);
+
+    // Enforce blocking: can't complete if a predecessor is incomplete
+    if (newStatus === 'complete') {
+      const task    = tasks.find(t => t.id === taskId);
+      const blocked = (task?.predecessors || []).filter(pid => {
+        const dep = tasks.find(t => t.id === pid);
+        return dep && dep.status !== 'complete';
+      });
+      if (blocked.length > 0) {
+        const names = blocked.map(pid => tasks.find(t => t.id === pid)?.title || pid).join(', ');
+        showToast('Cannot complete — blocked by: ' + names, 'error');
+        return;
+      }
+    }
     // Support both old pillars format and new tasks format
     if (prod?.tasks?.[taskId]) {
       await set(ref(db, `products/${productId}/tasks/${taskId}/status`), newStatus);
@@ -3093,6 +3125,9 @@ function renderSuperAdmin(el) {
       <button class="sa-tab" onclick="switchSATab('pillars', this)">Pillars</button>
       <button class="sa-tab" onclick="switchSATab('stakeholders', this)">Stakeholders</button>
       <button class="sa-tab" onclick="switchSATab('config', this)">System Config</button>
+      <button class="sa-tab" onclick="switchSATab('departments', this)">Departments</button>
+      <button class="sa-tab" onclick="switchSATab('templates', this)">Templates</button>
+      <button class="sa-tab" onclick="switchSATab('tasks', this)">All Tasks</button>
       <button class="sa-tab" onclick="switchSATab('audit', this)">Audit Log</button>
       <button class="sa-tab" onclick="switchSATab('users', this)">Users</button>
       <button class="sa-tab" onclick="switchSATab('products', this)">Products</button>
@@ -3125,6 +3160,9 @@ async function loadSATab(tab) {
     case 'stakeholders':  await renderSAStakeholders(el);  break;
     case 'config':        await renderSAConfig(el);        break;
     case 'audit':         await renderSAAudit(el);         break;
+    case 'departments':   await renderSADepartments(el);   break;
+    case 'templates':     await renderSATemplates(el);      break;
+    case 'tasks':         await renderSAAllTasks(el);       break;
     case 'users':         await renderSAUsers(el);         break;
     case 'products':      await renderSAProducts(el);      break;
     case 'maintenance':   await renderSAMaintenance(el);   break;
@@ -4257,6 +4295,310 @@ function renderTrackerGantt(prod) {
     </div>`;
 }
 
+/* ══ PHASE D: DEPARTMENTS TAB ═══════════════════════════════ */
+async function renderSADepartments(el) {
+  const snap = await get(ref(db, 'config/departments'));
+  if (snap.exists()) DEPARTMENTS = { ...DEPARTMENTS, ...snap.val() };
+
+  const deptRows = Object.entries(DEPARTMENTS).map(([id, d]) => `
+    <div class="cb-pillar-row">
+      <div class="cb-pillar-info">
+        <div class="cb-pillar-name" style="display:flex;align-items:center;gap:8px;">
+          <span style="display:inline-block;width:12px;height:12px;border-radius:50%;background:${d.colour||'#6B7280'};flex-shrink:0;"></span>
+          ${d.name}
+        </div>
+        <div class="cb-pillar-owner">${(d.emails||[]).length} email${(d.emails||[]).length!==1?'s':''} · key: ${id}</div>
+      </div>
+      <div class="cb-pillar-actions">
+        <button class="btn-secondary-sm" onclick="editDepartment('${id}')">Edit</button>
+        <button class="btn-danger-xs" onclick="deleteDepartment('${id}')">✕</button>
+      </div>
+    </div>`).join('') || '<div class="muted" style="padding:12px;">No departments configured.</div>';
+
+  el.innerHTML = `
+    <div class="panel" style="margin-bottom:14px;">
+      <div class="panel-header">
+        <span class="panel-title">Departments & Teams</span>
+        <button class="btn-primary-sm" onclick="showAddDepartment()">+ Add dept</button>
+      </div>
+      <div class="panel-body" style="padding:0;">${deptRows}</div>
+    </div>
+    <div id="dept-edit-panel"></div>`;
+}
+
+window.editDepartment = (id) => {
+  const d  = DEPARTMENTS[id];
+  if (!d) return;
+  const el = document.getElementById('dept-edit-panel');
+  if (!el) return;
+  el.innerHTML = `
+    <div class="panel">
+      <div class="panel-header"><span class="panel-title">Edit — ${d.name}</span></div>
+      <div class="panel-body">
+        <div class="form-row"><label class="form-label">Department name</label>
+          <input id="de-name" class="input-field" value="${d.name}"/></div>
+        <div class="form-row"><label class="form-label">Colour</label>
+          <input id="de-colour" type="color" value="${d.colour||'#6B7280'}" style="width:60px;height:36px;padding:2px;border:1px solid var(--border-mid);border-radius:6px;cursor:pointer;"/></div>
+        <div class="form-row"><label class="form-label">Emails <span class="form-hint">— one per line</span></label>
+          <textarea id="de-emails" class="input-field" rows="4"></textarea></div>
+        <div class="form-actions">
+          <button class="btn-outline" onclick="document.getElementById('dept-edit-panel').innerHTML=''">Cancel</button>
+          <button class="btn-primary" onclick="saveDepartment('${id}')">Save</button>
+        </div>
+      </div>
+    </div>`;
+  el.scrollIntoView({ behavior:'smooth' });
+  // Set textarea value after DOM renders
+  setTimeout(() => {
+    const ta = document.getElementById('de-emails');
+    if (ta) ta.value = (d.emails||[]).join('\n');
+  }, 10);
+};
+
+window.saveDepartment = async (id) => {
+  const name   = document.getElementById('de-name')?.value.trim();
+  const colour = document.getElementById('de-colour')?.value || '#6B7280';
+  const emailsRaw = document.getElementById('de-emails')?.value || '';
+  const emails = emailsRaw.split(/\r?\n/).map(e => e.trim()).filter(Boolean);
+  if (!name) { showToast('Name required.', 'error'); return; }
+  DEPARTMENTS[id] = { ...DEPARTMENTS[id], name, colour, emails };
+  try {
+    await set(ref(db, 'config/departments/' + id), DEPARTMENTS[id]);
+    showToast('Department saved.', 'success');
+    loadSATab('departments');
+  } catch(e) { showToast('Save failed: ' + e.message, 'error'); }
+};
+
+window.deleteDepartment = async (id) => {
+  if (!confirm('Delete this department?')) return;
+  delete DEPARTMENTS[id];
+  try {
+    await set(ref(db, 'config/departments/' + id), null);
+    showToast('Department deleted.', 'success');
+    loadSATab('departments');
+  } catch(e) { showToast('Failed: ' + e.message, 'error'); }
+};
+
+window.showAddDepartment = () => {
+  const el = document.getElementById('dept-edit-panel');
+  if (!el) return;
+  const newId = 'dept_' + Date.now();
+  el.innerHTML = `
+    <div class="panel">
+      <div class="panel-header"><span class="panel-title">Add department</span></div>
+      <div class="panel-body">
+        <div class="form-row"><label class="form-label">Key (no spaces) <span class="req">*</span></label>
+          <input id="de-key" class="input-field" placeholder="e.g. legal"/></div>
+        <div class="form-row"><label class="form-label">Name <span class="req">*</span></label>
+          <input id="de-name" class="input-field" placeholder="e.g. Legal"/></div>
+        <div class="form-row"><label class="form-label">Colour</label>
+          <input id="de-colour" type="color" value="#6B7280" style="width:60px;height:36px;padding:2px;border:1px solid var(--border-mid);border-radius:6px;cursor:pointer;"/></div>
+        <div class="form-row"><label class="form-label">Emails <span class="form-hint">— one per line</span></label>
+          <textarea id="de-emails" class="input-field" rows="3" placeholder="team@mixtafrica.com"></textarea></div>
+        <div class="form-actions">
+          <button class="btn-outline" onclick="document.getElementById('dept-edit-panel').innerHTML=''">Cancel</button>
+          <button class="btn-primary" onclick="addNewDepartment()">Add</button>
+        </div>
+      </div>
+    </div>`;
+  el.scrollIntoView({ behavior:'smooth' });
+};
+
+window.addNewDepartment = async () => {
+  const key    = (document.getElementById('de-key')?.value.trim() || '').replace(/\s+/g,'_').toLowerCase();
+  const name   = document.getElementById('de-name')?.value.trim();
+  const colour = document.getElementById('de-colour')?.value || '#6B7280';
+  const emailsRaw = document.getElementById('de-emails')?.value || '';
+  const emails = emailsRaw.split(/\r?\n/).map(e => e.trim()).filter(Boolean);
+  if (!key || !name) { showToast('Key and name required.', 'error'); return; }
+  DEPARTMENTS[key] = { name, colour, emails };
+  try {
+    await set(ref(db, 'config/departments/' + key), DEPARTMENTS[key]);
+    showToast('Department added.', 'success');
+    loadSATab('departments');
+  } catch(e) { showToast('Failed: ' + e.message, 'error'); }
+};
+
+/* ══ PHASE E: TEMPLATES TAB ══════════════════════════════════ */
+async function renderSATemplates(el) {
+  const snap = await get(ref(db, 'templates'));
+  SAVED_TEMPLATES = snap.val() || {};
+  const entries = Object.entries(SAVED_TEMPLATES);
+
+  if (entries.length === 0) {
+    el.innerHTML = '<div class="empty-state-sm"><span class="empty-icon">📋</span><h3>No saved templates</h3><p>When you create a product with a custom task setup and save it as a template, it will appear here.</p></div>';
+    return;
+  }
+
+  el.innerHTML = `
+    <div class="panel">
+      <div class="panel-header"><span class="panel-title">Saved templates (${entries.length})</span></div>
+      <div class="panel-body" style="padding:0;">
+        ${entries.map(([id, t]) => `
+          <div class="cb-pillar-row">
+            <div class="cb-pillar-info">
+              <div class="cb-pillar-name">${t.name}</div>
+              <div class="cb-pillar-owner">${(t.tasks||[]).length} tasks · Created by ${t.createdBy?.split('@')[0] || '?'} · ${new Date(t.createdAt||0).toLocaleDateString('en-GB')}</div>
+            </div>
+            <div class="cb-pillar-actions">
+              <button class="btn-secondary-sm" onclick="previewTemplate('${id}')">Preview</button>
+              <button class="btn-danger-xs"    onclick="deleteTemplate('${id}')">Delete</button>
+            </div>
+          </div>`).join('')}
+      </div>
+    </div>
+    <div id="template-preview-panel"></div>`;
+}
+
+window.previewTemplate = (id) => {
+  const t  = SAVED_TEMPLATES[id];
+  if (!t) return;
+  const el = document.getElementById('template-preview-panel');
+  if (!el) return;
+  el.innerHTML = `
+    <div class="panel" style="margin-top:14px;">
+      <div class="panel-header"><span class="panel-title">Preview — ${t.name}</span></div>
+      <div class="panel-body" style="padding:0;">
+        ${(t.tasks||[]).map((task, i) => `
+          <div class="pillar-date-row">
+            <div class="pillar-date-num">${i+1}</div>
+            <div class="pillar-date-name">${task.title}<span class="pillar-owner">${task.owner||'—'}</span></div>
+          </div>`).join('')}
+      </div>
+    </div>`;
+  el.scrollIntoView({ behavior:'smooth' });
+};
+
+window.deleteTemplate = async (id) => {
+  if (!confirm('Delete this template?')) return;
+  delete SAVED_TEMPLATES[id];
+  try {
+    await set(ref(db, 'templates/' + id), null);
+    showToast('Template deleted.', 'success');
+    loadSATab('templates');
+  } catch(e) { showToast('Failed: ' + e.message, 'error'); }
+};
+
+/* ══ CIRCUIT BOX: ALL TASKS VIEW ════════════════════════════ */
+async function renderSAAllTasks(el) {
+  el.innerHTML = '<div class="loading-row" style="padding:24px;">Loading all products and tasks...</div>';
+  const snap = await get(ref(db, 'products'));
+  const products = Object.values(snap.val() || {}).filter(p => p.status !== 'archived');
+
+  if (products.length === 0) {
+    el.innerHTML = '<div class="empty-state-sm"><p>No products yet.</p></div>';
+    return;
+  }
+
+  const sections = products.map(prod => {
+    const tasks  = getProductTasks(prod);
+    const locked = isProductLocked(prod);
+    const rows   = tasks.map((t, i) => {
+      const st = t.status || 'on-track';
+      const stCls = st === 'complete' ? 'pill-blue' : st === 'delayed' ? 'pill-red' : 'pill-green';
+      const pred  = (t.predecessors||[]).length > 0
+        ? `<span style="font-size:10px;color:var(--amber);">🔗 ${t.predecessors.length} dep${t.predecessors.length!==1?'s':''}</span>`
+        : '';
+      return `<tr class="tracker-row">
+        <td class="tracker-num">${i+1}</td>
+        <td class="tracker-pillar">
+          <div class="tracker-pillar-name">${locked ? '🔒 ' : ''}${t.title||t.name||'Untitled'}</div>
+          <div class="tracker-pillar-owner">${t.owner||'—'}</div>
+        </td>
+        <td style="font-size:12px;color:var(--text-muted);">${t.deadline||'—'}</td>
+        <td><span class="pill ${stCls}" style="font-size:11px;">${st}</span> ${pred}</td>
+        <td>
+          ${isSuperAdmin ? `<button class="btn-secondary-sm" onclick="saEditTask('${prod.id}','${t.id}')">Edit</button>` : ''}
+        </td>
+      </tr>`;
+    }).join('');
+
+    return `
+      <div class="panel" style="margin-bottom:14px;">
+        <div class="panel-header">
+          <span class="panel-title">${prod.name}</span>
+          <span style="font-size:12px;color:var(--text-muted);">${tasks.length} tasks · ${locked ? '🔒 Locked' : 'Editable'}</span>
+        </div>
+        <div style="overflow:auto;">
+          <table class="tracker-table" style="min-width:500px;">
+            <thead><tr>
+              <th style="width:32px;">#</th><th>Task</th>
+              <th style="width:110px;">Deadline</th>
+              <th style="width:120px;">Status</th>
+              <th style="width:60px;"></th>
+            </tr></thead>
+            <tbody>${rows}</tbody>
+          </table>
+        </div>
+      </div>`;
+  }).join('');
+
+  el.innerHTML = sections;
+}
+
+window.saEditTask = async (productId, taskId) => {
+  // Super admin can edit any task regardless of lock
+  const snap = await get(ref(db, 'products/' + productId + '/tasks/' + taskId));
+  const task = snap.val();
+  if (!task) { showToast('Task not found.', 'error'); return; }
+
+  let modal = document.getElementById('sa-modal');
+  if (!modal) {
+    modal = document.createElement('div');
+    modal.id = 'sa-modal';
+    modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.45);display:flex;align-items:center;justify-content:center;z-index:2000;padding:20px;';
+    document.body.appendChild(modal);
+  }
+  modal.innerHTML = `
+    <div style="background:#fff;border-radius:12px;width:100%;max-width:480px;overflow:hidden;box-shadow:0 8px 40px rgba(0,0,0,0.2);">
+      <div style="background:#C0282D;padding:18px 24px;">
+        <div style="color:white;font-size:11px;letter-spacing:.1em;text-transform:uppercase;margin-bottom:2px;">Super Admin · Edit Task</div>
+        <div style="color:white;font-size:17px;font-weight:700;">${task.title||'Untitled'}</div>
+      </div>
+      <div style="padding:22px;">
+        <div class="form-row"><label class="form-label">Task name</label>
+          <input id="sae-title" class="input-field" value="${task.title||''}"/></div>
+        <div class="form-row"><label class="form-label">Owner dept</label>
+          <input id="sae-owner" class="input-field" value="${task.owner||''}"/></div>
+        <div class="form-row"><label class="form-label">Start date</label>
+          <input type="date" id="sae-start" class="input-field" value="${task.startDate||''}"/></div>
+        <div class="form-row"><label class="form-label">Deadline</label>
+          <input type="date" id="sae-deadline" class="input-field" value="${task.deadline||''}"/></div>
+        <div class="form-row"><label class="form-label">Status</label>
+          <select id="sae-status" class="select-field" style="width:100%;">
+            <option value="on-track"  ${task.status==='on-track' ?'selected':''}>On Track</option>
+            <option value="delayed"   ${task.status==='delayed'  ?'selected':''}>Delayed</option>
+            <option value="complete"  ${task.status==='complete' ?'selected':''}>Complete</option>
+          </select></div>
+        <div class="form-actions">
+          <button class="btn-outline" onclick="document.getElementById('sa-modal').style.display='none'">Cancel</button>
+          <button class="btn-primary" onclick="saeSaveTask('${productId}','${taskId}')">Save changes</button>
+        </div>
+      </div>
+    </div>`;
+  modal.style.display = 'flex';
+};
+
+window.saeSaveTask = async (productId, taskId) => {
+  const updates = {
+    title:     document.getElementById('sae-title')?.value.trim()    || '',
+    owner:     document.getElementById('sae-owner')?.value.trim()    || '',
+    startDate: document.getElementById('sae-start')?.value          || '',
+    deadline:  document.getElementById('sae-deadline')?.value       || '',
+    status:    document.getElementById('sae-status')?.value         || 'on-track',
+    updatedAt: Date.now(),
+    updatedBy: currentUser.email,
+  };
+  try {
+    await Promise.all(Object.entries(updates).map(([k,v]) =>
+      set(ref(db, `products/${productId}/tasks/${taskId}/${k}`), v)
+    ));
+    document.getElementById('sa-modal').style.display = 'none';
+    showToast('Task updated by super admin.', 'success');
+    loadSATab('tasks');
+  } catch(e) { showToast('Save failed: ' + e.message, 'error'); }
+};
+
 // Register all real functions with the global dispatcher
 window.__npd_init({
   handleSignIn,
@@ -4341,6 +4683,15 @@ window.__npd_init({
   moveKanbanTask:          window.moveKanbanTask,
   kbDragStart:             window.kbDragStart,
   kbDrop:                  window.kbDrop,
+  editDepartment:          window.editDepartment,
+  saveDepartment:          window.saveDepartment,
+  deleteDepartment:        window.deleteDepartment,
+  showAddDepartment:       window.showAddDepartment,
+  addNewDepartment:        window.addNewDepartment,
+  previewTemplate:         window.previewTemplate,
+  deleteTemplate:          window.deleteTemplate,
+  saEditTask:              window.saEditTask,
+  saeSaveTask:             window.saeSaveTask,
 });
 
 </script>
@@ -5145,6 +5496,9 @@ textarea.input-field { resize: vertical; line-height: 1.6; }
 .tg-dot-on-track    { background:var(--green); color:white; }
 .tg-dot-on\\-track { background:var(--green); color:white; }
 .tg-dot-blocked     { background:var(--amber); color:white; }
+
+/* ─── PHASE C/D/E: MISC ─── */
+.tg-dot-on-track { background:var(--green); color:white; }
 </style>
 
 <!-- ══════════════════════════════════════════
