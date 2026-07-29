@@ -946,6 +946,13 @@ function renderProductCard(p) {
           <span class="pcf-meta-label">Owner</span>
           <span class="pcf-meta-val">${p.ownerName || 'Unassigned'}</span>
         </div>
+        <div class="pcf-meta-item" style="margin-left:auto;">
+          ${p.alertsEnabled === false
+            ? '<span style="font-size:11px;color:var(--text-muted);">🔕 Alerts off</span>'
+            : (p.alertRecipients?.length > 0
+                ? '<span style="font-size:11px;color:var(--blue);">🔔 Custom recipients</span>'
+                : '<span style="font-size:11px;color:var(--green);">🔔 Alerts on</span>')}
+        </div>
       </div>
       <div class="pcf-actions">
         <button class="btn-secondary-sm" onclick="viewProduct('${p.id}')">View pillars</button>
@@ -971,6 +978,13 @@ window.editProduct = (id) => {
   document.getElementById('modal-title-text').textContent = 'Edit — ' + p.name;
   document.getElementById('modal-body-content').innerHTML = buildProductForm(p);
   document.getElementById('create-product-modal').style.display = 'flex';
+  // Set textarea values that can't be set inside template literals safely
+  setTimeout(() => {
+    const recipEl = document.getElementById('f-alert-recipients');
+    if (recipEl && p.alertRecipients?.length > 0) {
+      recipEl.value = p.alertRecipients.join('\n');
+    }
+  }, 20);
 };
 
 window.closeProductModal = () => {
@@ -1193,6 +1207,22 @@ function buildEditProductForm(p) {
       <button class="btn-primary-sm" onclick="showAddTaskToProduct('${p.id}')">+ Add task</button>
     </div>
     <div>${taskRows}</div>
+    <div class="form-section-label" style="margin-top:20px;">Alert settings</div>
+    <div class="form-row" style="display:flex;align-items:center;justify-content:space-between;">
+      <div>
+        <div style="font-size:13px;font-weight:500;">Deadline alerts</div>
+        <div style="font-size:12px;color:var(--text-muted);">Send daily reminders for overdue and upcoming tasks</div>
+      </div>
+      <label class="cb-toggle">
+        <input type="checkbox" id="f-alerts-enabled" ${(p.alertsEnabled ?? true) ? 'checked' : ''}/>
+        <span class="cb-toggle-track"><span class="cb-toggle-thumb"></span></span>
+      </label>
+    </div>
+    <div class="form-row">
+      <label class="form-label">Alert recipients <span class="form-hint">— override default (product owner). One email per line.</span></label>
+      <textarea id="f-alert-recipients" class="input-field" rows="3"
+        placeholder="Leave blank to default to the product owner&#10;e.g. colleague@mixtafrica.com"></textarea>
+    </div>
     <div class="form-actions">
       <button class="btn-outline" onclick="closeProductModal()">Cancel</button>
       <button class="btn-primary" onclick="saveProduct('${p.id}')">Save changes</button>
@@ -1304,9 +1334,11 @@ window.saveProduct = async (existingId) => {
     tasks,
     status:     'active',
     taskSchema: isNew ? (_editingTasks.length > 0 && _editingTasks[0].pillarId ? 'sop' : 'custom') : (productListCache[existingId]?.taskSchema || 'sop'),
-    ownerId:    ownerKey,
-    ownerName:  ownerName,
-    sharedWith: isNew ? {} : (productListCache[existingId]?.sharedWith || {}),
+    ownerId:      ownerKey,
+    ownerName:    ownerName,
+    sharedWith:   isNew ? {} : (productListCache[existingId]?.sharedWith || {}),
+    alertsEnabled:   isNew ? true : (document.getElementById('f-alerts-enabled')?.checked ?? (productListCache[existingId]?.alertsEnabled ?? true)),
+    alertRecipients: isNew ? [] : (document.getElementById('f-alert-recipients')?.value?.split(/\r?\n/).map(e=>e.trim()).filter(Boolean) || productListCache[existingId]?.alertRecipients || []),
     createdAt:  isNew ? Date.now() : (productListCache[existingId]?.createdAt || Date.now()),
     updatedAt:  Date.now(),
     createdBy:  isNew ? currentUser.email : (productListCache[existingId]?.createdBy || currentUser.email),
@@ -2708,21 +2740,25 @@ window.triggerDeadlineCheck = async () => {
           const threshold = SYS_CONFIG.alertThresholdDays || 3;
           if (diff > threshold) return;
 
-          // Find dept emails — from task owner dept or STAKEHOLDERS pillar mapping
-          let deptEmails = (task.ownerEmails || []);
-          if (deptEmails.length === 0 && task.pillarId) {
-            deptEmails = STAKEHOLDERS
-              .filter(s => s.enabled !== false && (s.pillarIds||[]).includes(task.pillarId))
-              .map(s => s.email);
+          // Skip if alerts disabled for this product
+          if (prod.alertsEnabled === false) return;
+
+          // Recipient priority:
+          // 1. Manual alertRecipients set on the product
+          // 2. Product owner's email
+          // 3. Current logged-in user
+          let deptEmails = [];
+          if (prod.alertRecipients && prod.alertRecipients.length > 0) {
+            deptEmails = prod.alertRecipients;
+          } else {
+            // Default: the product owner
+            const ownerMember = TEAM_MEMBERS[prod.ownerId];
+            if (ownerMember?.email) {
+              deptEmails = [ownerMember.email];
+            } else {
+              deptEmails = [currentUser.email];
+            }
           }
-          if (deptEmails.length === 0 && task.owner) {
-            // Fall back to matching dept name
-            deptEmails = STAKEHOLDERS
-              .filter(s => s.enabled !== false && s.dept === task.owner)
-              .map(s => s.email);
-          }
-          // Final fallback: admin email
-          if (deptEmails.length === 0) deptEmails = [currentUser.email];
 
           alerts.push({
             productName: prod.name,
