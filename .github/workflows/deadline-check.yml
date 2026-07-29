@@ -56,8 +56,12 @@ jobs:
             const today  = new Date(); today.setHours(0,0,0,0);
             const THRESHOLD_DAYS = 3; // send alerts for overdue + within 3 days
 
-            console.log('Fetching products from Firebase...');
-            const data = await httpsGet(dbUrl + '/products.json');
+            console.log('Fetching products and users from Firebase...');
+            const [data, usersData] = await Promise.all([
+              httpsGet(dbUrl + '/products.json'),
+              httpsGet(dbUrl + '/users.json'),
+            ]);
+            const users = usersData || {};
             if (!data) { console.log('No products found.'); return; }
 
             const alerts = [];
@@ -91,13 +95,28 @@ jobs:
                 if (diff > THRESHOLD_DAYS) return;
 
                 const daysOverdue = diff < 0 ? Math.abs(diff) : 0;
+
+                // Skip if alerts disabled for this product
+                if (prod.alertsEnabled === false) return;
+
+                // Recipient: manual override → owner → fallback
+                let deptEmails = [];
+                if (prod.alertRecipients && prod.alertRecipients.length > 0) {
+                  deptEmails = prod.alertRecipients;
+                } else if (prod.ownerId && users[prod.ownerId]?.email) {
+                  deptEmails = [users[prod.ownerId].email];
+                } else {
+                  console.log('No recipient for ' + prod.name + ' — skipping');
+                  return;
+                }
+
                 alerts.push({
                   productName: prod.name,
                   productId:   prod.id,
                   pillarName:  task.title || task.name || 'Unknown task',
                   pillarId:    task.id,
                   ownerDept:   task.owner || 'Unknown',
-                  deptEmails:  task.ownerEmails || [],
+                  deptEmails,
                   daysUntil:   diff,
                   daysOverdue,
                   deadline:    task.deadline,
