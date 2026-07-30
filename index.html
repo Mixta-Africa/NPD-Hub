@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
 <title>Mixta Africa — Product Development Hub</title>
 <link rel="preconnect" href="https://fonts.googleapis.com"/>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&family=Playfair+Display:wght@600&display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&family=Playfair+Display:wght@600&display=swap" rel="stylesheet"/>
 <!-- Favicon + PWA icons -->
 <link rel="icon" type="image/jpeg" href="Mixta%20Africa.jpg"/>
 <link rel="apple-touch-icon" href="Mixta%20Africa.jpg"/>
@@ -2183,23 +2183,9 @@ function renderTrackerTable(prod, filter) {
   }).join('')
 
   const overdueHtml = overdue > 0 ? `<span style="color:var(--red)">${overdue} overdue</span>` : '0 overdue';
-  // Apply filter from dashboard navigation
-  if (filter) {
-    setTimeout(() => {
-      document.querySelectorAll('.tracker-row').forEach(row => {
-        const statusCell = row.querySelector('.tracker-status');
-        const statusSel  = statusCell?.querySelector('select');
-        const statusSpan = statusCell?.querySelector('.task-status');
-        const st = statusSel?.value || statusSpan?.textContent?.toLowerCase().replace(' ','-') || '';
-        const isOntrack  = !['complete','overdue'].includes(st) && st !== 'not-started' || st === 'in-progress';
-        const isOverdue  = row.querySelector('.pill-red') !== null;
-        const statusBtns = row.querySelectorAll('.status-btn.active');
-        const activeSt   = [...statusBtns].map(b => b.textContent.trim().toLowerCase())[0] || '';
-        if (filter === 'ontrack' && !activeSt.includes('on track')) row.style.opacity = '0.3';
-        if (filter === 'overdue' && !row.querySelector('.pill-red')) row.style.opacity = '0.3';
-      });
-    }, 50);
-  }
+  // critCount must be declared before body.innerHTML uses it in the template literal
+  const criticalIds = computeCriticalPath(allTasks);
+  const critCount   = criticalIds.size;
   body.innerHTML = `
     <div class="tracker-summary">
       <div class="tracker-summary-top">
@@ -2223,14 +2209,26 @@ function renderTrackerTable(prod, filter) {
     <div class="panel" style="overflow:auto;">
       <table class="tracker-table">
         <thead><tr>
-          <th style="width:32px;">#</th><th>Pillar</th>
+          <th style="width:32px;">#</th><th>Task</th>
           <th style="width:180px;">Deadline</th>
-          <th style="width:160px;">Status</th>
+          <th style="width:200px;">Status</th>
           <th>Notes</th>
         </tr></thead>
         <tbody>${rows}</tbody>
       </table>
     </div>`;
+
+  // Apply dashboard filter AFTER DOM renders
+  if (filter) {
+    setTimeout(() => {
+      document.querySelectorAll('.tracker-row').forEach(row => {
+        const statusBtns = row.querySelectorAll('.status-btn.active');
+        const activeSt   = [...statusBtns].map(b => b.textContent.trim().toLowerCase())[0] || '';
+        if (filter === 'ontrack' && !activeSt.includes('on track')) row.style.opacity = '0.3';
+        if (filter === 'overdue' && !row.querySelector('.pill-red'))  row.style.opacity = '0.3';
+      });
+    }, 80);
+  }
 }
 
 window.updatePillarStatus = async (productId, taskId, newStatus) => {
@@ -5639,7 +5637,7 @@ window.__npd_init({
   --radius:     8px;
   --shadow:     0 1px 3px rgba(0,0,0,0.07), 0 1px 2px rgba(0,0,0,0.04);
 }
-body { font-family: 'Inter', sans-serif; background: var(--bg); color: var(--text); font-size: 14px; line-height: 1.5; -webkit-font-smoothing: antialiased; }
+body { font-family: 'Poppins', sans-serif; background: var(--bg); color: var(--text); font-size: 14px; line-height: 1.5; -webkit-font-smoothing: antialiased; }
 button { cursor: pointer; font-family: inherit; }
 input, select, textarea { font-family: inherit; }
 a { color: inherit; text-decoration: none; }
