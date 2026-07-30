@@ -1607,12 +1607,18 @@ window.confirmAndLaunchGAS = async () => {
       productId: prod.id,
       draftPrompt: buildOnboardingPrompt(prod, allDepts, tasks.slice(0, 8), 'the team'),
       onSend: async ({ subject, body, toEmails, ccEmails, testMode }) => {
-        await callGAS('sendComposedEmail', {
+        const result = await callGAS('sendComposedEmail', {
           subject, body, toEmails, ccEmails,
           testMode,
-          productName: prod.name,
-          folderUrl:   folderUrl || null,
+          productName:     prod.name,
+          folderUrl:       folderUrl || null,
+          isThreadStarter: true,   // ← capture thread ID
         });
+        // Store thread ID in Firebase for all future emails on this product
+        if (result.threadId) {
+          await set(ref(db, 'products/' + prod.id + '/gmailThreadId'), result.threadId);
+          if (productListCache[prod.id]) productListCache[prod.id].gmailThreadId = result.threadId;
+        }
         await logActivity(prod.id, 'status', 'Onboarding emails sent', `To: ${toEmails.length} recipients`);
         showToast(`Onboarding email sent to ${toEmails.length} recipient${toEmails.length!==1?'s':''}.`, 'success');
       },
@@ -5040,8 +5046,8 @@ async function openEmailComposer({
   ccEmails,       // array of CC emails (product defaults pre-loaded)
   productId,      // for loading product context
   draftPrompt,    // full prompt to send to Groq
-  onSend,         // async fn(finalSubject, finalBody, toEmails, ccEmails, bccEmails) called on send
-  extraContext,   // object with any extra fields for the draft
+  onSend,         // async fn(finalSubject, finalBody, toEmails, ccEmails) called on send
+  isThreadStarter, // true = this email starts the product thread
 }) {
   const prod = productListCache[productId] || {};
 
@@ -5062,8 +5068,11 @@ async function openEmailComposer({
                 overflow:hidden;display:flex;flex-direction:column;box-shadow:0 8px 40px rgba(0,0,0,.25);">
       <div style="background:#1a1a18;padding:16px 22px;flex-shrink:0;display:flex;align-items:center;justify-content:space-between;">
         <div>
-          <div style="color:rgba(255,255,255,.6);font-size:11px;letter-spacing:.08em;text-transform:uppercase;">Email Composer</div>
+          <div style="color:rgba(255,255,255,.6);font-size:11px;letter-spacing:.08em;text-transform:uppercase;">
+            ${prod.gmailThreadId ? '↩ Reply in thread' : isThreadStarter ? '🧵 New thread' : 'Email Composer'}
+          </div>
           <div style="color:white;font-size:16px;font-weight:600;margin-top:2px;">${prod.name || 'Compose email'}</div>
+          ${prod.gmailThreadId ? `<div style="color:rgba(255,255,255,.5);font-size:11px;margin-top:2px;">Will reply to existing product thread</div>` : ''}
         </div>
         <div style="display:flex;align-items:center;gap:8px;">
           <span class="email-ai-badge">⚡ AI Draft</span>
@@ -5129,7 +5138,7 @@ async function openEmailComposer({
   modal.style.display = 'flex';
 
   // Store context for send + regenerate
-  modal._emailContext = { type, draftPrompt, productId, onSend };
+  modal._emailContext = { type, draftPrompt, productId, onSend, isThreadStarter };
 
   // Generate AI draft
   try {
@@ -5176,24 +5185,38 @@ window.sendComposedEmail = async () => {
   const context = modal?._emailContext;
   if (!context) return;
 
-  const subject    = document.getElementById('ec-subject')?.value.trim() || '';
-  const body       = document.getElementById('ec-body')?.value.trim() || '';
-  const testMode   = document.getElementById('ec-send-mode')?.value === 'test';
-  const sendBtn    = document.getElementById('ec-send-btn');
+  const subject  = document.getElementById('ec-subject')?.value.trim() || '';
+  const body     = document.getElementById('ec-body')?.value.trim() || '';
+  const testMode = document.getElementById('ec-send-mode')?.value === 'test';
+  const sendBtn  = document.getElementById('ec-send-btn');
 
   if (!body) { showToast('Email body is empty.', 'error'); return; }
 
-  // Collect To and CC from pill containers
-  const toEmails  = getEmailsFromPills('ec-to-wrap');
-  const ccEmails  = getEmailsFromPills('ec-cc-wrap');
+  const toEmails = getEmailsFromPills('ec-to-wrap');
+  const ccEmails = getEmailsFromPills('ec-cc-wrap');
 
   if (toEmails.length === 0) { showToast('Add at least one recipient.', 'error'); return; }
   if (sendBtn) { sendBtn.disabled = true; sendBtn.textContent = 'Sending…'; }
 
   try {
-    await context.onSend({ subject, body, toEmails, ccEmails, testMode });
+    // Check if this product has an existing thread — route accordingly
+    const prod     = productListCache[context.productId] || {};
+    const threadId = prod.gmailThreadId;
+
+    if (threadId && !context.isThreadStarter) {
+      // ── REPLY IN THREAD ──
+      const result = await callGAS('replyToThread', {
+        threadId, emailBody: body, subject, toEmails, ccEmails,
+        testMode, productName: prod.name,
+      });
+      if (!result.ok) throw new Error(result.error || 'Reply failed');
+    } else {
+      // ── NEW EMAIL (or thread starter) ──
+      await context.onSend({ subject, body, toEmails, ccEmails, testMode });
+    }
+
     modal.style.display = 'none';
-    showToast('Email sent.', 'success');
+    showToast(threadId && !context.isThreadStarter ? 'Reply sent in thread.' : 'Email sent.', 'success');
   } catch(e) {
     showToast('Send failed: ' + e.message, 'error');
     if (sendBtn) { sendBtn.disabled = false; sendBtn.textContent = 'Send email'; }
