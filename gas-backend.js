@@ -35,9 +35,11 @@ const SENDER_NAME  = 'Mixta Africa NPD Hub';
 //  OR run installDailyTrigger() once from the Run menu to do it automatically.
 // ─────────────────────────────────────────────────────────────
 
-var FIREBASE_DB_URL = ''; // Set this — paste your Firebase RTDB URL here
+var FIREBASE_DB_URL = 'https://mixta-npd-hub-default-rtdb.firebaseio.com'; // Set this — paste your Firebase RTDB URL here
 // e.g. 'https://your-project-default-rtdb.firebaseio.com'
 // Get it from Firebase Console → Realtime Database → copy the URL
+
+var FIREBASE_DB_SECRET = 'pdz1ORn2cMha71Xft2NzbJcaR8nv2RYoTRdgTM0z';
 
 function installDailyTrigger() {
   // Delete any existing daily triggers to avoid duplicates
@@ -67,8 +69,8 @@ function dailyDeadlineCheck() {
   var THRESHOLD_DAYS = 3;
 
   // Fetch products from Firebase
-  var productsResp = UrlFetchApp.fetch(FIREBASE_DB_URL + '/products.json', { muteHttpExceptions: true });
-  var usersResp    = UrlFetchApp.fetch(FIREBASE_DB_URL + '/users.json',    { muteHttpExceptions: true });
+  var productsResp = UrlFetchApp.fetch(FIREBASE_DB_URL + '/products.json' + FIREBASE_DB_SECRET, { muteHttpExceptions: true });
+  var usersResp    = UrlFetchApp.fetch(FIREBASE_DB_URL + '/users.json' + FIREBASE_DB_SECRET,    { muteHttpExceptions: true });
 
   if (productsResp.getResponseCode() !== 200) {
     Logger.log('Failed to fetch products: ' + productsResp.getContentText());
@@ -980,8 +982,8 @@ function test_deadlineCheck_testMode() {
   var today    = new Date(); today.setHours(0,0,0,0);
   var THRESHOLD_DAYS = 3;
 
-  var productsResp = UrlFetchApp.fetch(FIREBASE_DB_URL + '/products.json', { muteHttpExceptions: true });
-  var usersResp    = UrlFetchApp.fetch(FIREBASE_DB_URL + '/users.json',    { muteHttpExceptions: true });
+  var productsResp = UrlFetchApp.fetch(FIREBASE_DB_URL + '/products.json' + FIREBASE_DB_SECRET, { muteHttpExceptions: true });
+  var usersResp    = UrlFetchApp.fetch(FIREBASE_DB_URL + '/users.json' + FIREBASE_DB_SECRET,    { muteHttpExceptions: true });
   var products     = JSON.parse(productsResp.getContentText()) || {};
   var users        = JSON.parse(usersResp.getContentText())    || {};
 
@@ -1184,7 +1186,7 @@ function test_firebaseConnection() {
   }
 
   try {
-    var resp = UrlFetchApp.fetch(FIREBASE_DB_URL + '/.json?shallow=true', { muteHttpExceptions: true });
+    var resp = UrlFetchApp.fetch(FIREBASE_DB_URL + '/.json?shallow=true' + FIREBASE_DB_SECRET, { muteHttpExceptions: true });
     Logger.log('Status code: ' + resp.getResponseCode());
     if (resp.getResponseCode() === 200) {
       var data = JSON.parse(resp.getContentText());
@@ -1212,8 +1214,8 @@ function test_fullEndToEnd() {
   // Run the real dailyDeadlineCheck but patch recipients after
   var today = new Date(); today.setHours(0,0,0,0);
 
-  var productsResp = UrlFetchApp.fetch(FIREBASE_DB_URL + '/products.json', { muteHttpExceptions: true });
-  var usersResp    = UrlFetchApp.fetch(FIREBASE_DB_URL + '/users.json',    { muteHttpExceptions: true });
+  var productsResp = UrlFetchApp.fetch(FIREBASE_DB_URL + '/products.json' + FIREBASE_DB_SECRET, { muteHttpExceptions: true });
+  var usersResp    = UrlFetchApp.fetch(FIREBASE_DB_URL + '/users.json' + FIREBASE_DB_SECRET,    { muteHttpExceptions: true });
   var products     = JSON.parse(productsResp.getContentText()) || {};
   var users        = JSON.parse(usersResp.getContentText())    || {};
 
