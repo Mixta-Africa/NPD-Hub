@@ -19,6 +19,139 @@ const NPD_ROOT_FOLDER = 'NPD Hub — Mixta Africa';
 // ─── SENDER NAME shown in outgoing emails ─────────────────────
 const SENDER_NAME  = 'Mixta Africa NPD Hub';
 
+// ─────────────────────────────────────────────────────────────
+//  DAILY DEADLINE CHECK — GAS Time-Based Trigger
+//  
+//  HOW TO SET UP (one-time, 2 minutes):
+//  1. Open this script in script.google.com
+//  2. Click the clock icon (Triggers) in the left sidebar
+//  3. Click "+ Add Trigger" (bottom right)
+//  4. Choose function: dailyDeadlineCheck
+//  5. Event source: Time-driven
+//  6. Type: Day timer
+//  7. Time: 7am to 8am (WAT)
+//  8. Save
+//
+//  OR run installDailyTrigger() once from the Run menu to do it automatically.
+// ─────────────────────────────────────────────────────────────
+
+var FIREBASE_DB_URL = ''; // Set this — paste your Firebase RTDB URL here
+// e.g. 'https://your-project-default-rtdb.firebaseio.com'
+// Get it from Firebase Console → Realtime Database → copy the URL
+
+function installDailyTrigger() {
+  // Delete any existing daily triggers to avoid duplicates
+  var triggers = ScriptApp.getProjectTriggers();
+  triggers.forEach(function(t) {
+    if (t.getHandlerFunction() === 'dailyDeadlineCheck') {
+      ScriptApp.deleteTrigger(t);
+    }
+  });
+  // Create new daily trigger at 7am
+  ScriptApp.newTrigger('dailyDeadlineCheck')
+    .timeBased()
+    .atHour(7)
+    .everyDays(1)
+    .inTimezone('Africa/Lagos')
+    .create();
+  Logger.log('Daily trigger installed: dailyDeadlineCheck fires every day at 7am WAT');
+}
+
+function dailyDeadlineCheck() {
+  if (!FIREBASE_DB_URL) {
+    Logger.log('FIREBASE_DB_URL not set — open gas-backend.js and set it at the top');
+    return;
+  }
+
+  var today = new Date(); today.setHours(0,0,0,0);
+  var THRESHOLD_DAYS = 3;
+
+  // Fetch products from Firebase
+  var productsResp = UrlFetchApp.fetch(FIREBASE_DB_URL + '/products.json', { muteHttpExceptions: true });
+  var usersResp    = UrlFetchApp.fetch(FIREBASE_DB_URL + '/users.json',    { muteHttpExceptions: true });
+
+  if (productsResp.getResponseCode() !== 200) {
+    Logger.log('Failed to fetch products: ' + productsResp.getContentText());
+    return;
+  }
+
+  var products = JSON.parse(productsResp.getContentText()) || {};
+  var users    = JSON.parse(usersResp.getContentText())    || {};
+  var alerts   = [];
+
+  Object.values(products).forEach(function(prod) {
+    if (prod.status === 'archived') return;
+    if (prod.alertsEnabled === false) return;
+
+    // Determine recipient
+    var deptEmails = [];
+    if (prod.alertRecipients && prod.alertRecipients.length > 0) {
+      deptEmails = prod.alertRecipients;
+    } else if (prod.ownerId && users[prod.ownerId] && users[prod.ownerId].email) {
+      deptEmails = [users[prod.ownerId].email];
+    } else {
+      Logger.log('No recipient for ' + prod.name + ' — skipping');
+      return;
+    }
+
+    // Get tasks — handle both new tasks{} and legacy pillars{}
+    var tasks = [];
+    if (prod.tasks && Object.keys(prod.tasks).length > 0) {
+      tasks = Object.values(prod.tasks);
+    } else if (prod.pillars) {
+      Object.entries(prod.pillars).forEach(function(entry) {
+        var pillarId = entry[0];
+        var pd       = entry[1];
+        tasks.push({
+          id:       pillarId,
+          title:    pd.name || pillarId,
+          deadline: pd.deadline,
+          status:   pd.taskStatus || 'on-track',
+        });
+      });
+    }
+
+    tasks.forEach(function(task) {
+      if (!task.deadline || task.status === 'complete') return;
+      var due  = new Date(task.deadline); due.setHours(0,0,0,0);
+      var diff = Math.round((due - today) / 86400000);
+      if (diff > THRESHOLD_DAYS) return; // not yet due
+
+      var daysOverdue = diff < 0 ? Math.abs(diff) : 0;
+      alerts.push({
+        productName: prod.name,
+        productId:   prod.id,
+        pillarName:  task.title || task.name || 'Unknown task',
+        pillarId:    task.id,
+        ownerDept:   task.owner || '',
+        deptEmails:  deptEmails,
+        daysUntil:   diff,
+        daysOverdue: daysOverdue,
+        deadline:    task.deadline,
+        alertType:   diff < 0 ? 'overdue' : diff === 0 ? 'due' : 'warning',
+      });
+    });
+  });
+
+  if (alerts.length === 0) {
+    Logger.log('No alerts — all tasks on track.');
+    return;
+  }
+
+  var overdue  = alerts.filter(function(a) { return a.alertType === 'overdue'; }).length;
+  var dueToday = alerts.filter(function(a) { return a.alertType === 'due'; }).length;
+  var warning  = alerts.filter(function(a) { return a.alertType === 'warning'; }).length;
+  Logger.log('Sending ' + alerts.length + ' alerts: ' + overdue + ' overdue, ' + dueToday + ' due today, ' + warning + ' warnings');
+
+  var result = checkAndSendDeadlineAlerts({ alerts: alerts });
+  Logger.log('Sent: ' + result.sent + ' emails');
+  if (result.errors && result.errors.length > 0) {
+    Logger.log('Errors: ' + result.errors.join(', '));
+  }
+}
+
+
+
 // ─── TEST MODE ─────────────────────────────────────────────────
 // When testMode=true in the payload, ALL emails redirect to TEST_EMAIL
 // Real mailing lists are untouched — only the recipients change
@@ -48,6 +181,7 @@ function doPost(e) {
       case 'uploadDocument':        result = uploadDocument(body);               break;
       case 'sendDeadlineReminder':  result = sendDeadlineReminder(body);         break;
       case 'sendHandoverPackage':   result = sendHandoverPackage(body);          break;
+      case 'sendComposedEmail':     result = sendComposedEmail(body);             break;
       case 'ping':                  result = { ok: true, message: 'NPD Hub GAS v2.0 is live.', ts: new Date().toISOString() }; break;
       default:                      result = { ok: false, error: 'Unknown action: ' + action };
     }
@@ -282,9 +416,10 @@ function checkAndSendDeadlineAlerts(body) {
 }
 
 function buildAlertSubject(alert) {
-  var prefix = alert.alertType === 'overdue'  ? '🔴 OVERDUE'
-             : alert.alertType === 'due'      ? '🟡 DUE TODAY'
-             : '⚠️ DEADLINE IN 3 DAYS';
+  var daysStr = alert.daysOverdue > 0 ? ' (' + alert.daysOverdue + 'd overdue)' : '';
+  var prefix  = alert.alertType === 'overdue' ? '🔴 OVERDUE' + daysStr
+              : alert.alertType === 'due'     ? '🟠 DUE TODAY'
+              : '🟡 DUE IN ' + alert.daysUntil + 'D';
   return prefix + ': ' + alert.pillarName + ' — ' + alert.productName;
 }
 
@@ -717,6 +852,62 @@ function sendDeadlineReminder(body) {
   }
 }
 
+
+// ─────────────────────────────────────────────────────────────
+//  SEND COMPOSED EMAIL — final send after AI draft + user edit
+// ─────────────────────────────────────────────────────────────
+function sendComposedEmail(body) {
+  try {
+    var { subject, body: emailBody, toEmails, ccEmails, testMode, productName, folderUrl } = body;
+
+    if (!toEmails || toEmails.length === 0) {
+      return { ok: false, error: 'No recipients.' };
+    }
+    if (!subject || !emailBody) {
+      return { ok: false, error: 'Subject and body are required.' };
+    }
+
+    var to  = resolveRecipients(toEmails, testMode);
+    var cc  = testMode ? [] : (ccEmails || []);
+    var finalSubject = (testMode ? '[TEST] ' : '') + subject;
+
+    // Build branded HTML wrapper around the plain text body
+    var htmlBody = '<!DOCTYPE html><html><body style="font-family:Arial,sans-serif;background:#f8f8f7;margin:0;padding:24px;">' +
+      '<div style="max-width:640px;margin:0 auto;background:#fff;border-radius:8px;overflow:hidden;border:1px solid #e5e4e0;">' +
+      '<div style="background:#C0282D;padding:18px 28px;">' +
+        '<div style="color:white;font-size:11px;letter-spacing:.1em;text-transform:uppercase;margin-bottom:3px;">Mixta Africa — NPD Hub</div>' +
+        '<div style="color:white;font-size:18px;font-weight:700;">' + (productName || subject) + '</div>' +
+      '</div>' +
+      '<div style="padding:26px 28px;font-size:14px;color:#1a1a18;line-height:1.8;white-space:pre-wrap;">' +
+        emailBody.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>') +
+      '</div>' +
+      (folderUrl ? '<div style="padding:0 28px 24px;"><a href="' + folderUrl + '" style="display:inline-block;background:#C0282D;color:white;padding:10px 24px;border-radius:6px;text-decoration:none;font-weight:600;font-size:13px;">Open Drive Folder</a></div>' : '') +
+      '<div style="background:#f8f8f7;padding:12px 28px;border-top:1px solid #e5e4e0;font-size:11px;color:#9a9a96;">Mixta Africa NPD Hub &nbsp;·&nbsp; Sent via Email Composer</div>' +
+      '</div></body></html>';
+
+    var sent = 0, errors = [];
+    to.forEach(function(email) {
+      try {
+        GmailApp.sendEmail(email, finalSubject, emailBody, {
+          htmlBody: htmlBody,
+          name:     SENDER_NAME,
+          cc:       cc.join(','),
+        });
+        sent++;
+      } catch(e) {
+        errors.push(email + ': ' + e.message);
+      }
+    });
+
+    logEvent('Composed email sent (' + sent + ')', productName || subject, 'CC: ' + (cc.length || 0));
+    return { ok: true, sent: sent, errors: errors };
+
+  } catch(err) {
+    Logger.log('sendComposedEmail error: ' + err.message);
+    return { ok: false, error: err.message };
+  }
+}
+
 // ─────────────────────────────────────────────────────────────
 //  INTERNAL UTILITIES
 // ─────────────────────────────────────────────────────────────
@@ -724,4 +915,360 @@ function logEvent(event, productName, detail) {
   try {
     Logger.log('[NPD Hub] ' + event + ' | ' + productName + (detail ? ' | ' + detail : ''));
   } catch(e) {}
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  TEST SUITE — Run these directly from the Apps Script editor
+//  Select function name → click Run → check Execution Log
+//
+//  SETUP BEFORE TESTING:
+//  1. Set FIREBASE_DB_URL at the top of this file
+//  2. All tests send to TEST_EMAIL only (safe to run anytime)
+// ═══════════════════════════════════════════════════════════════
+
+var TEST_EMAIL_OVERRIDE = 'o.olasunkanmi@mixtafrica.com';
+
+// ─────────────────────────────────────────────────────────────
+//  TEST 1: Verify GAS is reachable (no Firebase needed)
+// ─────────────────────────────────────────────────────────────
+function test_ping() {
+  Logger.log('=== TEST: ping ===');
+  Logger.log('GAS is alive ✅');
+  Logger.log('FIREBASE_DB_URL: ' + (FIREBASE_DB_URL ? FIREBASE_DB_URL.slice(0,40) + '...' : '❌ NOT SET'));
+  Logger.log('SENDER_NAME: ' + SENDER_NAME);
+  Logger.log('TEST_EMAIL: ' + TEST_EMAIL);
+
+  // Send a test email to confirm Gmail works
+  try {
+    GmailApp.sendEmail(TEST_EMAIL_OVERRIDE, '[NPD Hub Test] GAS Ping', '',  {
+      htmlBody: '<p style="font-family:Arial;padding:20px;">✅ GAS backend is reachable and Gmail is working.<br/><br/>Sent at: ' + new Date().toISOString() + '</p>',
+      name: SENDER_NAME,
+    });
+    Logger.log('✅ Test email sent to ' + TEST_EMAIL_OVERRIDE);
+  } catch(e) {
+    Logger.log('❌ Gmail send failed: ' + e.message);
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
+//  TEST 2: Daily deadline check (reads real Firebase data)
+// ─────────────────────────────────────────────────────────────
+function test_dailyDeadlineCheck() {
+  Logger.log('=== TEST: dailyDeadlineCheck ===');
+
+  if (!FIREBASE_DB_URL) {
+    Logger.log('❌ Set FIREBASE_DB_URL at the top of this file first');
+    return;
+  }
+
+  Logger.log('Fetching from Firebase: ' + FIREBASE_DB_URL);
+  dailyDeadlineCheck(); // runs the real function — emails go to product owner
+  Logger.log('Done — check Execution Log above for alert count');
+}
+
+// ─────────────────────────────────────────────────────────────
+//  TEST 3: Deadline check with forced test mode
+//          (overrides recipients → sends only to TEST_EMAIL)
+// ─────────────────────────────────────────────────────────────
+function test_deadlineCheck_testMode() {
+  Logger.log('=== TEST: deadline check (TEST MODE) ===');
+
+  if (!FIREBASE_DB_URL) {
+    Logger.log('❌ Set FIREBASE_DB_URL first'); return;
+  }
+
+  var today    = new Date(); today.setHours(0,0,0,0);
+  var THRESHOLD_DAYS = 3;
+
+  var productsResp = UrlFetchApp.fetch(FIREBASE_DB_URL + '/products.json', { muteHttpExceptions: true });
+  var usersResp    = UrlFetchApp.fetch(FIREBASE_DB_URL + '/users.json',    { muteHttpExceptions: true });
+  var products     = JSON.parse(productsResp.getContentText()) || {};
+  var users        = JSON.parse(usersResp.getContentText())    || {};
+
+  var alerts = [];
+  Object.values(products).forEach(function(prod) {
+    if (prod.status === 'archived' || prod.alertsEnabled === false) return;
+
+    var tasks = [];
+    if (prod.tasks && Object.keys(prod.tasks).length > 0) {
+      tasks = Object.values(prod.tasks);
+    } else if (prod.pillars) {
+      Object.entries(prod.pillars).forEach(function(entry) {
+        tasks.push({ id: entry[0], title: entry[1].name || entry[0],
+                     deadline: entry[1].deadline, status: entry[1].taskStatus || 'on-track' });
+      });
+    }
+
+    tasks.forEach(function(task) {
+      if (!task.deadline || task.status === 'complete') return;
+      var due  = new Date(task.deadline); due.setHours(0,0,0,0);
+      var diff = Math.round((due - today) / 86400000);
+      if (diff > THRESHOLD_DAYS) return;
+
+      alerts.push({
+        productName: prod.name,
+        productId:   prod.id,
+        pillarName:  task.title || task.id,
+        pillarId:    task.id,
+        ownerDept:   task.owner || 'Unknown',
+        deptEmails:  [TEST_EMAIL_OVERRIDE], // FORCE to test email
+        daysUntil:   diff,
+        daysOverdue: diff < 0 ? Math.abs(diff) : 0,
+        deadline:    task.deadline,
+        alertType:   diff < 0 ? 'overdue' : diff === 0 ? 'due' : 'warning',
+      });
+    });
+  });
+
+  Logger.log('Found ' + alerts.length + ' alerts');
+  alerts.forEach(function(a) {
+    Logger.log('  [' + a.alertType + '] ' + a.pillarName + ' — ' + a.productName + ' (' + (a.daysOverdue > 0 ? a.daysOverdue + 'd overdue' : 'due ' + a.deadline) + ')');
+  });
+
+  if (alerts.length === 0) {
+    Logger.log('No alerts — no overdue/upcoming tasks found');
+    return;
+  }
+
+  // Send — all go to TEST_EMAIL_OVERRIDE
+  var result = checkAndSendDeadlineAlerts({ alerts: alerts, testMode: false });
+  // testMode:false here because we already forced deptEmails to test address
+  Logger.log('Result: sent=' + result.sent + ' errors=' + JSON.stringify(result.errors));
+  Logger.log('✅ Check your inbox at ' + TEST_EMAIL_OVERRIDE);
+}
+
+// ─────────────────────────────────────────────────────────────
+//  TEST 4: Single alert email for a specific task
+//          (edit the variables below to match your data)
+// ─────────────────────────────────────────────────────────────
+function test_singleAlert() {
+  Logger.log('=== TEST: single alert email ===');
+
+  // ← EDIT THESE to match a real product/task in your Firebase
+  var testAlert = {
+    productName: 'ACOT4U',
+    productId:   'your_product_id',
+    pillarName:  'Product Financial & Profitability Analysis',
+    pillarId:    'p5',
+    ownerDept:   'Financial Planning',
+    deptEmails:  [TEST_EMAIL_OVERRIDE],
+    daysUntil:   -8,    // negative = overdue
+    daysOverdue: 8,
+    deadline:    '2026-07-18',
+    alertType:   'overdue',
+  };
+
+  var result = checkAndSendDeadlineAlerts({ alerts: [testAlert], testMode: false });
+  Logger.log('Sent: ' + result.sent + ' | Errors: ' + JSON.stringify(result.errors));
+  Logger.log('✅ Check inbox at ' + TEST_EMAIL_OVERRIDE);
+}
+
+// ─────────────────────────────────────────────────────────────
+//  TEST 5: Onboarding email (static version without AI)
+// ─────────────────────────────────────────────────────────────
+function test_onboardingEmail() {
+  Logger.log('=== TEST: onboarding email ===');
+
+  var result = sendOnboardingEmails({
+    productName: 'ACOT4U [TEST]',
+    productId:   'test_001',
+    launchDate:  '2026-12-31',
+    folderUrl:   'https://drive.google.com',
+    createdBy:   'o.olasunkanmi@mixtafrica.com',
+    testMode:    true,  // → sends to TEST_EMAIL only
+    stakeholders: [
+      { name: 'Design Team', email: 'd.team@mixtafrica.com', dept: 'Design', pillarIds: ['p4'] },
+      { name: 'Tola Akinsulire', email: 't.akinsulire@mixtafrica.com', dept: 'AMC', pillarIds: ['p6','p7'] },
+    ],
+    pillars: [
+      { id: 'p4', name: 'Product Design & Development', owner: 'Design' },
+      { id: 'p6', name: 'Product AMC Meetings', owner: 'AMC' },
+      { id: 'p7', name: 'AMC Product Presentations', owner: 'AMC' },
+    ],
+  });
+
+  Logger.log('Result: ' + JSON.stringify(result));
+  Logger.log('✅ Check inbox at ' + TEST_EMAIL_OVERRIDE);
+}
+
+// ─────────────────────────────────────────────────────────────
+//  TEST 6: Composed email (the new AI-draft email format)
+// ─────────────────────────────────────────────────────────────
+function test_composedEmail() {
+  Logger.log('=== TEST: composed email (sendComposedEmail) ===');
+
+  var result = sendComposedEmail({
+    subject:     '[NPD Hub Test] Composed Email Format',
+    body:        'Dear team,\n\nThis is a test of the new composed email format from the NPD Hub.\n\n**Key points:**\n- The AI draft is generated in the browser via Groq\n- You review and edit before sending\n- GAS wraps it in the branded HTML template\n- CC support is now included\n\nThis email was sent from the Apps Script test suite.\n\nBest regards,\nNPD Hub',
+    toEmails:    [TEST_EMAIL_OVERRIDE],
+    ccEmails:    [],
+    testMode:    false,  // already sending to test address directly
+    productName: 'ACOT4U',
+    folderUrl:   null,
+  });
+
+  Logger.log('Result: ' + JSON.stringify(result));
+  Logger.log('✅ Check inbox at ' + TEST_EMAIL_OVERRIDE);
+}
+
+// ─────────────────────────────────────────────────────────────
+//  TEST 7: Progress report email
+// ─────────────────────────────────────────────────────────────
+function test_progressReport() {
+  Logger.log('=== TEST: progress report email ===');
+
+  var result = sendProgressReport({
+    productName:     'ACOT4U [TEST]',
+    productId:       'test_001',
+    launchDate:      '2026-12-31',
+    reportDate:      new Date().toISOString().split('T')[0],
+    generatedBy:     'o.olasunkanmi@mixtafrica.com',
+    pctComplete:     33,
+    complete:        4,
+    inProgress:      3,
+    notStarted:      4,
+    overdue:         2,
+    notes:           'Test run from Apps Script editor',
+    testMode:        true,
+    onboardedEmails: ['test@mixtafrica.com'],
+    allStakeholderEmails: [TEST_EMAIL_OVERRIDE],
+    pillarSummary: [
+      { pillar: 'Market Survey & Research',      owner: 'Commercial Strategy', status: 'complete',     deadline: '2026-05-01', notes: '' },
+      { pillar: 'Product Design & Development',  owner: 'Design',             status: 'in-progress',  deadline: '2026-07-30', notes: 'Awaiting architect sign-off' },
+      { pillar: 'Financial & Profitability',     owner: 'Financial Planning', status: 'delayed',      deadline: '2026-07-18', notes: 'Model not yet submitted' },
+      { pillar: 'AMC Meetings',                  owner: 'AMC',                status: 'not-started',  deadline: '2026-08-15', notes: '' },
+    ],
+  });
+
+  Logger.log('Result: ' + JSON.stringify(result));
+  Logger.log('✅ Check inbox at ' + TEST_EMAIL_OVERRIDE);
+}
+
+// ─────────────────────────────────────────────────────────────
+//  TEST 8: Verify trigger is installed
+// ─────────────────────────────────────────────────────────────
+function test_checkTrigger() {
+  Logger.log('=== TEST: check installed triggers ===');
+
+  var triggers = ScriptApp.getProjectTriggers();
+  if (triggers.length === 0) {
+    Logger.log('❌ No triggers installed. Run installDailyTrigger() to set up daily alerts.');
+    return;
+  }
+
+  triggers.forEach(function(t) {
+    Logger.log('  Trigger: ' + t.getHandlerFunction() +
+               ' | Type: '  + t.getEventType() +
+               ' | Source: '+ t.getTriggerSource());
+  });
+
+  var hasDailyCheck = triggers.some(function(t) {
+    return t.getHandlerFunction() === 'dailyDeadlineCheck';
+  });
+
+  if (hasDailyCheck) {
+    Logger.log('✅ dailyDeadlineCheck trigger is installed — will fire daily at 7am WAT');
+  } else {
+    Logger.log('⚠ dailyDeadlineCheck trigger NOT found. Run installDailyTrigger()');
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
+//  TEST 9: Firebase connectivity check
+// ─────────────────────────────────────────────────────────────
+function test_firebaseConnection() {
+  Logger.log('=== TEST: Firebase connection ===');
+
+  if (!FIREBASE_DB_URL) {
+    Logger.log('❌ FIREBASE_DB_URL not set at top of file'); return;
+  }
+
+  try {
+    var resp = UrlFetchApp.fetch(FIREBASE_DB_URL + '/.json?shallow=true', { muteHttpExceptions: true });
+    Logger.log('Status code: ' + resp.getResponseCode());
+    if (resp.getResponseCode() === 200) {
+      var data = JSON.parse(resp.getContentText());
+      Logger.log('✅ Firebase connected. Top-level keys: ' + Object.keys(data || {}).join(', '));
+    } else {
+      Logger.log('❌ Firebase returned: ' + resp.getContentText().slice(0,200));
+    }
+  } catch(e) {
+    Logger.log('❌ Connection failed: ' + e.message);
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
+//  TEST 10: Full end-to-end — Firebase → alerts → email
+//           This is the closest simulation of the real daily run
+// ─────────────────────────────────────────────────────────────
+function test_fullEndToEnd() {
+  Logger.log('=== TEST: full end-to-end (Firebase → email) ===');
+  Logger.log('This simulates the exact daily cron but routes all emails to ' + TEST_EMAIL_OVERRIDE);
+
+  if (!FIREBASE_DB_URL) {
+    Logger.log('❌ Set FIREBASE_DB_URL first'); return;
+  }
+
+  // Run the real dailyDeadlineCheck but patch recipients after
+  var today = new Date(); today.setHours(0,0,0,0);
+
+  var productsResp = UrlFetchApp.fetch(FIREBASE_DB_URL + '/products.json', { muteHttpExceptions: true });
+  var usersResp    = UrlFetchApp.fetch(FIREBASE_DB_URL + '/users.json',    { muteHttpExceptions: true });
+  var products     = JSON.parse(productsResp.getContentText()) || {};
+  var users        = JSON.parse(usersResp.getContentText())    || {};
+
+  Logger.log('Products found: ' + Object.keys(products).length);
+
+  var alerts = [];
+  var skipped = [];
+
+  Object.values(products).forEach(function(prod) {
+    if (prod.status === 'archived') { skipped.push(prod.name + ' (archived)'); return; }
+    if (prod.alertsEnabled === false) { skipped.push(prod.name + ' (alerts off)'); return; }
+
+    var tasks = [];
+    if (prod.tasks && Object.keys(prod.tasks).length > 0) {
+      tasks = Object.values(prod.tasks);
+    } else if (prod.pillars) {
+      Object.entries(prod.pillars).forEach(function(e) {
+        tasks.push({ id: e[0], title: e[1].name || e[0], deadline: e[1].deadline, status: e[1].taskStatus || 'on-track' });
+      });
+    }
+
+    Logger.log('Product: ' + prod.name + ' (' + tasks.length + ' tasks)');
+
+    tasks.forEach(function(task) {
+      if (!task.deadline || task.status === 'complete') return;
+      var due  = new Date(task.deadline); due.setHours(0,0,0,0);
+      var diff = Math.round((due - today) / 86400000);
+      if (diff > 3) return;
+
+      var daysOverdue = diff < 0 ? Math.abs(diff) : 0;
+      alerts.push({
+        productName: prod.name,
+        pillarName:  task.title || task.id,
+        ownerDept:   task.owner || '?',
+        deptEmails:  [TEST_EMAIL_OVERRIDE], // ALL go to test email
+        daysUntil:   diff,
+        daysOverdue: daysOverdue,
+        deadline:    task.deadline,
+        alertType:   diff < 0 ? 'overdue' : diff === 0 ? 'due' : 'warning',
+      });
+
+      Logger.log('  Alert: [' + (diff < 0 ? daysOverdue + 'd OVERDUE' : diff === 0 ? 'DUE TODAY' : 'DUE IN ' + diff + 'd') + '] ' + (task.title || task.id));
+    });
+  });
+
+  if (skipped.length > 0) Logger.log('Skipped: ' + skipped.join(', '));
+  Logger.log('Total alerts to send: ' + alerts.length);
+
+  if (alerts.length === 0) {
+    Logger.log('✅ No overdue/upcoming tasks — nothing to send');
+    return;
+  }
+
+  var result = checkAndSendDeadlineAlerts({ alerts: alerts });
+  Logger.log('Emails sent: ' + result.sent);
+  Logger.log('Errors: ' + JSON.stringify(result.errors));
+  Logger.log('✅ Check inbox at ' + TEST_EMAIL_OVERRIDE);
 }
