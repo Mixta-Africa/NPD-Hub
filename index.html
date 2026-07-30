@@ -103,6 +103,24 @@ let isSuperAdmin     = false;     // true after password challenge passed
 let saSessionStart   = null;      // timestamp of super admin session start
 const SA_TIMEOUT_MS  = 30 * 60 * 1000; // 30-minute super admin session timeout
 
+/* ── REAL-TIME LISTENER REGISTRY ─────────────────────────────
+   Store active onValue() unsubscribe functions so we can
+   tear them down cleanly when switching views.             */
+const _listeners = {};
+
+function registerListener(key, unsub) {
+  if (_listeners[key]) { _listeners[key](); } // tear down previous
+  _listeners[key] = unsub;
+}
+
+function teardownListener(key) {
+  if (_listeners[key]) { _listeners[key](); delete _listeners[key]; }
+}
+
+function teardownAllListeners() {
+  Object.keys(_listeners).forEach(teardownListener);
+}
+
 /* ─── AUTH STATE LISTENER ─── */
 onAuthStateChanged(auth, async (user) => {
   if (user) {
@@ -387,6 +405,8 @@ function showApp() {
 
 /* ─── NAVIGATION ─── */
 window.loadView = (view) => {
+  // Tear down previous view's real-time listeners before switching
+  teardownAllListeners();
   currentView = view;
 
   // Update nav active state
@@ -743,7 +763,7 @@ function renderDashboard(el) {
       <div class="stat-card stat-card-link" onclick="loadView('products')" title="Go to Products">
         <div class="stat-label">Active Products</div>
         <div class="stat-value" id="stat-active">—</div>
-        <div class="stat-nav-hint">View all →</div>
+        <div class="stat-nav-hint" id="stat-slip" style="color:var(--red);font-weight:500;"></div>
       </div>
       <div class="stat-card stat-card-link" onclick="dashNavToTracker('ontrack')" title="View on-track pillars">
         <div class="stat-label">Pillars On Track</div>
@@ -776,17 +796,26 @@ function renderDashboard(el) {
 
 async function loadDashboardStats() {
   try {
-    const snap     = await get(ref(db, 'products'));
-    const products = snap.val() || {};
+    // Real-time listener — auto-updates dashboard when any product changes
     const userKey  = sanitiseEmail(currentUser.email);
-    const list     = Object.values(products).filter(p => {
-      if (p.status === 'archived') return false;
-      if (currentRole === 'admin') return true;           // admin sees all
-      if (p.ownerId === userKey) return true;             // owned by me
-      if (p.sharedWith?.[userKey]) return true;           // shared with me
-      return false;
-    });
+    const unsub = onValue(ref(db, 'products'), snap => {
+      const products = snap.val() || {};
+      const list     = Object.values(products).filter(p => {
+        if (p.status === 'archived') return false;
+        if (currentRole === 'admin') return true;
+        if (p.ownerId === userKey) return true;
+        if (p.sharedWith?.[userKey]) return true;
+        return false;
+      });
+      _updateDashboardUI(list);
+    }, { onlyOnce: false });
+    registerListener('dashboard', unsub);
+  } catch(e) { console.warn('Stats load failed:', e); }
+}
 
+// Separated so onValue callback can call it
+function _updateDashboardUI(list) {
+  try {
     const today = new Date(); today.setHours(0,0,0,0);
     const weekEnd = new Date(today); weekEnd.setDate(weekEnd.getDate() + 7);
 
@@ -794,22 +823,46 @@ async function loadDashboardStats() {
     const upcomingDeadlines = [];
 
     list.forEach(prod => {
-      PILLARS.forEach(pillar => {
-        const pd = prod.pillars?.[pillar.id];
-        if (!pd?.deadline) return;
-        const st = getPillarStatus(pd.deadline);
-        if (pd.taskStatus === 'complete') return;
+      // Use unified task system — works for both new tasks{} and legacy pillars{}
+      const tasks = getProductTasks(prod);
+      tasks.forEach(task => {
+        if (!task.deadline) return;
+        if (task.status === 'complete') return;
+        const st  = getPillarStatus(task.deadline);
         if (st === 'ontrack') ontrack++;
         if (st === 'overdue') overdue++;
-        const due = new Date(pd.deadline); due.setHours(0,0,0,0);
+        const due = new Date(task.deadline); due.setHours(0,0,0,0);
         if (due >= today && due <= weekEnd) {
           thisWeek++;
-          upcomingDeadlines.push({ product: prod.name, productId: prod.id, pillar: pillar.name, pillarId: pillar.id, date: pd.deadline, status: st });
+          upcomingDeadlines.push({
+            product:   prod.name,
+            productId: prod.id,
+            pillar:    task.title || task.name,
+            pillarId:  task.id,
+            date:      task.deadline,
+            status:    st,
+          });
         }
       });
     });
 
     document.getElementById('stat-active').textContent  = list.length;
+    // Portfolio slip summary
+    const slipped = list.filter(p => p.baselineLaunchDate && p.baselineLaunchDate !== p.launchDate &&
+      new Date(p.launchDate) > new Date(p.baselineLaunchDate));
+    const slipEl  = document.getElementById('stat-slip');
+    if (slipEl) {
+      if (slipped.length > 0) {
+        const avgSlip = Math.round(slipped.reduce((sum, p) => {
+          const bl  = new Date(p.baselineLaunchDate); bl.setHours(0,0,0,0);
+          const cur = new Date(p.launchDate);         cur.setHours(0,0,0,0);
+          return sum + Math.round((cur - bl) / 86400000);
+        }, 0) / slipped.length);
+        slipEl.textContent = `${slipped.length} slipped · avg ${avgSlip}d`;
+      } else {
+        slipEl.textContent = '';
+      }
+    }
     document.getElementById('stat-ontrack').textContent = ontrack || '0';
     document.getElementById('stat-overdue').textContent = overdue || '0';
     document.getElementById('stat-week').textContent    = thisWeek || '0';
@@ -849,7 +902,7 @@ async function loadDashboardStats() {
         </div>`).join('');
     }
   } catch(e) {
-    console.warn('Stats load failed:', e);
+    console.warn('Dashboard UI update failed:', e);
   }
 }
 
@@ -910,13 +963,16 @@ async function loadProductList() {
 }
 
 function renderProductCard(p) {
-  const pillarsWithDates = PILLARS.filter(pl => p.pillars?.[pl.id]?.deadline);
-  const complete  = PILLARS.filter(pl => p.pillars?.[pl.id]?.taskStatus === 'complete').length;
-  const overduePl = PILLARS.filter(pl => {
-    const pd = p.pillars?.[pl.id];
-    return pd?.deadline && pd?.taskStatus !== 'complete' && getPillarStatus(pd.deadline) === 'overdue';
-  }).length;
-  const pct      = Math.round((complete / PILLARS.length) * 100);
+  // Use unified task system — works for both new tasks{} and legacy pillars{}
+  const allTasks      = getProductTasks(p);
+  const total         = allTasks.length || 1;
+  const complete      = allTasks.filter(t => t.status === 'complete').length;
+  const overduePl     = allTasks.filter(t =>
+    t.deadline && t.status !== 'complete' && getPillarStatus(t.deadline) === 'overdue'
+  ).length;
+  const delayed       = allTasks.filter(t => t.status === 'delayed').length;
+  const pillarsWithDates = allTasks.filter(t => t.deadline);
+  const pct           = Math.round((complete / total) * 100);
   const statusCls = p.status || 'active';
   const statusLbl = p.status === 'complete' ? 'Complete' : 'Active';
   const overdueHtml = overduePl > 0
@@ -935,9 +991,24 @@ function renderProductCard(p) {
         <span class="status-chip status-${statusCls}">${statusLbl}</span>
       </div>
       <div class="pcf-meta-row">
-        <div class="pcf-meta-item"><span class="pcf-meta-label">Launch date</span><span class="pcf-meta-val">${formatDate(p.launchDate)}</span></div>
-        <div class="pcf-meta-item"><span class="pcf-meta-label">Pillars with dates</span><span class="pcf-meta-val">${pillarsWithDates.length} / 12</span></div>
-        <div class="pcf-meta-item"><span class="pcf-meta-label">Completed</span><span class="pcf-meta-val green">${complete} / 12</span></div>
+        <div class="pcf-meta-item">
+          <span class="pcf-meta-label">Launch date</span>
+          <span class="pcf-meta-val">
+            ${formatDate(p.launchDate)}
+            ${p.baselineLaunchDate && p.baselineLaunchDate !== p.launchDate
+              ? (() => {
+                  const bl  = new Date(p.baselineLaunchDate); bl.setHours(0,0,0,0);
+                  const cur = new Date(p.launchDate);         cur.setHours(0,0,0,0);
+                  const slip = Math.round((cur - bl) / 86400000);
+                  return slip > 0
+                    ? `<span style="font-size:10px;color:var(--red);margin-left:4px;">+${slip}d slipped</span>`
+                    : `<span style="font-size:10px;color:var(--green);margin-left:4px;">${Math.abs(slip)}d ahead</span>`;
+                })()
+              : ''}
+          </span>
+        </div>
+        <div class="pcf-meta-item"><span class="pcf-meta-label">Tasks with dates</span><span class="pcf-meta-val">${pillarsWithDates.length} / ${total}</span></div>
+        <div class="pcf-meta-item"><span class="pcf-meta-label">Completed</span><span class="pcf-meta-val green">${complete} / ${total}</span></div>
         ${overdueHtml}
       </div>
       <div class="progress-bar-wrap"><div class="progress-bar-fill" style="width:${pct}%"></div></div>
@@ -961,6 +1032,8 @@ function renderProductCard(p) {
         ${editBtn}
         ${canEdit(p) ? `<button class="btn-secondary-sm" onclick="showShareModal('${p.id}')">Share</button>` : ''}
         ${getProductAccess(p) === 'owner' || currentRole === 'admin' ? `<button class="btn-secondary-sm" onclick="showHandoverModal('${p.id}')">Handover</button>` : ''}
+        <button class="btn-secondary-sm" onclick="showQuickUpdate('${p.id}')" title="Quick status update">⚡ Update</button>
+        <button class="btn-secondary-sm" onclick="showProductActivity('${p.id}')" title="View activity feed">Activity</button>
       </div>
     </div>`;
 }
@@ -1286,8 +1359,8 @@ window.addTaskToProduct = async (productId) => {
   productListCache[productId].tasks[taskId] = task;
 
   closeProductModal();
+  await logActivity(productId, 'task_added', `New task added: ${title}`, `Owner: ${owner || 'unassigned'}`);
   showToast('Task added.', 'success');
-  // Refresh tracker if open
   if (currentView === 'tracker') renderTrackerTable(productListCache[productId], null);
 };
 
@@ -1333,7 +1406,8 @@ window.saveProduct = async (existingId) => {
     id, name, description: desc, launchDate,
     tasks,
     status:     'active',
-    taskSchema: isNew ? (_editingTasks.length > 0 && _editingTasks[0].pillarId ? 'sop' : 'custom') : (productListCache[existingId]?.taskSchema || 'sop'),
+    taskSchema:          isNew ? (_editingTasks.length > 0 && _editingTasks[0].pillarId ? 'sop' : 'custom') : (productListCache[existingId]?.taskSchema || 'sop'),
+    baselineLaunchDate:  isNew ? launchDate : (productListCache[existingId]?.baselineLaunchDate || launchDate),
     ownerId:      ownerKey,
     ownerName:    ownerName,
     sharedWith:   isNew ? {} : (productListCache[existingId]?.sharedWith || {}),
@@ -1349,10 +1423,11 @@ window.saveProduct = async (existingId) => {
     productListCache[id] = payload;
 
     if (isNew) {
-      // Phase 4: show stakeholder confirmation before Drive/email
+      await logActivity(id, 'created', `Product "${name}" created`, `Launch: ${launchDate}`);
       closeProductModal();
       showStakeholderConfirm(payload);
     } else {
+      await logActivity(existingId, 'status', `Product details updated`);
       closeProductModal();
       showToast('Product updated.', 'success');
       loadProductList();
@@ -1786,12 +1861,19 @@ function getCalMilestones() {
   const filtered = calSelectedProduct === 'all' ? prods : prods.filter(p => p.id === calSelectedProduct);
   const out = [];
   filtered.forEach(prod => {
-    PILLARS.forEach(pl => {
-      const pd = prod.pillars?.[pl.id];
-      if (!pd?.deadline) return;
-      out.push({ date: pd.deadline, productName: prod.name, productId: prod.id,
-        pillarName: pl.name, pillarId: pl.id, taskStatus: pd.taskStatus || 'not-started',
-        deadlineStatus: pd.taskStatus === 'complete' ? 'complete' : getPillarStatus(pd.deadline) });
+    // Use unified task system — handles new tasks{} and legacy pillars{}
+    const tasks = getProductTasks(prod);
+    tasks.forEach(task => {
+      if (!task.deadline) return;
+      out.push({
+        date:           task.deadline,
+        productName:    prod.name,
+        productId:      prod.id,
+        pillarName:     task.title || task.name,
+        pillarId:       task.id,
+        taskStatus:     task.status || 'on-track',
+        deadlineStatus: task.status === 'complete' ? 'complete' : getPillarStatus(task.deadline),
+      });
     });
   });
   return out;
@@ -1918,20 +2000,39 @@ async function loadTrackerProducts() {
   const sel = document.getElementById('tracker-product-sel');
   if (!sel) return;
   active.forEach(p => { const o=document.createElement('option'); o.value=p.id; o.textContent=p.name; sel.appendChild(o); });
-  if (active.length > 0) { sel.value=active[0].id; trackerSelectedProduct=active[0].id; renderTrackerTable(active[0], window._trackerFilter); window._trackerFilter=null; }
-  else document.getElementById('tracker-body').innerHTML =
-    '<div class="panel"><div class="empty-state"><span class="empty-icon">📋</span><h3>No products yet</h3><p>Create a product first.</p></div></div>';
+  if (active.length > 0) {
+    sel.value = active[0].id;
+    trackerSelectedProduct = active[0].id;
+    subscribeToProduct(active[0].id);
+    window._trackerFilter = null;
+  } else {
+    document.getElementById('tracker-body').innerHTML =
+      '<div class="panel"><div class="empty-state"><span class="empty-icon">📋</span><h3>No products yet</h3><p>Create a product first.</p></div></div>';
+  }
+}
+
+function subscribeToProduct(productId) {
+  // Real-time listener on the active product — re-renders tracker when data changes
+  const unsub = onValue(ref(db, 'products/' + productId), snap => {
+    const prod = snap.val();
+    if (!prod) return;
+    trackerProductsCache[productId] = prod;
+    productListCache[productId]     = prod;
+    // Only re-render if tracker is visible and this product is selected
+    if (currentView === 'tracker' && trackerSelectedProduct === productId) {
+      if (trackerViewMode === 'kanban') renderKanban(prod);
+      else if (trackerViewMode === 'gantt') renderTrackerGantt(prod);
+      else renderTrackerTable(prod, null);
+    }
+  }, { onlyOnce: false });
+  registerListener('tracker_product', unsub);
 }
 
 window.trackerSelectProduct = () => {
   const id = document.getElementById('tracker-product-sel')?.value;
   if (!id) return;
   trackerSelectedProduct = id;
-  const prod = trackerProductsCache[id];
-  if (!prod) return;
-  if (trackerViewMode === 'kanban') renderKanban(prod);
-  else if (trackerViewMode === 'gantt') renderTrackerGantt(prod);
-  else renderTrackerTable(prod, null);
+  subscribeToProduct(id);  // switch real-time listener to new product
 };
 
 function renderTrackerTable(prod, filter) {
@@ -2055,7 +2156,7 @@ function renderTrackerTable(prod, filter) {
       <div class="tracker-summary-top">
         <div>
           <div class="tracker-summary-name">${prod.name}</div>
-          <div class="tracker-summary-meta">Launch: ${formatDate(prod.launchDate)}</div>
+          <div class="tracker-summary-meta">Launch: ${formatDate(prod.launchDate)}${critCount > 0 ? ` · <span style="color:var(--amber);font-weight:600;">⚠ ${critCount} critical path task${critCount!==1?'s':''}</span>` : ''}</div>
         </div>
         <div class="tracker-pct-badge">${pct}%</div>
       </div>
@@ -2119,6 +2220,13 @@ window.updatePillarStatus = async (productId, taskId, newStatus) => {
       else if (trackerViewMode === 'gantt') renderTrackerGantt(p);
       else renderTrackerTable(p, null);
     }
+    // Log to activity feed
+    const taskObj = tasks.find(t => t.id === taskId);
+    const taskName = taskObj?.title || taskObj?.name || taskId;
+    await logActivity(productId, 'status',
+      `${taskName} marked ${newStatus.replace('-',' ')}`,
+      `Was: ${tasks.find(t=>t.id===taskId)?.status || 'unknown'}`
+    );
     showToast('Status updated.', 'success');
   } catch(e) { showToast('Update failed: ' + e.message, 'error'); }
 };
@@ -3157,6 +3265,10 @@ window.confirmHandover = async (productId) => {
 
     if (!result.ok) throw new Error(result.error || 'GAS call failed');
 
+    await logActivity(productId, 'handover',
+      `Handover initiated to ${reliever?.name || relieverId}`,
+      `Return: ${returnDate}${notes ? ' · ' + notes.slice(0,60) : ''}`
+    );
     closeProductModal();
     showToast(`Handover package sent to ${reliever?.name || relieverId}.`, 'success');
     loadProductList();
@@ -4269,6 +4381,43 @@ window.moveKanbanTask = async (productId, taskId, newStatus) => {
 
 /* ══ PHASE B: TRACKER GANTT (task bars) ═════════════════════ */
 
+function computeCriticalPath(tasks) {
+  // Find the set of task IDs on the longest dependency chain
+  // (longest by task count — approximation without duration floats)
+  const memo = {};
+  function chainLength(taskId) {
+    if (memo[taskId] !== undefined) return memo[taskId];
+    const task  = tasks.find(t => t.id === taskId);
+    const preds = task?.predecessors || [];
+    if (preds.length === 0) { memo[taskId] = 1; return 1; }
+    const max = Math.max(...preds.map(pid => chainLength(pid)));
+    memo[taskId] = max + 1;
+    return memo[taskId];
+  }
+
+  // Find max chain length
+  const lengths = tasks.map(t => ({ id: t.id, len: chainLength(t.id) }));
+  const maxLen  = Math.max(...lengths.map(l => l.len), 0);
+  if (maxLen <= 1) return new Set(); // no dependencies = no critical path to highlight
+
+  // Walk backwards from tasks with maxLen to find the critical chain
+  const critical = new Set();
+  function markCritical(taskId) {
+    if (critical.has(taskId)) return;
+    critical.add(taskId);
+    const task  = tasks.find(t => t.id === taskId);
+    const preds = task?.predecessors || [];
+    // Follow the predecessor with the longest chain
+    const longestPred = preds.reduce((best, pid) => {
+      return (memo[pid] || 0) > (memo[best] || 0) ? pid : best;
+    }, preds[0]);
+    if (longestPred) markCritical(longestPred);
+  }
+
+  lengths.filter(l => l.len === maxLen).forEach(l => markCritical(l.id));
+  return critical;
+}
+
 function renderTrackerGantt(prod) {
   const body = document.getElementById('tracker-body');
   if (!body) return;
@@ -4320,10 +4469,23 @@ function renderTrackerGantt(prod) {
   // Today line position
   const todayPct = pctOf(today.toISOString().split('T')[0]);
 
+  const criticalIds = computeCriticalPath(tasks);
+
+  // Show duration in days on bars
+  function barDuration(t) {
+    if (!t.startDate || !t.deadline) return null;
+    const s = new Date(t.startDate); s.setHours(0,0,0,0);
+    const e = new Date(t.deadline);  e.setHours(0,0,0,0);
+    const d = Math.round((e - s) / 86400000);
+    return d > 0 ? d : null;
+  }
+
   const rows = tasks.map((t, i) => {
     const startPct   = pctOf(t.startDate) ?? pctOf(t.deadline) ?? 0;
     const endPct     = pctOf(t.deadline)  ?? startPct;
     const barWidth   = Math.max(endPct - startPct, 1);
+    const dur        = barDuration(t);
+    const isCritical = criticalIds.has(t.id);
 
     const blocked    = (t.predecessors||[]).some(pid => {
       const dep = tasks.find(x => x.id === pid);
@@ -4331,6 +4493,7 @@ function renderTrackerGantt(prod) {
     });
 
     const barCls = t.status === 'complete' ? 'tg-bar-complete'
+                 : isCritical && t.status !== 'complete' ? 'tg-bar-critical'
                  : t.status === 'delayed'   ? 'tg-bar-delayed'
                  : blocked                  ? 'tg-bar-blocked'
                  : 'tg-bar-ontrack';
@@ -4358,7 +4521,11 @@ function renderTrackerGantt(prod) {
         ${todayPct !== null ? `<div class="gantt-today-line" style="left:${todayPct}%"></div>` : ''}
         ${predLines}
         <div class="tg-bar ${barCls}" style="left:${startPct}%;width:${barWidth}%;">
-          <div class="gantt-tooltip">${t.title||t.name}<br/>${t.startDate||'?'} → ${t.deadline||'?'}</div>
+          ${barWidth > 8 && dur ? `<span class="tg-bar-label">${dur}d</span>` : ''}
+          <div class="gantt-tooltip">
+            ${isCritical ? '⚠ Critical path · ' : ''}${t.title||t.name}<br/>
+            ${t.startDate||'?'} → ${t.deadline||'?'}${dur ? ' (' + dur + ' days)' : ''}
+          </div>
         </div>
       </div>
     </div>`;
@@ -4367,6 +4534,7 @@ function renderTrackerGantt(prod) {
   const complete = tasks.filter(t => t.status === 'complete').length;
   const pct      = Math.round((complete / (tasks.length||1)) * 100);
 
+  const critCount = criticalIds.size;
   body.innerHTML = `
     <div class="tracker-summary" style="margin-bottom:14px;">
       <div class="tracker-summary-top">
@@ -4693,6 +4861,164 @@ window.saeSaveTask = async (productId, taskId) => {
   } catch(e) { showToast('Save failed: ' + e.message, 'error'); }
 };
 
+/* ══ ITEM 4: ACTIVITY FEED ══════════════════════════════════ */
+
+async function logActivity(productId, type, message, detail) {
+  try {
+    const eventId = 'evt_' + Date.now();
+    await set(ref(db, `products/${productId}/activity/${eventId}`), {
+      id:        eventId,
+      type,      // 'status' | 'note' | 'task_added' | 'handover' | 'document' | 'created' | 'baseline'
+      message,
+      detail:    detail || null,
+      user:      currentUser?.email || 'system',
+      userName:  currentUser?.displayName || currentUser?.email?.split('@')[0] || 'System',
+      timestamp: Date.now(),
+    });
+  } catch(e) { /* silently ignore — activity log is non-critical */ }
+}
+
+window.showProductActivity = async (productId) => {
+  const prod = productListCache[productId] || trackerProductsCache[productId];
+  if (!prod) return;
+
+  document.getElementById('modal-title-text').textContent = `Activity — ${prod.name}`;
+  document.getElementById('modal-body-content').innerHTML =
+    '<div class="loading-row" style="padding:24px;">Loading activity...</div>';
+  document.getElementById('create-product-modal').style.display = 'flex';
+
+  const snap     = await get(ref(db, `products/${productId}/activity`));
+  const activity = snap.val() || {};
+  const events   = Object.values(activity)
+    .sort((a, b) => b.timestamp - a.timestamp)
+    .slice(0, 100);
+
+  const typeIcon = { status: '🔄', note: '📝', task_added: '➕', handover: '🤝',
+                     document: '📎', created: '🚀', baseline: '📅' };
+  const typeColor = { status: 'var(--blue)', note: 'var(--text-muted)', task_added: 'var(--green)',
+                      handover: 'var(--amber)', document: 'var(--text-muted)',
+                      created: 'var(--green)', baseline: 'var(--red)' };
+
+  const rows = events.map(e => {
+    const dt = new Date(e.timestamp);
+    const timeStr = dt.toLocaleDateString('en-GB', { day:'numeric', month:'short' }) +
+                    ' ' + dt.toLocaleTimeString('en-GB', { hour:'2-digit', minute:'2-digit' });
+    return `<div class="activity-row">
+      <div class="activity-icon" style="color:${typeColor[e.type]||'var(--text-muted)'}">
+        ${typeIcon[e.type] || '•'}
+      </div>
+      <div class="activity-body">
+        <div class="activity-msg">${e.message}</div>
+        ${e.detail ? `<div class="activity-detail">${e.detail}</div>` : ''}
+        <div class="activity-meta">${e.userName} · ${timeStr}</div>
+      </div>
+    </div>`;
+  }).join('') || '<div class="empty-state-sm"><p>No activity recorded yet.</p></div>';
+
+  document.getElementById('modal-body-content').innerHTML = `
+    <div class="activity-feed">${rows}</div>
+    <div class="form-actions">
+      <button class="btn-outline" onclick="closeProductModal()">Close</button>
+    </div>`;
+};
+
+/* ══ ITEM 6: QUICK-UPDATE MODAL ══════════════════════════════ */
+
+window.showQuickUpdate = async (productId) => {
+  const prod  = productListCache[productId] || trackerProductsCache[productId];
+  if (!prod) return;
+
+  // Refresh product data
+  const snap  = await get(ref(db, 'products/' + productId));
+  const fresh = snap.val() || prod;
+  productListCache[productId] = fresh;
+
+  const tasks     = getProductTasks(fresh);
+  const today     = new Date(); today.setHours(0,0,0,0);
+  const attention = tasks.filter(t =>
+    t.status !== 'complete' && (
+      t.status === 'delayed' ||
+      (t.deadline && getPillarStatus(t.deadline) === 'overdue')
+    )
+  );
+  const ontrack   = tasks.filter(t => t.status !== 'complete' && t.status !== 'delayed' && (!t.deadline || getPillarStatus(t.deadline) === 'ontrack'));
+
+  const buildTaskRows = (taskList, showAll) => taskList.map(t => {
+    const due  = t.deadline ? new Date(t.deadline) : null;
+    if (due) due.setHours(0,0,0,0);
+    const daysOver = due && due < today ? Math.round((today - due) / 86400000) : 0;
+    const chip = !t.deadline ? '<span class="pill pill-grey" style="font-size:10px;">No date</span>'
+      : daysOver > 0 ? `<span class="pill pill-red" style="font-size:10px;">${daysOver}d overdue</span>`
+      : t.status === 'delayed' ? '<span class="pill pill-amber" style="font-size:10px;">Delayed</span>'
+      : `<span class="pill pill-green" style="font-size:10px;">${formatDate(t.deadline)}</span>`;
+
+    return `<div class="qu-task-row">
+      <div class="qu-task-info">
+        <div class="qu-task-name">${t.title||t.name||'Untitled'}</div>
+        <div class="qu-task-meta">${t.owner||''} ${chip}</div>
+      </div>
+      <div class="qu-task-btns">
+        <button class="status-btn status-btn-ontrack ${t.status==='on-track'?'active':''}"
+          onclick="quickSetStatus('${productId}','${t.id}','on-track',this)">On Track</button>
+        <button class="status-btn status-btn-delayed ${t.status==='delayed'?'active':''}"
+          onclick="quickSetStatus('${productId}','${t.id}','delayed',this)">Delayed</button>
+        <button class="status-btn status-btn-complete ${t.status==='complete'?'active':''}"
+          onclick="quickSetStatus('${productId}','${t.id}','complete',this)">Done</button>
+      </div>
+    </div>`;
+  }).join('');
+
+  const attentionHtml = attention.length > 0
+    ? `<div class="qu-section-label qu-label-red">⚠ Needs attention (${attention.length})</div>
+       ${buildTaskRows(attention)}`
+    : '<div class="qu-section-label" style="color:var(--green);">✅ No overdue or delayed tasks</div>';
+
+  const ontrackHtml = ontrack.length > 0
+    ? `<details style="margin-top:12px;"><summary class="qu-section-label" style="cursor:pointer;">On track (${ontrack.length}) — click to show</summary>
+       <div style="margin-top:8px;">${buildTaskRows(ontrack)}</div></details>`
+    : '';
+
+  let modal = document.getElementById('sa-modal');
+  if (!modal) {
+    modal = document.createElement('div');
+    modal.id = 'sa-modal';
+    modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.45);display:flex;align-items:center;justify-content:center;z-index:2000;padding:20px;';
+    document.body.appendChild(modal);
+  }
+
+  modal.innerHTML = `
+    <div style="background:#fff;border-radius:12px;width:100%;max-width:560px;max-height:85vh;overflow:hidden;display:flex;flex-direction:column;box-shadow:0 8px 40px rgba(0,0,0,0.2);">
+      <div style="background:#C0282D;padding:16px 22px;flex-shrink:0;">
+        <div style="color:white;font-size:11px;letter-spacing:.08em;text-transform:uppercase;margin-bottom:2px;">Quick Update</div>
+        <div style="color:white;font-size:17px;font-weight:700;">${fresh.name}</div>
+        <div style="color:rgba(255,255,255,.75);font-size:12px;margin-top:2px;">${tasks.filter(t=>t.status==='complete').length}/${tasks.length} tasks complete</div>
+      </div>
+      <div style="overflow-y:auto;padding:16px 20px;flex:1;">
+        ${attentionHtml}
+        ${ontrackHtml}
+      </div>
+      <div style="padding:12px 20px;border-top:1px solid var(--border);display:flex;justify-content:flex-end;gap:8px;flex-shrink:0;">
+        <button class="btn-outline" onclick="document.getElementById('sa-modal').style.display='none'">Close</button>
+        <button class="btn-secondary-sm" onclick="document.getElementById('sa-modal').style.display='none';loadView('tracker')">Open tracker →</button>
+      </div>
+    </div>`;
+  modal.style.display = 'flex';
+};
+
+window.quickSetStatus = async (productId, taskId, newStatus, btn) => {
+  // Optimistic UI — update buttons immediately
+  const row   = btn.closest('.qu-task-row');
+  const btns  = row?.querySelectorAll('.status-btn');
+  btns?.forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  btn.textContent = newStatus === 'complete' ? '✓ Done' : btn.textContent;
+
+  await updatePillarStatus(productId, taskId, newStatus);
+  // Refresh the modal data silently after save
+  const snap = await get(ref(db, 'products/' + productId));
+  if (snap.exists()) productListCache[productId] = snap.val();
+};
+
 // Register all real functions with the global dispatcher
 window.__npd_init({
   handleSignIn,
@@ -4786,6 +5112,9 @@ window.__npd_init({
   deleteTemplate:          window.deleteTemplate,
   saEditTask:              window.saEditTask,
   saeSaveTask:             window.saeSaveTask,
+  showProductActivity:     window.showProductActivity,
+  showQuickUpdate:         window.showQuickUpdate,
+  quickSetStatus:          window.quickSetStatus,
 });
 
 </script>
@@ -5593,6 +5922,30 @@ textarea.input-field { resize: vertical; line-height: 1.6; }
 
 /* ─── PHASE C/D/E: MISC ─── */
 .tg-dot-on-track { background:var(--green); color:white; }
+
+/* ─── ITEM 4: ACTIVITY FEED ─── */
+.activity-feed    { display:flex; flex-direction:column; gap:0; max-height:520px; overflow-y:auto; }
+.activity-row     { display:flex; gap:12px; padding:12px 0; border-bottom:1px solid var(--border); }
+.activity-row:last-child { border-bottom:none; }
+.activity-icon    { font-size:16px; flex-shrink:0; margin-top:1px; }
+.activity-body    { flex:1; min-width:0; }
+.activity-msg     { font-size:13px; font-weight:500; color:var(--text); line-height:1.4; }
+.activity-detail  { font-size:12px; color:var(--text-muted); margin-top:2px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.activity-meta    { font-size:11px; color:var(--text-muted); margin-top:4px; }
+
+/* ─── ITEM 5: CRITICAL PATH ─── */
+.tg-bar-critical { background:var(--amber); }
+.tg-bar-label    { position:absolute; top:50%; left:4px; transform:translateY(-50%); font-size:9px; font-weight:700; color:white; white-space:nowrap; pointer-events:none; }
+
+/* ─── ITEM 6: QUICK UPDATE ─── */
+.qu-task-row  { display:flex; align-items:flex-start; gap:12px; padding:10px 0; border-bottom:1px solid var(--border); }
+.qu-task-row:last-child { border-bottom:none; }
+.qu-task-info { flex:1; min-width:0; }
+.qu-task-name { font-size:13px; font-weight:500; color:var(--text); }
+.qu-task-meta { font-size:11px; color:var(--text-muted); margin-top:3px; display:flex; align-items:center; gap:6px; }
+.qu-task-btns { display:flex; gap:4px; flex-shrink:0; align-items:center; }
+.qu-section-label { font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.06em; color:var(--text-muted); margin-bottom:8px; padding-top:4px; }
+.qu-label-red     { color:var(--red); }
 </style>
 
 <!-- ══════════════════════════════════════════
