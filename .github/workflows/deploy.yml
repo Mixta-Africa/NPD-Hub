@@ -6,19 +6,28 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
   pages: write
   id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Inject Firebase & GAS secrets
+      - name: Inject secrets into index.html
         run: |
+          cp index.html index.html.bak
           sed -i "s|__FIREBASE_API_KEY__|${{ secrets.FIREBASE_API_KEY }}|g"                 index.html
           sed -i "s|__FIREBASE_AUTH_DOMAIN__|${{ secrets.FIREBASE_AUTH_DOMAIN }}|g"         index.html
           sed -i "s|__FIREBASE_DATABASE_URL__|${{ secrets.FIREBASE_DATABASE_URL }}|g"       index.html
@@ -27,12 +36,24 @@ jobs:
           sed -i "s|__FIREBASE_MESSAGING_SENDER_ID__|${{ secrets.FIREBASE_MESSAGING_SENDER_ID }}|g" index.html
           sed -i "s|__FIREBASE_APP_ID__|${{ secrets.FIREBASE_APP_ID }}|g"                   index.html
           sed -i "s|__GAS_ENDPOINT__|${{ secrets.GAS_ENDPOINT }}|g"                         index.html
-          sed -i "s|__SUPER_ADMIN_HASH__|${{ secrets.SUPER_ADMIN_HASH }}|g"               index.html
+          sed -i "s|__SUPER_ADMIN_HASH__|${{ secrets.SUPER_ADMIN_HASH }}|g"                 index.html
           sed -i "s|__GROQ_API_KEY__|${{ secrets.GROQ_API_KEY }}|g"                         index.html
+          echo "✅ Secrets injected"
+          # Verify no placeholders remain (warn but don't fail)
+          if grep -q "__FIREBASE_" index.html || grep -q "__GAS_" index.html || grep -q "__GROQ_" index.html; then
+            echo "⚠️  Warning: some placeholders were not replaced — check GitHub Secrets"
+          else
+            echo "✅ All placeholders replaced"
+          fi
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v4
+
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: '.'
 
       - name: Deploy to GitHub Pages
-        uses: peaceiris/actions-gh-pages@v3
-        with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_dir: .
-          exclude_assets: '.github'
+        id: deployment
+        uses: actions/deploy-pages@v4
