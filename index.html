@@ -2270,12 +2270,18 @@ window.updatePillarStatus = async (productId, taskId, newStatus) => {
       else renderTrackerTable(p, null);
     }
     // Log to activity feed
-    const taskObj = tasks.find(t => t.id === taskId);
+    const taskObj  = tasks.find(t => t.id === taskId);
     const taskName = taskObj?.title || taskObj?.name || taskId;
     await logActivity(productId, 'status',
       `${taskName} marked ${newStatus.replace('-',' ')}`,
       `Was: ${tasks.find(t=>t.id===taskId)?.status || 'unknown'}`
     );
+
+    // Immediate notification when task is marked delayed
+    if (newStatus === 'delayed') {
+      sendDelayedTaskNotification(productId, taskId, taskObj, prod);
+    }
+
     showToast('Status updated.', 'success');
   } catch(e) { showToast('Update failed: ' + e.message, 'error'); }
 };
@@ -2843,12 +2849,15 @@ window.triggerDeadlineCheck = async () => {
         const tasks = getProductTasks(prod);
         tasks.forEach(task => {
           if (!task.deadline || task.status === 'complete') return;
-          const due  = new Date(task.deadline); due.setHours(0,0,0,0);
-          const diff = Math.round((due - today) / 86400000);
+          const isDelayed = task.status === 'delayed';
+          const due  = task.deadline ? new Date(task.deadline) : null;
+          if (due) due.setHours(0,0,0,0);
+          const diff = due ? Math.round((due - today) / 86400000) : null;
 
-          // Send: overdue (every day, no limit), due today, due within threshold
+          // Send if: deadline overdue/approaching OR explicitly marked delayed
           const threshold = SYS_CONFIG.alertThresholdDays || 3;
-          if (diff > threshold) return;
+          const deadlineAlert = due && diff !== null && diff <= threshold;
+          if (!deadlineAlert && !isDelayed) return;
 
           // Skip if alerts disabled for this product
           if (prod.alertsEnabled === false) return;
@@ -5432,6 +5441,77 @@ Write this as a proper briefing document in 3 sections:
 **Watch points** — risks to monitor and who to contact for each workstream
 
 Write as if handing over to a capable colleague who needs context fast.`;
+}
+
+/* ══ DELAYED TASK NOTIFICATION ══════════════════════════════ */
+
+async function sendDelayedTaskNotification(productId, taskId, task, prod) {
+  if (!task) return;
+
+  // Determine recipients — task owner dept first, then product alerts, then current user
+  const ownerEmails = (() => {
+    if (task.ownerEmails?.length > 0) return task.ownerEmails;
+    const deptMatch = STAKEHOLDERS.filter(s =>
+      s.enabled !== false && s.dept === task.owner
+    ).map(s => s.email);
+    if (deptMatch.length > 0) return deptMatch;
+    return prod.alertRecipients?.length > 0
+      ? prod.alertRecipients
+      : [currentUser.email];
+  })();
+
+  const today = new Date(); today.setHours(0,0,0,0);
+  const due   = task.deadline ? new Date(task.deadline) : null;
+  if (due) due.setHours(0,0,0,0);
+  const daysOverdue = due && due < today ? Math.round((today - due) / 86400000) : 0;
+  const daysUntil   = due ? Math.round((due - today) / 86400000) : null;
+
+  const deadlineContext = !due ? 'No deadline set.'
+    : daysOverdue > 0 ? `Deadline was ${daysOverdue} day${daysOverdue!==1?'s':''} ago (${task.deadline}).`
+    : daysUntil === 0 ? `Deadline is today (${task.deadline}).`
+    : `Deadline in ${daysUntil} day${daysUntil!==1?'s':''} (${task.deadline}).`;
+
+  const prompt = `Write a concise notification email that a task has just been marked as DELAYED.
+
+Product: ${prod.name} (target launch: ${prod.launchDate})
+Task: ${task.title || task.name}
+Owner department: ${task.owner || 'unassigned'}
+${deadlineContext}
+${task.notes ? `Last note on this task: "${task.notes}"` : ''}
+
+Write 2 short paragraphs:
+1. State that this task has been flagged as delayed, include the specific context above
+2. Ask for: (a) the reason for the delay, (b) a revised completion date, (c) whether any other tasks are impacted
+
+Tone: professional, direct, not accusatory. This is a coordination message, not a complaint.`;
+
+  await openEmailComposer({
+    type:            'reminder',
+    subject:         `[Delayed] ${task.title || task.name} — ${prod.name}`,
+    toEmails:        ownerEmails,
+    ccEmails:        prod.defaultCCs || [],
+    productId,
+    isThreadStarter: false,
+    draftPrompt:     prompt,
+    onSend: async ({ subject, body, toEmails, ccEmails, testMode }) => {
+      const threadId = prod.gmailThreadId;
+      if (threadId) {
+        await callGAS('replyToThread', {
+          threadId, emailBody: body, subject, toEmails, ccEmails,
+          testMode, productName: prod.name,
+        });
+      } else {
+        await callGAS('sendComposedEmail', {
+          subject, body, toEmails, ccEmails, testMode,
+          productName: prod.name,
+        });
+      }
+      await logActivity(productId, 'status',
+        `Delay notification sent: ${task.title || task.name}`,
+        `To: ${toEmails.join(', ')}`
+      );
+    },
+  });
 }
 
 // Register all real functions with the global dispatcher
