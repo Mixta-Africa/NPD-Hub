@@ -69,8 +69,9 @@ function dailyDeadlineCheck() {
   var THRESHOLD_DAYS = 3;
 
   // Fetch products from Firebase
-  var productsResp = UrlFetchApp.fetch(FIREBASE_DB_URL + '/products.json' + FIREBASE_DB_SECRET, { muteHttpExceptions: true });
-  var usersResp    = UrlFetchApp.fetch(FIREBASE_DB_URL + '/users.json' + FIREBASE_DB_SECRET,    { muteHttpExceptions: true });
+  var authParam    = FIREBASE_DB_SECRET ? '?auth=' + FIREBASE_DB_SECRET : '';
+  var productsResp = UrlFetchApp.fetch(FIREBASE_DB_URL + '/products.json' + authParam, { muteHttpExceptions: true });
+  var usersResp    = UrlFetchApp.fetch(FIREBASE_DB_URL + '/users.json'    + authParam, { muteHttpExceptions: true });
 
   if (productsResp.getResponseCode() !== 200) {
     Logger.log('Failed to fetch products: ' + productsResp.getContentText());
@@ -145,11 +146,58 @@ function dailyDeadlineCheck() {
   var warning  = alerts.filter(function(a) { return a.alertType === 'warning'; }).length;
   Logger.log('Sending ' + alerts.length + ' alerts: ' + overdue + ' overdue, ' + dueToday + ' due today, ' + warning + ' warnings');
 
-  var result = checkAndSendDeadlineAlerts({ alerts: alerts });
-  Logger.log('Sent: ' + result.sent + ' emails');
-  if (result.errors && result.errors.length > 0) {
-    Logger.log('Errors: ' + result.errors.join(', '));
-  }
+  // Group alerts by product and route through Gmail thread when available
+  var alertsByProduct = {};
+  alerts.forEach(function(a) {
+    if (!alertsByProduct[a.productId]) alertsByProduct[a.productId] = [];
+    alertsByProduct[a.productId].push(a);
+  });
+
+  var totalSent = 0;
+  Object.keys(alertsByProduct).forEach(function(productId) {
+    var prodAlerts = alertsByProduct[productId];
+    var prod       = products[productId];
+    var threadId   = prod ? prod.gmailThreadId : null;
+
+    if (threadId) {
+      try {
+        var thread = GmailApp.getThreadById(threadId);
+        if (thread) {
+          var alertLines = prodAlerts.map(function(a) {
+            var prefix = a.daysOverdue > 0 ? a.daysOverdue + 'd OVERDUE' : 'DUE TODAY';
+            return '[' + prefix + '] ' + a.pillarName + ' (' + a.ownerDept + ') — ' + a.deadline;
+          }).join('\n');
+          var bodyText = 'Daily NPD Hub deadline update for ' + (prod.name || productId) + ':\n\n' + alertLines + '\n\nPlease update task statuses on the NPD Hub.';
+
+          var allRecips = [];
+          prodAlerts.forEach(function(a) {
+            (a.deptEmails || []).forEach(function(e) {
+              if (allRecips.indexOf(e) < 0) allRecips.push(e);
+            });
+          });
+
+          var replyOpts = {
+            htmlBody: buildThreadReplyHTML(bodyText, prod.name || productId, null),
+            name:     SENDER_NAME,
+          };
+          if (allRecips.length > 0) replyOpts.to = allRecips.join(',');
+          thread.reply('', replyOpts);
+          totalSent += allRecips.length;
+          Logger.log('Thread reply: ' + (prod.name || productId) + ' -> ' + allRecips.length + ' recipients');
+          return;
+        }
+      } catch(threadErr) {
+        Logger.log('Thread reply failed: ' + threadErr.message + ' — falling back to alert emails');
+      }
+    }
+
+    // No thread or thread failed — send as individual alert emails
+    var result = checkAndSendDeadlineAlerts({ alerts: prodAlerts });
+    totalSent += (result.sent || 0);
+    Logger.log('Alert emails: ' + (prod ? prod.name : productId) + ' -> ' + (result.sent || 0) + ' sent');
+  });
+
+  Logger.log('Total emails sent: ' + totalSent);
 }
 
 
@@ -184,6 +232,8 @@ function doPost(e) {
       case 'sendDeadlineReminder':  result = sendDeadlineReminder(body);         break;
       case 'sendHandoverPackage':   result = sendHandoverPackage(body);          break;
       case 'sendComposedEmail':     result = sendComposedEmail(body);             break;
+      case 'replyToThread':         result = replyToThread(body);                break;
+      case 'getThreadSubject':      result = getThreadSubject(body);             break;
       case 'ping':                  result = { ok: true, message: 'NPD Hub GAS v2.0 is live.', ts: new Date().toISOString() }; break;
       default:                      result = { ok: false, error: 'Unknown action: ' + action };
     }
@@ -860,7 +910,7 @@ function sendDeadlineReminder(body) {
 // ─────────────────────────────────────────────────────────────
 function sendComposedEmail(body) {
   try {
-    var { subject, body: emailBody, toEmails, ccEmails, testMode, productName, folderUrl } = body;
+    var { subject, body: emailBody, toEmails, ccEmails, testMode, productName, folderUrl, isThreadStarter } = body;
 
     if (!toEmails || toEmails.length === 0) {
       return { ok: false, error: 'No recipients.' };
@@ -902,12 +952,96 @@ function sendComposedEmail(body) {
     });
 
     logEvent('Composed email sent (' + sent + ')', productName || subject, 'CC: ' + (cc.length || 0));
-    return { ok: true, sent: sent, errors: errors };
+
+    // Capture Gmail thread ID when this is the first email for a product
+    var threadId = null;
+    if (isThreadStarter && sent > 0) {
+      try {
+        Utilities.sleep(2000);
+        var searchTerm = 'subject:"' + subject.slice(0, 50).replace(/"/g, '') + '" in:sent';
+        var threads = GmailApp.search(searchTerm, 0, 1);
+        if (threads.length > 0) {
+          threadId = threads[0].getId();
+          Logger.log('Thread ID captured: ' + threadId);
+        }
+      } catch(e) {
+        Logger.log('Could not capture thread ID: ' + e.message);
+      }
+    }
+
+    return { ok: true, sent: sent, errors: errors, threadId: threadId };
 
   } catch(err) {
     Logger.log('sendComposedEmail error: ' + err.message);
     return { ok: false, error: err.message };
   }
+}
+
+// ─────────────────────────────────────────────────────────────
+//  REPLY TO THREAD — adds reply to existing Gmail thread
+// ─────────────────────────────────────────────────────────────
+function replyToThread(body) {
+  try {
+    var { threadId, emailBody, subject, toEmails, ccEmails, testMode, productName } = body;
+    if (!threadId)   return { ok: false, error: 'No thread ID provided.' };
+    if (!emailBody)  return { ok: false, error: 'Email body is empty.' };
+
+    var thread = GmailApp.getThreadById(threadId);
+    if (!thread) return { ok: false, error: 'Thread not found — it may have been deleted.' };
+
+    var to  = resolveRecipients(toEmails || [], testMode);
+    var cc  = testMode ? [] : (ccEmails || []);
+
+    var htmlBody = buildThreadReplyHTML(emailBody, productName, subject);
+    var replyOpts = { htmlBody: htmlBody, name: SENDER_NAME };
+    if (to.length > 0) replyOpts.to = to.join(',');
+    if (cc.length > 0) replyOpts.cc = cc.join(',');
+
+    thread.reply('', replyOpts);
+    logEvent('Thread reply sent', productName || 'unknown', 'Thread: ' + threadId);
+    return { ok: true, threadId: threadId };
+
+  } catch(err) {
+    Logger.log('replyToThread error: ' + err.message);
+    return { ok: false, error: err.message };
+  }
+}
+
+function getThreadSubject(body) {
+  try {
+    var thread = GmailApp.getThreadById(body.threadId);
+    if (!thread) return { ok: false, error: 'Thread not found.' };
+    var messages = thread.getMessages();
+    return { ok: true, subject: messages.length > 0 ? messages[0].getSubject() : '', messageCount: messages.length };
+  } catch(err) {
+    return { ok: false, error: err.message };
+  }
+}
+
+function buildAlertEmailText(alert) {
+  var daysText = alert.daysOverdue > 0
+    ? alert.daysOverdue + ' day' + (alert.daysOverdue > 1 ? 's' : '') + ' overdue'
+    : 'Due today';
+  return daysText + ': ' + alert.pillarName + '\n' +
+    'Product: ' + alert.productName + '\n' +
+    'Owner: '   + alert.ownerDept + '\n' +
+    'Deadline: '+ alert.deadline + '\n\n' +
+    'Please update the task status on the NPD Hub immediately.';
+}
+
+function buildThreadReplyHTML(body, productName, subject) {
+  return '<!DOCTYPE html><html><body style="font-family:Arial,sans-serif;background:#f8f8f7;margin:0;padding:24px;">' +
+    '<div style="max-width:640px;margin:0 auto;background:#fff;border-radius:8px;overflow:hidden;border:1px solid #e5e4e0;">' +
+    '<div style="background:#1a1a18;padding:16px 28px;display:flex;align-items:center;gap:12px;">' +
+      '<div style="width:8px;height:8px;border-radius:50%;background:#C0282D;flex-shrink:0;"></div>' +
+      '<div style="color:white;font-size:13px;font-weight:500;">' + (productName || 'NPD Hub') + '</div>' +
+      (subject ? '<div style="color:rgba(255,255,255,.5);font-size:12px;margin-left:auto;">' + subject + '</div>' : '') +
+    '</div>' +
+    '<div style="padding:24px 28px;font-size:14px;color:#1a1a18;line-height:1.8;white-space:pre-wrap;">' +
+      body.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>') +
+    '</div>' +
+    '<div style="background:#f8f8f7;padding:12px 28px;border-top:1px solid #e5e4e0;font-size:11px;color:#9a9a96;">Mixta Africa NPD Hub &nbsp;·&nbsp; Reply in thread</div>' +
+    '</div></body></html>';
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -982,8 +1116,9 @@ function test_deadlineCheck_testMode() {
   var today    = new Date(); today.setHours(0,0,0,0);
   var THRESHOLD_DAYS = 3;
 
-  var productsResp = UrlFetchApp.fetch(FIREBASE_DB_URL + '/products.json' + FIREBASE_DB_SECRET, { muteHttpExceptions: true });
-  var usersResp    = UrlFetchApp.fetch(FIREBASE_DB_URL + '/users.json' + FIREBASE_DB_SECRET,    { muteHttpExceptions: true });
+  var authParam    = FIREBASE_DB_SECRET ? '?auth=' + FIREBASE_DB_SECRET : '';
+  var productsResp = UrlFetchApp.fetch(FIREBASE_DB_URL + '/products.json' + authParam, { muteHttpExceptions: true });
+  var usersResp    = UrlFetchApp.fetch(FIREBASE_DB_URL + '/users.json'    + authParam, { muteHttpExceptions: true });
   var products     = JSON.parse(productsResp.getContentText()) || {};
   var users        = JSON.parse(usersResp.getContentText())    || {};
 
@@ -1186,7 +1321,8 @@ function test_firebaseConnection() {
   }
 
   try {
-    var resp = UrlFetchApp.fetch(FIREBASE_DB_URL + '/.json?shallow=true' + FIREBASE_DB_SECRET, { muteHttpExceptions: true });
+    var authQ = FIREBASE_DB_SECRET ? '&auth=' + FIREBASE_DB_SECRET : '';
+    var resp = UrlFetchApp.fetch(FIREBASE_DB_URL + '/.json?shallow=true' + authQ, { muteHttpExceptions: true });
     Logger.log('Status code: ' + resp.getResponseCode());
     if (resp.getResponseCode() === 200) {
       var data = JSON.parse(resp.getContentText());
@@ -1214,8 +1350,9 @@ function test_fullEndToEnd() {
   // Run the real dailyDeadlineCheck but patch recipients after
   var today = new Date(); today.setHours(0,0,0,0);
 
-  var productsResp = UrlFetchApp.fetch(FIREBASE_DB_URL + '/products.json' + FIREBASE_DB_SECRET, { muteHttpExceptions: true });
-  var usersResp    = UrlFetchApp.fetch(FIREBASE_DB_URL + '/users.json' + FIREBASE_DB_SECRET,    { muteHttpExceptions: true });
+  var authParam    = FIREBASE_DB_SECRET ? '?auth=' + FIREBASE_DB_SECRET : '';
+  var productsResp = UrlFetchApp.fetch(FIREBASE_DB_URL + '/products.json' + authParam, { muteHttpExceptions: true });
+  var usersResp    = UrlFetchApp.fetch(FIREBASE_DB_URL + '/users.json'    + authParam, { muteHttpExceptions: true });
   var products     = JSON.parse(productsResp.getContentText()) || {};
   var users        = JSON.parse(usersResp.getContentText())    || {};
 
