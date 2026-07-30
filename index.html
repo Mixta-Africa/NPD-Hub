@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
 <title>Mixta Africa — Product Development Hub</title>
 <link rel="preconnect" href="https://fonts.googleapis.com"/>
-<link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&family=Playfair+Display:wght@600&display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700;800&display=swap" rel="stylesheet"/>
 <!-- Favicon + PWA icons -->
 <link rel="icon" type="image/jpeg" href="Mixta%20Africa.jpg"/>
 <link rel="apple-touch-icon" href="Mixta%20Africa.jpg"/>
@@ -1661,10 +1661,72 @@ window.confirmAndLaunchGAS = async () => {
 window.viewProduct = (id) => {
   const p = productListCache[id];
   if (!p) return;
-  document.getElementById('modal-title-text').textContent = p.name + ' — Pillars';
-  document.getElementById('modal-body-content').innerHTML = buildPillarDetail(p);
+  document.getElementById('modal-title-text').textContent = p.name;
+  document.getElementById('modal-body-content').innerHTML = buildProductDetail(p, 'tasks');
   document.getElementById('create-product-modal').style.display = 'flex';
 };
+
+window.switchProductTab = (productId, tab, el) => {
+  const p = productListCache[productId];
+  if (!p) return;
+  document.querySelectorAll('.pdt-tab').forEach(t => t.classList.remove('active'));
+  if (el) el.classList.add('active');
+  const body = document.getElementById('product-detail-body');
+  if (body) body.innerHTML = tab === 'description'
+    ? buildDescriptionTab(p)
+    : buildPillarDetail(p);
+};
+
+function buildProductDetail(p, tab) {
+  const today2 = new Date(); today2.setHours(0,0,0,0);
+  const launch2 = p.launchDate ? new Date(p.launchDate) : null;
+  if (launch2) launch2.setHours(0,0,0,0);
+  const daysLeft2 = launch2 ? Math.round((launch2 - today2) / 86400000) : null;
+  const lChip = daysLeft2 === null ? ''
+    : daysLeft2 < 0   ? '<span class="pdt-chip chip-red">'+Math.abs(daysLeft2)+'d overdue</span>'
+    : daysLeft2 === 0  ? '<span class="pdt-chip chip-red">Due today</span>'
+    : daysLeft2 <= 14  ? '<span class="pdt-chip chip-amber">'+daysLeft2+'d to launch</span>'
+    : '<span class="pdt-chip chip-grey">'+formatDate(p.launchDate)+'</span>';
+
+  const tabHtml =
+    '<div class="pdt-header">' +
+    '<div class="pdt-meta">' + lChip +
+      '<span class="pdt-owner-chip">' +
+        '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 3.6-7 8-7s8 3 8 7"/></svg>' +
+        (p.ownerName || 'Unassigned') +
+      '</span>' +
+    '</div>' +
+    '<div class="pdt-tabs">' +
+      '<button class="pdt-tab active" onclick="switchProductTab(\'' + p.id + '\',\'tasks\',this)">Tasks</button>' +
+      '<button class="pdt-tab" onclick="switchProductTab(\'' + p.id + '\',\'description\',this)">Description</button>' +
+    '</div>' +
+    '</div>';
+
+  return tabHtml + '<div id="product-detail-body">' + buildPillarDetail(p) + '</div>';
+}
+
+function buildDescriptionTab(p) {
+  const tasks2   = getProductTasks(p);
+  const complete2 = tasks2.filter(t => t.status === 'complete').length;
+  const pct2      = Math.round((complete2 / (tasks2.length || 1)) * 100);
+  const driveLink = p.driveUrl
+    ? '<a href="' + p.driveUrl + '" target="_blank" style="color:var(--blue);">Open →</a>'
+    : 'Not set up';
+  const created = p.createdAt
+    ? formatDate(new Date(p.createdAt).toISOString().split('T')[0])
+    : '—';
+  return '<div class="pdt-desc-block">' +
+    '<div class="pdt-desc-text">' + (p.description || 'No description provided.') + '</div>' +
+    '<div class="pdt-desc-stats">' +
+      '<div class="pdt-ds-item"><span class="pdt-ds-label">Tasks</span><span class="pdt-ds-val">' + tasks2.length + '</span></div>' +
+      '<div class="pdt-ds-item"><span class="pdt-ds-label">Complete</span><span class="pdt-ds-val green">' + complete2 + '</span></div>' +
+      '<div class="pdt-ds-item"><span class="pdt-ds-label">Progress</span><span class="pdt-ds-val">' + pct2 + '%</span></div>' +
+      '<div class="pdt-ds-item"><span class="pdt-ds-label">Schema</span><span class="pdt-ds-val">' + (p.taskSchema === 'sop' ? 'SOP 12-pillar' : 'Custom') + '</span></div>' +
+      '<div class="pdt-ds-item"><span class="pdt-ds-label">Created</span><span class="pdt-ds-val">' + created + '</span></div>' +
+      '<div class="pdt-ds-item"><span class="pdt-ds-label">Drive</span><span class="pdt-ds-val">' + driveLink + '</span></div>' +
+    '</div></div>';
+}
+
 
 function buildPillarDetail(p) {
   const rows = PILLARS.map((pl, i) => {
@@ -2821,10 +2883,10 @@ async function renderReadOnlyPage(productId) {
 
     screen.innerHTML = `
       <div style="display:flex;align-items:center;gap:10px;margin-bottom:24px;">
-        <div style="width:32px;height:32px;background:#C0282D;border-radius:8px;display:flex;align-items:center;justify-content:center;color:white;font-family:'Playfair Display',serif;font-size:15px;font-weight:600<img src="Mixta%20Africa.jpg" alt="Mixta Africa" style="width:32px;height:32px;border-radius:8px;object-fit:cover;display:block;"/>">M</div>
+        <div style="width:32px;height:32px;background:#C0282D;border-radius:8px;display:flex;align-items:center;justify-content:center;color:white;font-family:'Poppins',sans-serif;font-size:13px;font-weight:600<img src="Mixta%20Africa.jpg" alt="Mixta Africa" style="width:32px;height:32px;border-radius:8px;object-fit:cover;display:block;"/>">M</div>
         <div style="font-size:12px;color:#9a9a96;text-transform:uppercase;letter-spacing:.07em;">Mixta Africa — NPD Hub</div>
       </div>
-      <h1 style="font-family:'Playfair Display',serif;font-size:26px;font-weight:600;margin-bottom:4px;">${prod.name}</h1>
+      <h1 style="font-family:'Poppins',sans-serif;font-size:24px;font-weight:700;margin-bottom:4px;">${prod.name}</h1>
       <p style="font-size:13px;color:#6b6b67;margin-bottom:24px;">Launch: ${formatDate(prod.launchDate)} &nbsp;·&nbsp; Last updated: ${new Date(prod.updatedAt||prod.createdAt).toLocaleDateString('en-GB',{day:'numeric',month:'short',year:'numeric'})}</p>
 
       <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:24px;">
@@ -5161,7 +5223,7 @@ async function openEmailComposer({
           </div>
         </div>
         <textarea id="ec-body" class="input-field" rows="14"
-          style="resize:vertical;font-size:13px;line-height:1.7;font-family:inherit;"
+          style="resize:vertical;font-size:13px;line-height:1.7;font-family:'Poppins',sans-serif;"
           placeholder="Generating AI draft…"></textarea>
       </div>
 
@@ -5757,9 +5819,10 @@ window.__npd_init({
   --radius:     8px;
   --shadow:     0 1px 3px rgba(0,0,0,0.07), 0 1px 2px rgba(0,0,0,0.04);
 }
+html { font-family: 'Poppins', sans-serif; }
 body { font-family: 'Poppins', sans-serif; background: var(--bg); color: var(--text); font-size: 14px; line-height: 1.5; -webkit-font-smoothing: antialiased; }
-button { cursor: pointer; font-family: inherit; }
-input, select, textarea { font-family: inherit; }
+button, input, select, textarea { font-family: 'Poppins', sans-serif; }
+button { cursor: pointer; }
 a { color: inherit; text-decoration: none; }
 
 /* ─── LOGIN SCREEN ─── */
@@ -5777,7 +5840,7 @@ a { color: inherit; text-decoration: none; }
   object-position: center; display: block; margin: 0 auto 12px;
   box-shadow: 0 2px 12px rgba(0,0,0,0.12);
 }
-.login-brand { font-family: 'Playfair Display', serif; font-size: 20px; font-weight: 600; color: var(--text); }
+.login-brand { font-family: 'Poppins', sans-serif; font-size: 18px; font-weight: 700; color: var(--text); }
 .login-sub   { font-size: 12px; color: var(--text-muted); letter-spacing: 0.08em; text-transform: uppercase; margin-top: 2px; }
 .login-heading { font-size: 22px; font-weight: 600; color: var(--text); margin-bottom: 6px; }
 .login-desc { font-size: 13px; color: var(--text-mid); margin-bottom: 28px; line-height: 1.6; }
@@ -5831,7 +5894,7 @@ a { color: inherit; text-decoration: none; }
   object-position: center; flex-shrink: 0; display: block;
 }
 .sidebar-brand-text { overflow: hidden; }
-.sidebar-brand { font-family: 'Playfair Display', serif; font-size: 14px; font-weight: 600; white-space: nowrap; line-height: 1.2; }
+.sidebar-brand { font-family: 'Poppins', sans-serif; font-size: 13px; font-weight: 700; white-space: nowrap; line-height: 1.2; }
 .sidebar-subbrand { font-size: 10px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.07em; white-space: nowrap; }
 
 .sidebar-nav { flex: 1; overflow-y: auto; padding: 10px 8px; }
@@ -5886,7 +5949,7 @@ a { color: inherit; text-decoration: none; }
 
 /* ─── COMMON COMPONENTS ─── */
 .view-header { display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 24px; gap: 16px; }
-.view-title   { font-family: 'Playfair Display', serif; font-size: 24px; font-weight: 600; line-height: 1.2; }
+.view-title   { font-family: 'Poppins', sans-serif; font-size: 22px; font-weight: 700; letter-spacing: -0.3px; line-height: 1.2; }
 .view-subtitle { font-size: 13px; color: var(--text-mid); margin-top: 4px; }
 
 .stats-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-bottom: 20px; }
@@ -6176,8 +6239,8 @@ textarea.input-field { resize: vertical; line-height: 1.6; }
 .tracker-deadline    { white-space:nowrap; }
 .pill-blue  { background:var(--blue-light); color:var(--blue); }
 
-.status-select { padding:5px 8px; border:1px solid var(--border-mid); border-radius:6px; font-size:12px; color:var(--text); background:var(--bg); font-family:inherit; }
-.notes-input { width:100%; padding:5px 8px; border:1px solid transparent; border-radius:6px; font-size:12px; color:var(--text); background:transparent; font-family:inherit; }
+.status-select { padding:5px 8px; border:1px solid var(--border-mid); border-radius:6px; font-size:12px; color:var(--text); background:var(--bg); font-family:'Poppins',sans-serif; }
+.notes-input { width:100%; padding:5px 8px; border:1px solid transparent; border-radius:6px; font-size:12px; color:var(--text); background:transparent; font-family:'Poppins',sans-serif; }
 .notes-input:focus { border-color:var(--border-mid); background:var(--surface); outline:none; }
 .notes-input:hover { border-color:var(--border); }
 .notes-text  { font-size:12px; color:var(--text-mid); }
@@ -6258,7 +6321,7 @@ textarea.input-field { resize: vertical; line-height: 1.6; }
 
 /* ─── SUPER ADMIN / CIRCUIT BOX ─── */
 .sa-tabs { display:flex; gap:2px; border-bottom:1px solid var(--border); margin-bottom:16px; }
-.sa-tab  { padding:8px 16px; font-size:13px; cursor:pointer; border:none; background:none; color:var(--text-mid); border-bottom:2px solid transparent; margin-bottom:-1px; font-family:inherit; }
+.sa-tab  { padding:8px 16px; font-size:13px; cursor:pointer; border:none; background:none; color:var(--text-mid); border-bottom:2px solid transparent; margin-bottom:-1px; font-family:'Poppins',sans-serif; }
 .sa-tab:hover  { color:var(--text-primary); }
 .sa-tab.active { color:var(--amber); border-bottom-color:var(--amber); font-weight:500; }
 
@@ -6347,7 +6410,7 @@ textarea.input-field { resize: vertical; line-height: 1.6; }
   border-radius: 6px; color: var(--text-mid); cursor: pointer;
   white-space: nowrap; flex-shrink: 0;
   transition: background .12s, color .12s, border-color .12s;
-  font-family: inherit;
+  font-family: 'Poppins', sans-serif;
 }
 .deadline-remind-btn:hover {
   background: var(--red-light); color: var(--red); border-color: var(--red-mid);
@@ -6358,7 +6421,7 @@ textarea.input-field { resize: vertical; line-height: 1.6; }
 .status-btn {
   font-size:11px; font-weight:600; padding:5px 10px; border-radius:6px;
   border:1.5px solid transparent; cursor:pointer; background:none;
-  font-family:inherit; transition:all .15s; white-space:nowrap;
+  font-family:'Poppins',sans-serif; transition:all .15s; white-space:nowrap;
   color:var(--text-muted); border-color:var(--border-mid);
 }
 .status-btn:hover { opacity:.8; }
@@ -6396,7 +6459,7 @@ textarea.input-field { resize: vertical; line-height: 1.6; }
 
 /* ─── CALENDAR: VIEW TOGGLE ─── */
 .cal-view-toggle { display:flex; border:1px solid var(--border-mid); border-radius:8px; overflow:hidden; }
-.cal-view-btn    { padding:6px 14px; font-size:12px; font-weight:500; background:none; border:none; cursor:pointer; color:var(--text-mid); font-family:inherit; transition:background .12s; }
+.cal-view-btn    { padding:6px 14px; font-size:12px; font-weight:500; background:none; border:none; cursor:pointer; color:var(--text-mid); font-family:'Poppins',sans-serif; transition:background .12s; }
 .cal-view-btn:hover  { background:var(--bg); }
 .cal-view-btn.active { background:var(--red); color:white; }
 
@@ -6503,7 +6566,7 @@ textarea.input-field { resize: vertical; line-height: 1.6; }
 .kb-card-meta       { display:flex; align-items:center; gap:6px; flex-wrap:wrap; margin-bottom:6px; }
 .kb-card-owner      { font-size:11px; color:var(--text-muted); background:var(--bg); padding:2px 7px; border-radius:99px; }
 .kb-card-actions    { display:flex; gap:4px; flex-wrap:wrap; margin-top:6px; padding-top:6px; border-top:1px solid var(--border); }
-.kb-move-btn        { font-size:10px; padding:3px 8px; border:1px solid var(--border-mid); border-radius:5px; background:none; cursor:pointer; color:var(--text-mid); font-family:inherit; transition:background .1s; }
+.kb-move-btn        { font-size:10px; padding:3px 8px; border:1px solid var(--border-mid); border-radius:5px; background:none; cursor:pointer; color:var(--text-mid); font-family:'Poppins',sans-serif; transition:background .1s; }
 .kb-move-btn:hover  { background:var(--bg); }
 .kb-move-done       { color:var(--green); border-color:var(--green); }
 .kb-move-done:hover { background:var(--green-light); }
