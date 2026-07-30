@@ -757,6 +757,35 @@ function getPillarStatus(deadline) {
   if (diff <= 3) return 'warning';
   return 'ontrack';
 }
+/* ── UNIFIED STATUS RESOLVER ──────────────────────────────────
+   Single source of truth for a task's effective status.
+   Priority: complete > delayed (explicit) > overdue (date) > due-soon > on-track
+   Every part of the dashboard references THIS so a change anywhere
+   propagates everywhere. ────────────────────────────────────── */
+function resolveTaskStatus(task) {
+  const s = task.status || task.taskStatus || 'on-track';
+  if (s === 'complete') return 'complete';
+  if (s === 'delayed')  return 'delayed';
+  // Not explicitly delayed/complete → derive from deadline
+  if (!task.deadline)   return 'on-track';
+  const today = new Date(); today.setHours(0,0,0,0);
+  const due   = new Date(task.deadline); due.setHours(0,0,0,0);
+  const diff  = Math.round((due - today) / 86400000);
+  if (diff < 0)  return 'overdue';
+  if (diff <= 3) return 'due-soon';
+  return 'on-track';
+}
+
+// Colour + label lookup — used by every status pill/dot on the dashboard
+const STATUS_META = {
+  'complete':  { label: 'Complete',  color: 'var(--blue)',  cls: 'st-complete'  },
+  'delayed':   { label: 'Delayed',   color: 'var(--red)',   cls: 'st-delayed'   },
+  'overdue':   { label: 'Overdue',   color: 'var(--red)',   cls: 'st-overdue'   },
+  'due-soon':  { label: 'Due soon',  color: 'var(--amber)', cls: 'st-due-soon'  },
+  'on-track':  { label: 'On track',  color: 'var(--green)', cls: 'st-on-track'  },
+};
+function statusMeta(task) { return STATUS_META[resolveTaskStatus(task)] || STATUS_META['on-track']; }
+
 
 function statusLabel(s) {
   return { ontrack: 'On track', warning: 'Due soon', overdue: 'Overdue', 'no-date': 'No date set', 'complete': 'Complete', 'not-started': 'Not started', 'in-progress': 'In progress' }[s] || s;
@@ -907,7 +936,7 @@ function _updateDashboardUI(list) {
     // Deadlines panel
     const dlEl = document.getElementById('dash-deadlines');
     if (upcomingDeadlines.length === 0) {
-      dlEl.innerHTML = '<div class="empty-state-sm"><span class="empty-icon" style="color:var(--text-muted);">${ICON.calendar}</span><p>No deadlines this week.</p></div>';
+      dlEl.innerHTML = '<div class="empty-state-sm"><span class="empty-icon" style="color:var(--text-muted);"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg></span><p>No deadlines this week.</p></div>';
     } else {
       upcomingDeadlines.sort((a,b) => new Date(a.date) - new Date(b.date));
       dlEl.innerHTML = upcomingDeadlines.slice(0,5).map(d => `
@@ -973,7 +1002,7 @@ async function loadProductList() {
       .sort((a,b) => b.createdAt - a.createdAt);
 
     if (list.length === 0) {
-      area.innerHTML = '<div class="panel"><div class="empty-state"><span class="empty-icon" style="color:var(--text-muted);">${ICON.clipboard}</span><h3>No products yet</h3><p>Create your first product launch to get started.</p>' +
+      area.innerHTML = '<div class="panel"><div class="empty-state"><span class="empty-icon" style="color:var(--text-muted);"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 4h2a2 2 0 012 2v14a2 2 0 01-2 2H6a2 2 0 01-2-2V6a2 2 0 012-2h2"/><rect x="8" y="2" width="8" height="4" rx="1"/></svg></span><h3>No products yet</h3><p>Create your first product launch to get started.</p>' +
         (currentRole === 'admin' ? `<button class="btn-primary" onclick="showCreateProduct()">Create your first product</button>` : '<p class="muted">Contact an admin to initiate a product launch.</p>') +
         '</div></div>';
       return;
@@ -1922,49 +1951,39 @@ function drawGantt() {
 
   const todayPct = pctOf(today.toISOString().split('T')[0]);
 
-  // Group by product — one bar per product spanning first→last milestone
-  const byProduct = {};
-  milestones.forEach(m => {
-    if (!byProduct[m.productId]) byProduct[m.productId] = { name: m.productName, items: [] };
-    byProduct[m.productId].items.push(m);
-  });
+  // One row per milestone — identical layout to Task Tracker Gantt.
+  // Each row: status dot + milestone name in the label, positioned marker on the track.
+  const sorted = [...milestones].sort((a, b) => new Date(a.date) - new Date(b.date));
 
-  const rows = Object.values(byProduct).map(prod => {
-    const sorted   = [...prod.items].sort((a, b) => new Date(a.date) - new Date(b.date));
-    const firstPct = pctOf(sorted[0].date) ?? 0;
-    const lastPct  = pctOf(sorted[sorted.length - 1].date) ?? firstPct;
-    const barWidth = Math.max(lastPct - firstPct, 0.5);
+  const rows = sorted.map(m => {
+    const dp = pctOf(m.date);
+    if (dp === null) return '';
 
-    // Colour bar by worst status across milestones
-    const hasOverdue  = sorted.some(m => m.deadlineStatus === 'overdue');
-    const hasWarning  = sorted.some(m => m.deadlineStatus === 'warning');
-    const allComplete = sorted.every(m => m.deadlineStatus === 'complete');
-    const barCls = allComplete ? 'tg-bar-complete'
-                 : hasOverdue  ? 'tg-bar-delayed'
-                 : hasWarning  ? 'tg-bar-blocked'
+    // Unified status → dot + bar class (matches tracker exactly)
+    const eff = m.effectiveStatus;
+    const dotStatus = eff === 'complete' ? 'complete'
+                    : eff === 'delayed'  ? 'delayed'
+                    : eff === 'overdue'  ? 'delayed'
+                    : eff === 'due-soon' ? 'due-soon'
+                    : 'on-track';
+    const barCls = eff === 'complete' ? 'tg-bar-complete'
+                 : eff === 'delayed'  ? 'tg-bar-delayed'
+                 : eff === 'overdue'  ? 'tg-bar-delayed'
+                 : eff === 'due-soon' ? 'tg-bar-blocked'
                  : 'tg-bar-ontrack';
 
-    // Individual milestone dots on top of bar
-    const dots = sorted.map(m => {
-      const dp = pctOf(m.date);
-      if (dp === null) return '';
-      const dotCls = m.deadlineStatus === 'complete' ? 'gantt-dot-blue'
-                   : m.deadlineStatus === 'overdue'  ? 'gantt-dot-red'
-                   : m.deadlineStatus === 'warning'  ? 'gantt-dot-amber'
-                   : 'gantt-dot-green';
-      return `<div class="gantt-dot ${dotCls}" style="left:${dp}%;z-index:3;" title="${m.pillarName} — ${formatDate(m.date)}">
-        <div class="gantt-tooltip">${m.pillarName}<br/>${formatDate(m.date)}</div>
-      </div>`;
-    }).join('');
+    const label = m.pillarName || m.productName || 'Milestone';
 
     return `<div class="gantt-row">
-      <div class="gantt-label" title="${prod.name}">${prod.name}</div>
+      <div class="gantt-label" title="${label} — ${m.productName}">
+        <span class="tg-status-dot tg-dot-${dotStatus}"></span>
+        ${label}
+      </div>
       <div class="gantt-track">
         ${todayPct !== null ? `<div class="gantt-today-line" style="left:${todayPct}%"></div>` : ''}
-        <div class="tg-bar ${barCls}" style="left:${firstPct}%;width:${barWidth}%;top:8px;bottom:8px;">
-          <div class="gantt-tooltip">${prod.name}<br/>${formatDate(sorted[0].date)} → ${formatDate(sorted[sorted.length-1].date)}</div>
+        <div class="tg-bar ${barCls}" style="left:${Math.max(0, dp - 0.6)}%;width:1.4%;top:10px;bottom:10px;min-width:14px;">
+          <div class="gantt-tooltip">${label} · ${m.productName}<br/>${formatDate(m.date)}</div>
         </div>
-        ${dots}
       </div>
     </div>`;
   }).join('');
@@ -2022,6 +2041,7 @@ function getCalMilestones() {
     const tasks = getProductTasks(prod);
     tasks.forEach(task => {
       if (!task.deadline) return;
+      const effective = resolveTaskStatus(task);
       out.push({
         date:           task.deadline,
         productName:    prod.name,
@@ -2029,7 +2049,8 @@ function getCalMilestones() {
         pillarName:     task.title || task.name,
         pillarId:       task.id,
         taskStatus:     task.status || 'on-track',
-        deadlineStatus: task.status === 'complete' ? 'complete' : getPillarStatus(task.deadline),
+        effectiveStatus: effective,          // unified status — single source of truth
+        _task:          task,                // full task ref for downstream use
       });
     });
   });
@@ -2062,13 +2083,28 @@ function drawCalendar() {
     const isToday  = cellDate.getTime() === today.getTime();
     const events   = dayMap[day] || [];
     const dots = events.slice(0,4).map(e => {
-      const cls = e.deadlineStatus==='complete' ? 'cal-dot-blue'
-        : e.deadlineStatus==='overdue' ? 'cal-dot-red'
-        : e.deadlineStatus==='warning' ? 'cal-dot-amber' : 'cal-dot-green';
+      const cls = e.effectiveStatus==='complete' ? 'cal-dot-blue'
+        : e.effectiveStatus==='delayed'  ? 'cal-dot-red'
+        : e.effectiveStatus==='overdue'  ? 'cal-dot-red'
+        : e.effectiveStatus==='due-soon' ? 'cal-dot-amber'
+        : 'cal-dot-green';
       return `<span class="cal-dot ${cls}" title="${e.productName}: ${e.pillarName}"></span>`;
     }).join('');
     const extra = events.length > 4 ? `<span class="cal-dot-more">+${events.length-4}</span>` : '';
-    html += `<div class="cal-cell${isToday?' cal-cell-today':''}${events.length?' cal-cell-has-events':''}" onclick="calDayClick(${day})">
+
+    // Subtle day-fill by worst status on that day
+    let dayFill = '';
+    if (events.length) {
+      const hasBad  = events.some(e => e.effectiveStatus==='delayed' || e.effectiveStatus==='overdue');
+      const hasWarn = events.some(e => e.effectiveStatus==='due-soon');
+      const allDone = events.every(e => e.effectiveStatus==='complete');
+      dayFill = hasBad ? ' cal-cell-fill-red'
+              : hasWarn ? ' cal-cell-fill-amber'
+              : allDone ? ' cal-cell-fill-blue'
+              : ' cal-cell-fill-green';
+    }
+
+    html += `<div class="cal-cell${isToday?' cal-cell-today':''}${events.length?' cal-cell-has-events':''}${dayFill}" onclick="calDayClick(${day})">
       <div class="cal-day-num">${day}</div>
       <div class="cal-dots">${dots}${extra}</div>
     </div>`;
@@ -2091,16 +2127,14 @@ function drawMilestoneList() {
 }
 
 function buildMilestoneRow(m) {
-  const cls = m.deadlineStatus==='complete' ? 'leg-blue'
-    : m.deadlineStatus==='overdue' ? 'leg-red'
-    : m.deadlineStatus==='warning' ? 'leg-amber' : 'leg-green';
+  const meta = STATUS_META[m.effectiveStatus] || STATUS_META['on-track'];
   return `<div class="milestone-row">
-    <span class="leg-dot ${cls}" style="flex-shrink:0;margin-top:2px;"></span>
+    <span class="leg-dot" style="flex-shrink:0;margin-top:4px;background:${meta.color};"></span>
     <div class="milestone-info">
       <div class="milestone-pillar">${m.pillarName}</div>
       <div class="milestone-product">${m.productName} — ${formatDate(m.date)}</div>
     </div>
-    <span class="task-status task-${m.taskStatus}">${statusLabel(m.taskStatus)}</span>
+    <span class="status-pill ${meta.cls}">${meta.label}</span>
   </div>`;
 }
 
@@ -2164,7 +2198,7 @@ async function loadTrackerProducts() {
     window._trackerFilter = null;
   } else {
     document.getElementById('tracker-body').innerHTML =
-      '<div class="panel"><div class="empty-state"><span class="empty-icon" style="color:var(--text-muted);">${ICON.clipboard}</span><h3>No products yet</h3><p>Create a product first.</p></div></div>';
+      '<div class="panel"><div class="empty-state"><span class="empty-icon" style="color:var(--text-muted);"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 4h2a2 2 0 012 2v14a2 2 0 01-2 2H6a2 2 0 01-2-2V6a2 2 0 012-2h2"/><rect x="8" y="2" width="8" height="4" rx="1"/></svg></span><h3>No products yet</h3><p>Create a product first.</p></div></div>';
   }
 }
 
@@ -2262,7 +2296,7 @@ function renderTrackerTable(prod, filter) {
 
     const statusColor = isBlocked  ? '#6B7280'
                       : isComplete ? 'var(--blue)'
-                      : isDelayed  ? 'var(--amber)'
+                      : isDelayed  ? 'var(--red)'
                       : delayedDays > 0 ? 'var(--red)'
                       : 'var(--green)';
 
@@ -2380,13 +2414,13 @@ window.updatePillarStatus = async (productId, taskId, newStatus) => {
     }
     // Check if product should now be locked
     await checkAndLockProduct(productId);
-    // Refresh current tracker view
-    const p = trackerProductsCache[productId];
-    if (p && currentView === 'tracker') {
-      if (trackerViewMode === 'kanban') renderKanban(p);
-      else if (trackerViewMode === 'gantt') renderTrackerGantt(p);
-      else renderTrackerTable(p, null);
-    }
+
+    // ── PROPAGATE: sync the status change into every cache so all
+    //    views (dashboard, calendar, products, tracker, docs) stay in lockstep ──
+    propagateStatusChange(productId, taskId, newStatus);
+
+    // Re-render whichever view is currently active
+    refreshActiveView(productId);
     // Log to activity feed
     const taskObj  = tasks.find(t => t.id === taskId);
     const taskName = taskObj?.title || taskObj?.name || taskId;
@@ -2402,6 +2436,50 @@ window.updatePillarStatus = async (productId, taskId, newStatus) => {
 
     showToast('Status updated.', 'success');
   } catch(e) { showToast('Update failed: ' + e.message, 'error'); }
+
+/* ── CROSS-VIEW STATUS PROPAGATION ────────────────────────────
+   Writes the new status into every in-memory product cache so a
+   change made in one view is instantly reflected everywhere. ── */
+function propagateStatusChange(productId, taskId, newStatus) {
+  const caches = [
+    typeof productListCache    !== 'undefined' ? productListCache    : null,
+    typeof trackerProductsCache !== 'undefined' ? trackerProductsCache : null,
+    typeof calProductsCache    !== 'undefined' ? calProductsCache    : null,
+    typeof docsProductsCache   !== 'undefined' ? docsProductsCache   : null,
+  ].filter(Boolean);
+
+  caches.forEach(cache => {
+    const p = cache[productId];
+    if (!p) return;
+    if (p.tasks && p.tasks[taskId])        p.tasks[taskId].status     = newStatus;
+    else if (p.pillars && p.pillars[taskId]) p.pillars[taskId].taskStatus = newStatus;
+  });
+}
+
+/* Re-render whatever view the user is currently looking at, using fresh cache data. */
+function refreshActiveView(productId) {
+  switch (currentView) {
+    case 'tracker': {
+      const p = trackerProductsCache[productId];
+      if (!p) break;
+      if (trackerViewMode === 'kanban')      renderKanban(p);
+      else if (trackerViewMode === 'gantt')  renderTrackerGantt(p);
+      else                                    renderTrackerTable(p, null);
+      break;
+    }
+    case 'calendar':
+      if (calViewMode === 'gantt') drawGantt();
+      else { drawCalendar(); drawMilestoneList(); }
+      break;
+    case 'dashboard':
+      if (typeof loadDashboardStats === 'function') loadDashboardStats();
+      break;
+    case 'products':
+      // Re-render products list from refreshed data
+      if (typeof loadProductList === 'function') loadProductList();
+      break;
+  }
+}
 };
 
 window.updatePillarNotes = async (productId, taskId, notes) => {
@@ -2464,7 +2542,7 @@ async function loadDocsProducts() {
     renderDocsFolders(active[0]);
   } else {
     document.getElementById('docs-body').innerHTML =
-      '<div class="panel"><div class="empty-state"><span class="empty-icon" style="color:var(--text-muted);">${ICON.folder}</span><h3>No products yet</h3><p>Create a product first.</p></div></div>';
+      '<div class="panel"><div class="empty-state"><span class="empty-icon" style="color:var(--text-muted);"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/></svg></span><h3>No products yet</h3><p>Create a product first.</p></div></div>';
   }
 }
 
@@ -4797,7 +4875,7 @@ async function renderSATemplates(el) {
   const entries = Object.entries(SAVED_TEMPLATES);
 
   if (entries.length === 0) {
-    el.innerHTML = '<div class="empty-state-sm"><span class="empty-icon" style="color:var(--text-muted);">${ICON.clipboard}</span><h3>No saved templates</h3><p>When you create a product with a custom task setup and save it as a template, it will appear here.</p></div>';
+    el.innerHTML = '<div class="empty-state-sm"><span class="empty-icon" style="color:var(--text-muted);"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 4h2a2 2 0 012 2v14a2 2 0 01-2 2H6a2 2 0 01-2-2V6a2 2 0 012-2h2"/><rect x="8" y="2" width="8" height="4" rx="1"/></svg></span><h3>No saved templates</h3><p>When you create a product with a custom task setup and save it as a template, it will appear here.</p></div>';
     return;
   }
 
@@ -6669,6 +6747,23 @@ textarea.input-field { resize: vertical; line-height: 1.6; }
 .sdi-current { margin-left:auto; font-size:10px; color:var(--text-muted); font-weight:400; }
 .task-status-badge { display:inline-flex; align-items:center; gap:5px; font-size:11px; font-weight:600; padding:4px 11px; border-radius:99px; border:1.5px solid; cursor:pointer; white-space:nowrap; transition:opacity .12s; user-select:none; }
 .task-status-badge:hover { opacity:.82; }
+
+/* Subtle calendar day-status fills */
+.cal-cell-fill-red    { background:rgba(192,40,45,.07); }
+.cal-cell-fill-red:hover    { background:rgba(192,40,45,.12); }
+.cal-cell-fill-amber  { background:rgba(217,119,6,.07); }
+.cal-cell-fill-amber:hover  { background:rgba(217,119,6,.12); }
+.cal-cell-fill-green  { background:rgba(22,163,74,.06); }
+.cal-cell-fill-green:hover  { background:rgba(22,163,74,.11); }
+.cal-cell-fill-blue   { background:rgba(37,99,235,.05); }
+.cal-cell-fill-blue:hover   { background:rgba(37,99,235,.10); }
+/* Unified status pills — used across milestone list, tracker, cards */
+.status-pill { font-size:11px; font-weight:600; padding:3px 10px; border-radius:99px; flex-shrink:0; white-space:nowrap; }
+.status-pill.st-complete  { background:var(--blue-light);  color:var(--blue);  }
+.status-pill.st-delayed   { background:var(--red-light);   color:var(--red);   }
+.status-pill.st-overdue   { background:var(--red-light);   color:var(--red);   }
+.status-pill.st-due-soon  { background:var(--amber-light); color:var(--amber); }
+.status-pill.st-on-track  { background:var(--green-light); color:var(--green); }
 </style>
 
 <!-- ══════════════════════════════════════════
@@ -6702,7 +6797,7 @@ textarea.input-field { resize: vertical; line-height: 1.6; }
 ══════════════════════════════════════════ -->
 <div id="screen-denied" style="display:none;">
   <div class="denied-card">
-    <div class="denied-icon" style="color:var(--text-muted);">${ICON.lock}</div>
+    <div class="denied-icon" style="color:var(--text-muted);"><svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg></div>
     <h2>Access not granted</h2>
     <p>Your account (<span class="denied-email" id="denied-email"></span>) has not been added to the NPD Hub allowlist.<br/><br/>Contact a Commercial Strategy admin to request access.</p>
     <button class="btn-outline" onclick="handleSignOut()">Sign in with a different account</button>
@@ -6762,7 +6857,7 @@ textarea.input-field { resize: vertical; line-height: 1.6; }
         <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
         <span>Circuit Box</span>
       </button>
-      <button class="nav-item" style="font-size:11px;color:var(--text-muted);justify-content:center;" onclick="showSAChallenge()" title="Super admin access">${ICON.bolt}</button>
+      <button class="nav-item" style="font-size:11px;color:var(--text-muted);justify-content:center;" onclick="showSAChallenge()" title="Super admin access"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg></button>
     </div>
 
     <div class="sidebar-bottom">
