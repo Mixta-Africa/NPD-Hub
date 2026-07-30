@@ -72,6 +72,8 @@ const firebaseConfig = {
 
 // GAS endpoint — injected at deploy time
 const GAS_ENDPOINT = 'https://script.google.com/macros/s/AKfycbyf77g3j0-PfKlLoYZ4ZoGW1UIzy6HhNLTmCkN6Ad1AW9iuXTgR5A0PFhXyzmuRVoI6/exec';
+const GROQ_API_KEY = '__GROQ_API_KEY__';
+const GROQ_MODEL   = 'llama-3.3-70b-versatile';
 const TEST_EMAIL   = 'o.olasunkanmi@mixtafrica.com';
 
 // Super admin password hash — injected at deploy time (SHA-256, never stored as plaintext)
@@ -1054,9 +1056,12 @@ window.editProduct = (id) => {
   // Set textarea values that can't be set inside template literals safely
   setTimeout(() => {
     const recipEl = document.getElementById('f-alert-recipients');
-    if (recipEl && p.alertRecipients?.length > 0) {
-      recipEl.value = p.alertRecipients.join('\n');
-    }
+    if (recipEl && p.alertRecipients?.length > 0) recipEl.value = p.alertRecipients.join('\n');
+    const ccEl = document.getElementById('f-default-ccs');
+    if (ccEl && p.defaultCCs?.length > 0) ccEl.value = p.defaultCCs.join('\n');
+    // Render escalation chain
+    const escEl = document.getElementById('escalation-editor');
+    if (escEl) renderEscalationEditor(escEl, p.escalationChain || [], p.id);
   }, 20);
 };
 
@@ -1280,7 +1285,7 @@ function buildEditProductForm(p) {
       <button class="btn-primary-sm" onclick="showAddTaskToProduct('${p.id}')">+ Add task</button>
     </div>
     <div>${taskRows}</div>
-    <div class="form-section-label" style="margin-top:20px;">Alert settings</div>
+    <div class="form-section-label" style="margin-top:20px;">Alert & email settings</div>
     <div class="form-row" style="display:flex;align-items:center;justify-content:space-between;">
       <div>
         <div style="font-size:13px;font-weight:500;">Deadline alerts</div>
@@ -1292,9 +1297,19 @@ function buildEditProductForm(p) {
       </label>
     </div>
     <div class="form-row">
-      <label class="form-label">Alert recipients <span class="form-hint">— override default (product owner). One email per line.</span></label>
-      <textarea id="f-alert-recipients" class="input-field" rows="3"
-        placeholder="Leave blank to default to the product owner&#10;e.g. colleague@mixtafrica.com"></textarea>
+      <label class="form-label">Alert recipients <span class="form-hint">— override default (product owner). One per line.</span></label>
+      <textarea id="f-alert-recipients" class="input-field" rows="2"
+        placeholder="Leave blank to use product owner&#10;e.g. colleague@mixtafrica.com"></textarea>
+    </div>
+    <div class="form-row">
+      <label class="form-label">Default CC list <span class="form-hint">— pre-loaded in every email composer for this product. One per line.</span></label>
+      <textarea id="f-default-ccs" class="input-field" rows="2"
+        placeholder="e.g. t.akinsulire@mixtafrica.com&#10;e.g. deji.alli@mixtafrica.com"></textarea>
+    </div>
+    <div class="form-row">
+      <label class="form-label">Escalation chain <span class="form-hint">— who gets added when tasks are severely overdue</span></label>
+      <div class="escalation-chain-editor" id="escalation-editor"></div>
+      <button class="btn-outline" style="font-size:11px;margin-top:6px;" onclick="addEscalationLevel('${p.id}')">+ Add escalation level</button>
     </div>
     <div class="form-actions">
       <button class="btn-outline" onclick="closeProductModal()">Cancel</button>
@@ -1411,8 +1426,10 @@ window.saveProduct = async (existingId) => {
     ownerId:      ownerKey,
     ownerName:    ownerName,
     sharedWith:   isNew ? {} : (productListCache[existingId]?.sharedWith || {}),
-    alertsEnabled:   isNew ? true : (document.getElementById('f-alerts-enabled')?.checked ?? (productListCache[existingId]?.alertsEnabled ?? true)),
-    alertRecipients: isNew ? [] : (document.getElementById('f-alert-recipients')?.value?.split(/\r?\n/).map(e=>e.trim()).filter(Boolean) || productListCache[existingId]?.alertRecipients || []),
+    alertsEnabled:     isNew ? true : (document.getElementById('f-alerts-enabled')?.checked ?? (productListCache[existingId]?.alertsEnabled ?? true)),
+    alertRecipients:   isNew ? [] : (document.getElementById('f-alert-recipients')?.value?.split(/\r?\n/).map(e=>e.trim()).filter(Boolean) || productListCache[existingId]?.alertRecipients || []),
+    defaultCCs:        isNew ? [] : (() => { const el = document.getElementById('f-default-ccs'); return el ? el.value.split(/\r?\n/).map(e=>e.trim()).filter(Boolean) : (productListCache[existingId]?.defaultCCs || []); })(),
+    escalationChain:   isNew ? [{ daysOverdue: 7, addEmails: [] }, { daysOverdue: 21, addEmails: [] }] : (productListCache[existingId]?.escalationChain || [{ daysOverdue: 7, addEmails: [] }, { daysOverdue: 21, addEmails: [] }]),
     createdAt:  isNew ? Date.now() : (productListCache[existingId]?.createdAt || Date.now()),
     updatedAt:  Date.now(),
     createdBy:  isNew ? currentUser.email : (productListCache[existingId]?.createdBy || currentUser.email),
@@ -1527,17 +1544,15 @@ window.skipGASSetup = () => {
 
 window.confirmAndLaunchGAS = async () => {
   if (!pendingProduct) return;
-  const testMode = document.getElementById('onboard-send-mode')?.value === 'test';
   if (selectedStakeholders.length === 0) {
     showToast('Select at least one stakeholder, or click Skip.', 'error'); return;
   }
 
-  // Show loading state on button
   const btn = document.querySelector('#modal-body-content .btn-primary');
-  if (btn) { btn.disabled = true; btn.textContent = 'Setting up...'; }
+  if (btn) { btn.disabled = true; btn.textContent = 'Setting up Drive…'; }
 
   try {
-    // Step 1: Create Drive folder
+    // Step 1: Create Drive folder first (no email yet)
     showToast('Creating Drive folder...', 'info');
     const driveResult = await callGAS('createProductDrive', {
       productName:       pendingProduct.name,
@@ -1549,34 +1564,62 @@ window.confirmAndLaunchGAS = async () => {
     let folderUrl = null;
     if (driveResult.ok && !driveResult.stub) {
       folderUrl = driveResult.folderUrl;
-      // Save folder URL to Firebase
       await set(ref(db, `products/${pendingProduct.id}/driveUrl`), folderUrl);
       productListCache[pendingProduct.id].driveUrl = folderUrl;
     }
 
-    // Step 2: Send onboarding emails
-    showToast('Sending onboarding emails...', 'info');
-    const emailResult = await callGAS('sendOnboardingEmails', {
-      productName:       pendingProduct.name,
-      productId:         pendingProduct.id,
-      launchDate:        pendingProduct.launchDate,
-      folderUrl:         folderUrl || 'Folder setup pending',
-      createdBy:         pendingProduct.createdBy,
-      stakeholders:      STAKEHOLDERS.filter(s => selectedStakeholders.includes(s.email)),
-      pillars:           PILLARS,
-      testMode,
-    });
-
-    // Save onboarding timestamp
+    // Save onboarding metadata
     await set(ref(db, `products/${pendingProduct.id}/onboardedAt`), Date.now());
     await set(ref(db, `products/${pendingProduct.id}/onboardedEmails`), selectedStakeholders);
 
     closeProductModal();
-    const modeLabel = testMode ? `[TEST → ${TEST_EMAIL}]` : `${selectedStakeholders.length} stakeholders`;
-    showToast(`Done. ${modeLabel} notified.`, 'success');
     loadProductList();
+
+    // Step 2: Open AI email composer for onboarding emails
+    // Group recipients by dept for context-aware drafts
+    const prod = { ...pendingProduct, driveUrl: folderUrl };
+    const tasks = getProductTasks(prod);
+    const deptMap = {};
+    selectedStakeholders.forEach(email => {
+      const s = STAKEHOLDERS.find(x => x.email === email);
+      if (!s) return;
+      if (!deptMap[s.dept]) deptMap[s.dept] = { emails: [], tasks: [] };
+      deptMap[s.dept].emails.push(email);
+    });
+    tasks.forEach(task => {
+      if (task.owner && deptMap[task.owner]) {
+        deptMap[task.owner].tasks.push(task);
+      }
+    });
+
+    // For onboarding, show a single composer covering all selected stakeholders
+    // The AI writes a general onboarding email; user can customise per dept if needed
+    const allDepts = Object.keys(deptMap).join(', ') || 'all departments';
+    const taskSummary = tasks.slice(0, 6).map((t,i) =>
+      `${i+1}. ${t.title||t.name} (${t.owner||'?'}) — ${t.deadline||'TBD'}`
+    ).join('\n');
+
+    await openEmailComposer({
+      type:      'onboarding',
+      subject:   `${prod.name} — Product Launch Onboarding`,
+      toEmails:  selectedStakeholders,
+      ccEmails:  prod.defaultCCs || [],
+      productId: prod.id,
+      draftPrompt: buildOnboardingPrompt(prod, allDepts, tasks.slice(0, 8), 'the team'),
+      onSend: async ({ subject, body, toEmails, ccEmails, testMode }) => {
+        await callGAS('sendComposedEmail', {
+          subject, body, toEmails, ccEmails,
+          testMode,
+          productName: prod.name,
+          folderUrl:   folderUrl || null,
+        });
+        await logActivity(prod.id, 'status', 'Onboarding emails sent', `To: ${toEmails.length} recipients`);
+        showToast(`Onboarding email sent to ${toEmails.length} recipient${toEmails.length!==1?'s':''}.`, 'success');
+      },
+    });
+
   } catch(e) {
-    showToast('GAS setup failed: ' + e.message + '. Product saved — retry from Settings.', 'error');
+    showToast('Setup failed: ' + e.message, 'error');
     closeProductModal();
     loadProductList();
   }
@@ -2640,86 +2683,39 @@ async function loadReportProductList() {
 }
 
 window.generateProgressReport = async () => {
-  const btn      = document.querySelector('.report-form .btn-primary');
-  const resultEl = document.getElementById('report-result');
   const productId = document.getElementById('report-product-sel')?.value;
-  const notes     = document.getElementById('report-notes')?.value?.trim() || '';
-
   if (!productId) { showToast('Select a product.', 'error'); return; }
-  if (btn) { btn.disabled = true; btn.textContent = 'Generating...'; }
-  if (resultEl) resultEl.style.display = 'none';
 
-  try {
-    const snap = await get(ref(db, `products/${productId}`));
-    const prod  = snap.val();
-    if (!prod) throw new Error('Product not found');
+  const snap = await get(ref(db, `products/${productId}`));
+  const prod = snap.val();
+  if (!prod) { showToast('Product not found.', 'error'); return; }
 
-    // Build report data
-    const today    = new Date(); today.setHours(0,0,0,0);
-    const complete = PILLARS.filter(pl => prod.pillars?.[pl.id]?.taskStatus === 'complete').length;
-    const inProg   = PILLARS.filter(pl => prod.pillars?.[pl.id]?.taskStatus === 'in-progress').length;
-    const overdue  = PILLARS.filter(pl => {
-      const pd = prod.pillars?.[pl.id];
-      return pd?.deadline && pd?.taskStatus !== 'complete' && getPillarStatus(pd.deadline) === 'overdue';
-    }).length;
-    const pct = Math.round((complete / PILLARS.length) * 100);
+  const tasks    = getProductTasks(prod);
+  const complete = tasks.filter(t => t.status === 'complete').length;
+  const pct      = Math.round((complete / (tasks.length || 1)) * 100);
+  const recipients = prod.onboardedEmails?.length > 0
+    ? prod.onboardedEmails
+    : STAKEHOLDERS.filter(s => s.enabled !== false).map(s => s.email);
 
-    const pillarSummary = PILLARS.map(pl => {
-      const pd = prod.pillars?.[pl.id] || {};
-      return { pillar: pl.name, owner: pl.owner, status: pd.taskStatus || 'not-started', deadline: pd.deadline || null, notes: pd.notes || '' };
-    });
-
-    const reportPayload = {
-      productName:     prod.name,
-      productId:       prod.id,
-      launchDate:      prod.launchDate,
-      reportDate:      new Date().toISOString().split('T')[0],
-      generatedBy:     currentUser.email,
-      pctComplete:     pct,
-      complete,
-      inProgress:      inProg,
-      notStarted:      PILLARS.length - complete - inProg,
-      overdue,
-      notes,
-      pillarSummary,
-      onboardedEmails:      prod.onboardedEmails || [],
-      allStakeholderEmails: STAKEHOLDERS.filter(s => s.enabled !== false).map(s => s.email),
-      driveUrl:             prod.driveUrl || null,
-      testMode:             document.getElementById('report-send-mode')?.value === 'test',
-      testMode:             document.getElementById('report-send-mode')?.value === 'test',
-    };
-
-    const result = await callGAS('sendProgressReport', reportPayload);
-    if (!result.ok) throw new Error(result.error || 'Report failed');
-
-    // Log to audit
-    await callGAS('logToAuditSheet', {
-      event:       'Progress report sent',
-      productName: prod.name,
-      productId:   prod.id,
-      user:        currentUser.email,
-      timestamp:   new Date().toISOString(),
-      data:        { pct, complete, overdue, recipientCount: reportPayload.onboardedEmails.length },
-    });
-
-    // Save last reported timestamp to Firebase
-    await set(ref(db, `products/${productId}/lastReportAt`), Date.now());
-
-    if (resultEl) {
-      resultEl.style.display = 'block';
-      resultEl.className = 'alert-result-box alert-result-ok';
-      resultEl.innerHTML = `✅ Report sent to ${reportPayload.onboardedEmails.length} stakeholder${reportPayload.onboardedEmails.length!==1?'s':''}.`;
-    }
-    document.getElementById('report-notes').value = '';
-  } catch(e) {
-    if (resultEl) {
-      resultEl.style.display = 'block';
-      resultEl.className = 'alert-result-box alert-result-err';
-      resultEl.innerHTML = '❌ ' + e.message;
-    }
-  }
-  if (btn) { btn.disabled = false; btn.textContent = 'Generate & email report'; }
+  await openEmailComposer({
+    type:        'report',
+    subject:     `Progress Report: ${prod.name} — ${new Date().toLocaleDateString('en-GB',{day:'numeric',month:'short',year:'numeric'})}`,
+    toEmails:    recipients,
+    ccEmails:    prod.defaultCCs || [],
+    productId,
+    draftPrompt: buildProgressReportPrompt(prod, tasks, pct),
+    onSend: async ({ subject, body, toEmails, ccEmails, testMode }) => {
+      await callGAS('sendComposedEmail', {
+        subject, body, toEmails, ccEmails, testMode,
+        productName: prod.name,
+      });
+      await set(ref(db, `products/${productId}/lastReportAt`), Date.now());
+      await logActivity(productId, 'status', 'Progress report sent', `${pct}% complete`);
+    },
+  });
 };
+
+
 
 /* ══ PHASE 6: READ-ONLY PRODUCT PAGE ════════════════════════ */
 function checkReadOnlyRoute() {
@@ -3246,32 +3242,30 @@ window.confirmHandover = async (productId) => {
       .slice(0,4)
       .map(([week, log]) => ({ week, ...log }));
 
-    // 3. Call GAS to send handover package
-    const result = await callGAS('sendHandoverPackage', {
-      productName:   prod.name,
-      productId,
-      launchDate:    prod.launchDate,
-      ownerName:     currentUser.displayName || currentUser.email,
-      ownerEmail:    currentUser.email,
-      relieverName:  reliever?.name || relieverId,
-      relieverEmail: reliever?.email || '',
-      returnDate,
-      notes,
-      pillars:       PILLARS,
-      pillarData:    prod.pillars || {},
-      weeklyLogs:    last4Weeks,
-      driveUrl:      prod.driveUrl || null,
-    });
-
-    if (!result.ok) throw new Error(result.error || 'GAS call failed');
-
     await logActivity(productId, 'handover',
       `Handover initiated to ${reliever?.name || relieverId}`,
       `Return: ${returnDate}${notes ? ' · ' + notes.slice(0,60) : ''}`
     );
     closeProductModal();
-    showToast(`Handover package sent to ${reliever?.name || relieverId}.`, 'success');
     loadProductList();
+
+    // Open composer for handover briefing email
+    const tasks = getProductTasks(prod);
+    await openEmailComposer({
+      type:      'handover',
+      subject:   `Handover Package: ${prod.name} — covering until ${returnDate}`,
+      toEmails:  [reliever?.email || ''].filter(Boolean),
+      ccEmails:  [currentUser.email, ...(prod.defaultCCs || [])],
+      productId,
+      draftPrompt: buildHandoverPrompt(prod, tasks, reliever?.name || relieverId, returnDate, notes),
+      onSend: async ({ subject, body, toEmails, ccEmails, testMode }) => {
+        await callGAS('sendComposedEmail', {
+          subject, body, toEmails, ccEmails, testMode,
+          productName: prod.name,
+        });
+        showToast('Handover email sent.', 'success');
+      },
+    });
   } catch(e) {
     showToast('Handover failed: ' + e.message, 'error');
   }
@@ -4186,59 +4180,38 @@ window.dashNavToTracker = (filter) => {
 };
 
 /* ── DASHBOARD: DEADLINE REMINDER MODAL ── */
-window.showReminderModal = (productId, pillarId, pillarName, productName, deadline) => {
-  // Find responsible stakeholders for this pillar
+window.showReminderModal = async (productId, pillarId, pillarName, productName, deadline) => {
+  const prod  = productListCache[productId] || {};
+  const tasks = getProductTasks(prod);
+  const task  = tasks.find(t => t.id === pillarId) || { title: pillarName, deadline, owner: '' };
+  const today = new Date(); today.setHours(0,0,0,0);
+  const due   = deadline ? new Date(deadline) : null;
+  if (due) due.setHours(0,0,0,0);
+  const daysOverdue = due && due < today ? Math.round((today - due) / 86400000) : 0;
+
   const deptEmails = STAKEHOLDERS
     .filter(s => s.enabled !== false && (s.pillarIds||[]).includes(pillarId))
     .map(s => s.email);
-  const deptNames  = [...new Set(STAKEHOLDERS
-    .filter(s => s.enabled !== false && (s.pillarIds||[]).includes(pillarId))
-    .map(s => s.dept))];
+  const ownerEmails = deptEmails.length > 0 ? deptEmails : (prod.alertRecipients || [currentUser.email]);
 
-  // Build modal using the SA modal pattern (works from any view)
-  let modal = document.getElementById('sa-modal');
-  if (!modal) {
-    modal = document.createElement('div');
-    modal.id = 'sa-modal';
-    modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.45);display:flex;align-items:center;justify-content:center;z-index:2000;padding:20px;';
-    document.body.appendChild(modal);
-  }
-
-  modal.innerHTML = `
-    <div style="background:#fff;border-radius:12px;width:100%;max-width:500px;overflow:hidden;box-shadow:0 8px 40px rgba(0,0,0,0.2);">
-      <div style="background:#C0282D;padding:18px 24px;">
-        <div style="color:white;font-size:11px;letter-spacing:.1em;text-transform:uppercase;margin-bottom:2px;">Deadline Reminder</div>
-        <div style="color:white;font-size:17px;font-weight:700;">${pillarName}</div>
-        <div style="color:rgba(255,255,255,.8);font-size:13px;margin-top:2px;">${productName} — Due ${formatDate(deadline)}</div>
-      </div>
-      <div style="padding:22px;">
-        <div style="background:var(--bg);border-radius:8px;padding:12px 16px;margin-bottom:16px;font-size:13px;">
-          <div style="color:var(--text-muted);font-size:11px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">Responsible departments</div>
-          <div style="font-weight:500;">${deptNames.length > 0 ? deptNames.join(', ') : 'No dept assigned'}</div>
-          <div style="font-size:12px;color:var(--text-muted);margin-top:2px;">${deptEmails.length} recipient${deptEmails.length !== 1 ? 's' : ''}</div>
-        </div>
-        <div class="form-row">
-          <label class="form-label">Custom message <span class="form-hint">— added to the reminder email</span></label>
-          <textarea id="reminder-msg" class="input-field" rows="3"
-            placeholder="e.g. Please update the task status and share your latest progress..."></textarea>
-        </div>
-        <div class="form-row">
-          <label class="form-label">Send mode</label>
-          <select id="reminder-send-mode" class="select-field" style="width:100%;">
-            <option value="real">Live — send to responsible departments</option>
-            <option value="test">Test — o.olasunkanmi@mixtafrica.com only</option>
-          </select>
-        </div>
-        <div class="form-actions">
-          <button class="btn-outline" onclick="document.getElementById('sa-modal').style.display='none'">Cancel</button>
-          <button class="btn-primary" onclick="sendReminder('${productId}','${pillarId}','${pillarName}','${productName}','${deadline}')">
-            Send reminder
-          </button>
-        </div>
-      </div>
-    </div>`;
-  modal.style.display = 'flex';
+  await openEmailComposer({
+    type:      'reminder',
+    subject:   `${daysOverdue > 0 ? `[${daysOverdue}d OVERDUE] ` : ''}${pillarName} — ${productName}`,
+    toEmails:  ownerEmails,
+    ccEmails:  prod.defaultCCs || [],
+    productId,
+    draftPrompt: buildReminderPrompt(prod, task, daysOverdue),
+    onSend: async ({ subject, body, toEmails, ccEmails, testMode }) => {
+      await callGAS('sendComposedEmail', {
+        subject, body, toEmails, ccEmails, testMode,
+        productName, pillarName,
+      });
+      await logActivity(productId, 'status', `Reminder sent: ${pillarName}`, `To: ${toEmails.join(', ')}`);
+    },
+  });
 };
+
+
 
 window.sendReminder = async (productId, pillarId, pillarName, productName, deadline) => {
   const msg      = document.getElementById('reminder-msg')?.value.trim() || '';
@@ -5018,6 +4991,425 @@ window.quickSetStatus = async (productId, taskId, newStatus, btn) => {
   const snap = await get(ref(db, 'products/' + productId));
   if (snap.exists()) productListCache[productId] = snap.val();
 };
+
+/* ══ AI EMAIL SYSTEM ════════════════════════════════════════ */
+
+/* ── Groq AI draft generation ────────────────────────────── */
+async function generateAIDraft(prompt) {
+  try {
+    const resp = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Authorization': 'Bearer ' + GROQ_API_KEY,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model:       GROQ_MODEL,
+        max_tokens:  800,
+        temperature: 0.7,
+        messages: [
+          {
+            role: 'system',
+            content: `You are an expert real estate professional at Mixta Africa writing internal emails.
+Write concise, professional emails in a direct business tone.
+Do not use filler phrases. Do not add "I hope this finds you well."
+Write only the email body — no subject line, no salutation unless requested.
+Use specific product details provided. Be concrete about responsibilities and deadlines.`,
+          },
+          { role: 'user', content: prompt },
+        ],
+      }),
+    });
+    if (!resp.ok) {
+      const err = await resp.json();
+      throw new Error(err.error?.message || 'Groq API error ' + resp.status);
+    }
+    const data = await resp.json();
+    return data.choices?.[0]?.message?.content?.trim() || '';
+  } catch(e) {
+    console.error('Groq draft failed:', e);
+    throw e;
+  }
+}
+
+/* ── Email Composer Modal ────────────────────────────────── */
+async function openEmailComposer({
+  type,           // 'onboarding' | 'reminder' | 'report' | 'handover' | 'alert'
+  subject,        // pre-filled subject
+  toEmails,       // array of primary recipients
+  ccEmails,       // array of CC emails (product defaults pre-loaded)
+  productId,      // for loading product context
+  draftPrompt,    // full prompt to send to Groq
+  onSend,         // async fn(finalSubject, finalBody, toEmails, ccEmails, bccEmails) called on send
+  extraContext,   // object with any extra fields for the draft
+}) {
+  const prod = productListCache[productId] || {};
+
+  // Show the modal immediately with a loading state
+  let modal = document.getElementById('sa-modal');
+  if (!modal) {
+    modal = document.createElement('div');
+    modal.id = 'sa-modal';
+    modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.5);display:flex;align-items:center;justify-content:center;z-index:2000;padding:16px;';
+    document.body.appendChild(modal);
+  }
+
+  const defaultCCs = prod.defaultCCs || [];
+  const allCCs     = [...new Set([...(ccEmails || []), ...defaultCCs])];
+
+  modal.innerHTML = `
+    <div style="background:#fff;border-radius:12px;width:100%;max-width:640px;max-height:92vh;
+                overflow:hidden;display:flex;flex-direction:column;box-shadow:0 8px 40px rgba(0,0,0,.25);">
+      <div style="background:#1a1a18;padding:16px 22px;flex-shrink:0;display:flex;align-items:center;justify-content:space-between;">
+        <div>
+          <div style="color:rgba(255,255,255,.6);font-size:11px;letter-spacing:.08em;text-transform:uppercase;">Email Composer</div>
+          <div style="color:white;font-size:16px;font-weight:600;margin-top:2px;">${prod.name || 'Compose email'}</div>
+        </div>
+        <div style="display:flex;align-items:center;gap:8px;">
+          <span class="email-ai-badge">⚡ AI Draft</span>
+          <button onclick="document.getElementById('sa-modal').style.display='none'"
+            style="background:rgba(255,255,255,.15);border:none;color:white;width:28px;height:28px;
+                   border-radius:6px;cursor:pointer;font-size:14px;">✕</button>
+        </div>
+      </div>
+
+      <div style="padding:18px 22px;border-bottom:1px solid var(--border);flex-shrink:0;">
+        <div class="email-field-row">
+          <label class="email-field-label">Subject</label>
+          <input id="ec-subject" class="input-field" style="flex:1;" value="${subject || ''}"/>
+        </div>
+        <div class="email-field-row" style="margin-top:10px;">
+          <label class="email-field-label">To</label>
+          <div class="email-pill-wrap" id="ec-to-wrap">
+            ${(toEmails||[]).map(e => `<span class="email-pill">${e}<button onclick="removeEmailPill('ec-to','${e}')">✕</button></span>`).join('')}
+            <input type="email" class="email-pill-input" id="ec-to-input"
+              placeholder="Add email…" onkeydown="addEmailPillOnEnter(event,'ec-to')"/>
+          </div>
+        </div>
+        <div class="email-field-row" style="margin-top:10px;">
+          <label class="email-field-label">CC</label>
+          <div class="email-pill-wrap" id="ec-cc-wrap">
+            ${allCCs.map(e => `<span class="email-pill email-pill-cc">${e}<button onclick="removeEmailPill('ec-cc','${e}')">✕</button></span>`).join('')}
+            <input type="email" class="email-pill-input" id="ec-cc-input"
+              placeholder="Add CC…" onkeydown="addEmailPillOnEnter(event,'ec-cc')"/>
+          </div>
+        </div>
+        <div style="margin-top:10px;">
+          <button class="email-quick-add-btn" onclick="addTeamToCCs('${productId}')">+ Team</button>
+          <button class="email-quick-add-btn" onclick="addStakeholdersToCCs('${productId}')">+ Stakeholders</button>
+        </div>
+      </div>
+
+      <div style="padding:16px 22px;flex:1;overflow-y:auto;display:flex;flex-direction:column;gap:10px;">
+        <div style="display:flex;align-items:center;justify-content:space-between;">
+          <label class="email-field-label">Body</label>
+          <div style="display:flex;gap:8px;align-items:center;">
+            <span id="ec-ai-status" style="font-size:11px;color:var(--text-muted);">Generating draft…</span>
+            <button class="btn-outline" style="font-size:11px;padding:4px 10px;" id="ec-regen-btn"
+              onclick="regenerateEmailDraft('${type}','${productId}')" disabled>↻ Regenerate</button>
+          </div>
+        </div>
+        <textarea id="ec-body" class="input-field" rows="14"
+          style="resize:vertical;font-size:13px;line-height:1.7;font-family:inherit;"
+          placeholder="Generating AI draft…"></textarea>
+      </div>
+
+      <div style="padding:14px 22px;border-top:1px solid var(--border);flex-shrink:0;
+                  display:flex;align-items:center;justify-content:space-between;gap:10px;">
+        <select id="ec-send-mode" class="select-field" style="font-size:12px;width:auto;">
+          <option value="real">Live</option>
+          <option value="test">Test (${TEST_EMAIL})</option>
+        </select>
+        <div style="display:flex;gap:8px;">
+          <button class="btn-outline" onclick="document.getElementById('sa-modal').style.display='none'">Cancel</button>
+          <button class="btn-primary" id="ec-send-btn" onclick="sendComposedEmail()" disabled>Send email</button>
+        </div>
+      </div>
+    </div>`;
+  modal.style.display = 'flex';
+
+  // Store context for send + regenerate
+  modal._emailContext = { type, draftPrompt, productId, onSend };
+
+  // Generate AI draft
+  try {
+    const draft = await generateAIDraft(draftPrompt);
+    const bodyEl = document.getElementById('ec-body');
+    const statusEl = document.getElementById('ec-ai-status');
+    const regenBtn  = document.getElementById('ec-regen-btn');
+    const sendBtn   = document.getElementById('ec-send-btn');
+    if (bodyEl)   bodyEl.value = draft;
+    if (statusEl) statusEl.textContent = 'AI draft ready — edit freely';
+    if (regenBtn) regenBtn.disabled = false;
+    if (sendBtn)  sendBtn.disabled  = false;
+  } catch(e) {
+    const bodyEl   = document.getElementById('ec-body');
+    const statusEl = document.getElementById('ec-ai-status');
+    const sendBtn  = document.getElementById('ec-send-btn');
+    if (bodyEl)   { bodyEl.placeholder = ''; bodyEl.value = ''; }
+    if (statusEl) statusEl.textContent = '⚠ AI draft failed — write manually or check API key';
+    if (sendBtn)  sendBtn.disabled = false;
+  }
+}
+
+window.regenerateEmailDraft = async (type, productId) => {
+  const modal = document.getElementById('sa-modal');
+  if (!modal?._emailContext) return;
+  const bodyEl   = document.getElementById('ec-body');
+  const statusEl = document.getElementById('ec-ai-status');
+  const regenBtn = document.getElementById('ec-regen-btn');
+  if (statusEl) statusEl.textContent = 'Regenerating…';
+  if (regenBtn) regenBtn.disabled = true;
+  if (bodyEl)   bodyEl.value = '';
+  try {
+    const draft = await generateAIDraft(modal._emailContext.draftPrompt);
+    if (bodyEl)   bodyEl.value = draft;
+    if (statusEl) statusEl.textContent = 'New draft ready';
+  } catch(e) {
+    if (statusEl) statusEl.textContent = '⚠ Failed — try again';
+  }
+  if (regenBtn) regenBtn.disabled = false;
+};
+
+window.sendComposedEmail = async () => {
+  const modal   = document.getElementById('sa-modal');
+  const context = modal?._emailContext;
+  if (!context) return;
+
+  const subject    = document.getElementById('ec-subject')?.value.trim() || '';
+  const body       = document.getElementById('ec-body')?.value.trim() || '';
+  const testMode   = document.getElementById('ec-send-mode')?.value === 'test';
+  const sendBtn    = document.getElementById('ec-send-btn');
+
+  if (!body) { showToast('Email body is empty.', 'error'); return; }
+
+  // Collect To and CC from pill containers
+  const toEmails  = getEmailsFromPills('ec-to-wrap');
+  const ccEmails  = getEmailsFromPills('ec-cc-wrap');
+
+  if (toEmails.length === 0) { showToast('Add at least one recipient.', 'error'); return; }
+  if (sendBtn) { sendBtn.disabled = true; sendBtn.textContent = 'Sending…'; }
+
+  try {
+    await context.onSend({ subject, body, toEmails, ccEmails, testMode });
+    modal.style.display = 'none';
+    showToast('Email sent.', 'success');
+  } catch(e) {
+    showToast('Send failed: ' + e.message, 'error');
+    if (sendBtn) { sendBtn.disabled = false; sendBtn.textContent = 'Send email'; }
+  }
+};
+
+/* ── Email pill helpers ──────────────────────────────────── */
+function getEmailsFromPills(containerId) {
+  const wrap = document.getElementById(containerId);
+  if (!wrap) return [];
+  return [...wrap.querySelectorAll('.email-pill')].map(p =>
+    p.textContent.replace('✕','').trim()
+  ).filter(Boolean);
+}
+
+window.removeEmailPill = (containerId, email) => {
+  const wrap = document.getElementById(containerId + '-wrap');
+  if (!wrap) return;
+  wrap.querySelectorAll('.email-pill').forEach(p => {
+    if (p.textContent.replace('✕','').trim() === email) p.remove();
+  });
+};
+
+window.addEmailPillOnEnter = (e, containerId) => {
+  if (e.key !== 'Enter' && e.key !== ',') return;
+  e.preventDefault();
+  const input = e.target;
+  const email = input.value.trim().replace(',','');
+  if (!email || !email.includes('@')) return;
+  const wrap  = document.getElementById(containerId + '-wrap');
+  if (!wrap) return;
+  // Don't add duplicates
+  const existing = getEmailsFromPills(containerId + '-wrap');
+  if (existing.includes(email)) { input.value = ''; return; }
+  const pill = document.createElement('span');
+  pill.className = 'email-pill' + (containerId === 'ec-cc' ? ' email-pill-cc' : '');
+  pill.innerHTML = `${email}<button onclick="removeEmailPill('${containerId}','${email}')">✕</button>`;
+  wrap.insertBefore(pill, input);
+  input.value = '';
+};
+
+window.addTeamToCCs = async (productId) => {
+  await loadTeamMembers();
+  const wrap = document.getElementById('ec-cc-wrap');
+  const input = document.getElementById('ec-cc-input');
+  if (!wrap || !input) return;
+  const existing = getEmailsFromPills('ec-cc-wrap');
+  Object.values(TEAM_MEMBERS).forEach(m => {
+    if (!m.email || existing.includes(m.email)) return;
+    const pill = document.createElement('span');
+    pill.className = 'email-pill email-pill-cc';
+    pill.innerHTML = `${m.email}<button onclick="removeEmailPill('ec-cc','${m.email}')">✕</button>`;
+    wrap.insertBefore(pill, input);
+  });
+};
+
+window.addStakeholdersToCCs = (productId) => {
+  const wrap  = document.getElementById('ec-cc-wrap');
+  const input = document.getElementById('ec-cc-input');
+  if (!wrap || !input) return;
+  const existing = getEmailsFromPills('ec-cc-wrap');
+  const prod = productListCache[productId] || {};
+  const relevant = STAKEHOLDERS.filter(s => s.enabled !== false &&
+    (prod.onboardedEmails || []).includes(s.email));
+  relevant.forEach(s => {
+    if (existing.includes(s.email)) return;
+    const pill = document.createElement('span');
+    pill.className = 'email-pill email-pill-cc';
+    pill.innerHTML = `${s.email}<button onclick="removeEmailPill('ec-cc','${s.email}')">✕</button>`;
+    wrap.insertBefore(pill, input);
+  });
+};
+
+/* ── Escalation chain editor ─────────────────────────────── */
+function renderEscalationEditor(el, chain, productId) {
+  el.innerHTML = (chain || []).map((level, i) => `
+    <div class="escalation-level-row">
+      <span style="font-size:12px;font-weight:500;color:var(--text-mid);white-space:nowrap;">After</span>
+      <input type="number" class="input-field" style="width:60px;" value="${level.daysOverdue}"
+        onchange="updateEscalationDays('${productId}',${i},this.value)"/>
+      <span style="font-size:12px;color:var(--text-mid);white-space:nowrap;">days overdue, also notify:</span>
+      <input type="text" class="input-field" style="flex:1;"
+        placeholder="email1@mixtafrica.com, email2@mixtafrica.com"
+        value="${(level.addEmails||[]).join(', ')}"
+        onblur="updateEscalationEmails('${productId}',${i},this.value)"/>
+      <button class="btn-danger-xs" onclick="removeEscalationLevel('${productId}',${i})">✕</button>
+    </div>`).join('') ||
+    '<div style="font-size:12px;color:var(--text-muted);padding:8px 0;">No escalation levels set.</div>';
+}
+
+window.addEscalationLevel = (productId) => {
+  const prod = productListCache[productId] || {};
+  if (!prod.escalationChain) prod.escalationChain = [];
+  prod.escalationChain.push({ daysOverdue: 14, addEmails: [] });
+  const el = document.getElementById('escalation-editor');
+  if (el) renderEscalationEditor(el, prod.escalationChain, productId);
+};
+
+window.updateEscalationDays = (productId, idx, val) => {
+  const prod = productListCache[productId];
+  if (prod?.escalationChain?.[idx]) prod.escalationChain[idx].daysOverdue = parseInt(val) || 7;
+};
+
+window.updateEscalationEmails = (productId, idx, val) => {
+  const prod = productListCache[productId];
+  if (prod?.escalationChain?.[idx]) {
+    prod.escalationChain[idx].addEmails = val.split(',').map(e => e.trim()).filter(Boolean);
+  }
+};
+
+window.removeEscalationLevel = (productId, idx) => {
+  const prod = productListCache[productId];
+  if (prod?.escalationChain) {
+    prod.escalationChain.splice(idx, 1);
+    const el = document.getElementById('escalation-editor');
+    if (el) renderEscalationEditor(el, prod.escalationChain, productId);
+  }
+};
+
+/* ══ AI PROMPTS PER EMAIL TYPE ═══════════════════════════════ */
+
+function buildOnboardingPrompt(prod, dept, deptTasks, stakeholderName) {
+  const taskList = deptTasks.map((t, i) =>
+    `${i+1}. ${t.title || t.name} — deadline: ${t.deadline || 'TBD'}`
+  ).join('\n');
+  return `Write a professional onboarding email for ${stakeholderName} from the ${dept} department.
+
+Product context:
+- Name: ${prod.name}
+- Description: ${prod.description || 'A new Mixta Africa product launch'}
+- Target launch date: ${prod.launchDate}
+- Total tasks: ${Object.keys(prod.tasks || prod.pillars || {}).length}
+
+${dept} department's specific responsibilities for this product:
+${taskList}
+
+Write 2-3 paragraphs:
+1. Brief context about the product and why their involvement matters
+2. What specifically they need to deliver and by when
+3. Clear next step / call to action
+
+Tone: professional, direct, warm. Address them by department, not by name.`;
+}
+
+function buildReminderPrompt(prod, task, daysOverdue) {
+  const severity = daysOverdue >= 21 ? 'escalation'
+                 : daysOverdue >= 7  ? 'firm'
+                 : daysOverdue >= 1  ? 'urgent'
+                 : 'warning';
+  const toneMap = {
+    warning:    'a polite but clear reminder that the deadline is approaching',
+    urgent:     'a firm, direct message that this is now overdue and needs immediate action',
+    firm:       'a serious escalation tone — this is significantly delayed and needs a concrete update by end of day',
+    escalation: 'a critical escalation — this task is severely overdue and leadership has been informed. Request an immediate status update and revised deadline.',
+  };
+  const lastNote = task.notes ? `\nLast recorded note: "${task.notes}"` : '';
+  return `Write ${toneMap[severity]} for a task that is ${daysOverdue > 0 ? daysOverdue + ' days overdue' : 'due today'}.
+
+Product: ${prod.name} (target launch: ${prod.launchDate})
+Task: ${task.title || task.name}
+Owner department: ${task.owner || 'responsible team'}
+Original deadline: ${task.deadline}${lastNote}
+
+Write 2 short paragraphs. Be specific about the task and the impact of the delay on the product launch. End with a clear ask: provide a status update by [today's date] and a revised completion date.`;
+}
+
+function buildProgressReportPrompt(prod, tasks, pct) {
+  const complete = tasks.filter(t => t.status === 'complete').length;
+  const delayed  = tasks.filter(t => t.status === 'delayed').length;
+  const overdue  = tasks.filter(t => t.deadline && t.status !== 'complete' && getPillarStatus(t.deadline) === 'overdue').length;
+  const atRisk   = tasks.filter(t => t.deadline && t.status !== 'complete' && getPillarStatus(t.deadline) === 'warning').map(t => t.title||t.name).join(', ');
+  const overdueList = tasks.filter(t => t.deadline && t.status !== 'complete' && getPillarStatus(t.deadline) === 'overdue').map(t => (t.title||t.name) + ' (' + t.owner + ')').join(', ');
+
+  return `Write a concise progress report email body for internal stakeholders.
+
+Product: ${prod.name}
+Launch date: ${prod.launchDate}
+Overall completion: ${pct}% (${complete}/${tasks.length} tasks)
+Delayed tasks: ${delayed}
+Overdue tasks: ${overdue}${overdueList ? ' — ' + overdueList : ''}
+At risk (due within 3 days): ${atRisk || 'none'}
+
+Write 3 short sections with bold headers:
+**Status Summary** — one sentence on overall health
+**Key Risks** — specific tasks or areas that need attention (be concrete)
+**Required Actions** — what stakeholders need to do before the next update
+
+Be direct. No filler. Flag risks clearly.`;
+}
+
+function buildHandoverPrompt(prod, tasks, relieverName, returnDate, ownerNotes) {
+  const complete = tasks.filter(t => t.status === 'complete').length;
+  const open     = tasks.filter(t => t.status !== 'complete');
+  const critical = open.filter(t => t.deadline && getPillarStatus(t.deadline) !== 'ontrack');
+  const openList = open.slice(0,5).map(t => `- ${t.title||t.name} (${t.owner||'?'}) — ${t.deadline||'TBD'}`).join('\n');
+  const critList = critical.map(t => `- ${t.title||t.name}: ${t.deadline||'?'}`).join('\n') || 'None critical at this time';
+
+  return `Write a professional handover briefing for ${relieverName} who is covering ${prod.name} until ${returnDate}.
+
+Product: ${prod.name} — target launch ${prod.launchDate}
+Progress: ${complete}/${tasks.length} tasks complete
+${ownerNotes ? 'Owner notes: ' + ownerNotes : ''}
+
+Open tasks requiring attention:
+${openList}
+
+Critical / overdue items:
+${critList}
+
+Write this as a proper briefing document in 3 sections:
+**Situation** — where the product stands today in one paragraph
+**Priority actions** — the 3 most important things to focus on immediately, with specific names and deadlines
+**Watch points** — risks to monitor and who to contact for each workstream
+
+Write as if handing over to a capable colleague who needs context fast.`;
+}
 
 // Register all real functions with the global dispatcher
 window.__npd_init({
