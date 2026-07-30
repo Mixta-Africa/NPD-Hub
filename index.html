@@ -983,59 +983,82 @@ function renderProductCard(p) {
   const editBtn = currentRole === 'admin'
     ? `<button class="btn-secondary-sm" onclick="editProduct('${p.id}')">Edit dates</button>`
     : '';
+  // Slip calculation
+  const slipHtml = (() => {
+    if (!p.baselineLaunchDate || p.baselineLaunchDate === p.launchDate) return '';
+    const bl  = new Date(p.baselineLaunchDate); bl.setHours(0,0,0,0);
+    const cur = new Date(p.launchDate);         cur.setHours(0,0,0,0);
+    const slip = Math.round((cur - bl) / 86400000);
+    return slip > 0
+      ? `<span class="pcf-slip red">+${slip}d</span>`
+      : `<span class="pcf-slip green">${Math.abs(slip)}d early</span>`;
+  })();
+
+  const today2 = new Date(); today2.setHours(0,0,0,0);
+  const launch = p.launchDate ? new Date(p.launchDate) : null;
+  if (launch) launch.setHours(0,0,0,0);
+  const daysToLaunch = launch ? Math.round((launch - today2) / 86400000) : null;
+  const launchBadge = daysToLaunch === null ? `<span class="pcf-launch-badge pcf-launch-grey">${formatDate(p.launchDate)}</span>`
+    : daysToLaunch < 0   ? `<span class="pcf-launch-badge pcf-launch-red">${Math.abs(daysToLaunch)}d overdue</span>`
+    : daysToLaunch === 0 ? `<span class="pcf-launch-badge pcf-launch-red">Due today</span>`
+    : daysToLaunch <= 14 ? `<span class="pcf-launch-badge pcf-launch-amber">${daysToLaunch}d left</span>`
+    : `<span class="pcf-launch-badge pcf-launch-grey">${formatDate(p.launchDate)}</span>`;
+
+  const healthCls = overduePl > 0 ? 'pcf-health-red'
+                  : delayed > 0   ? 'pcf-health-amber'
+                  : pct === 100   ? 'pcf-health-done'
+                  : 'pcf-health-green';
+  const healthTip = overduePl > 0 ? `${overduePl} overdue`
+                  : delayed > 0   ? `${delayed} delayed`
+                  : pct === 100   ? 'Complete' : 'On track';
+
   return `
     <div class="product-card-full">
       <div class="pcf-header">
-        <div>
-          <div class="pcf-name">${p.name}</div>
-          <div class="pcf-desc">${p.description || 'No description'}</div>
+        <div class="pcf-header-left">
+          <div class="pcf-health-dot ${healthCls}" title="${healthTip}"></div>
+          <div>
+            <div class="pcf-name-row"><span class="pcf-name">${p.name}</span>${slipHtml}</div>
+            ${p.description ? `<div class="pcf-desc">${p.description.length > 110 ? p.description.slice(0,110)+'…' : p.description}</div>` : ''}
+          </div>
         </div>
-        <span class="status-chip status-${statusCls}">${statusLbl}</span>
-      </div>
-      <div class="pcf-meta-row">
-        <div class="pcf-meta-item">
-          <span class="pcf-meta-label">Launch date</span>
-          <span class="pcf-meta-val">
-            ${formatDate(p.launchDate)}
-            ${p.baselineLaunchDate && p.baselineLaunchDate !== p.launchDate
-              ? (() => {
-                  const bl  = new Date(p.baselineLaunchDate); bl.setHours(0,0,0,0);
-                  const cur = new Date(p.launchDate);         cur.setHours(0,0,0,0);
-                  const slip = Math.round((cur - bl) / 86400000);
-                  return slip > 0
-                    ? `<span style="font-size:10px;color:var(--red);margin-left:4px;">+${slip}d slipped</span>`
-                    : `<span style="font-size:10px;color:var(--green);margin-left:4px;">${Math.abs(slip)}d ahead</span>`;
-                })()
-              : ''}
-          </span>
-        </div>
-        <div class="pcf-meta-item"><span class="pcf-meta-label">Tasks with dates</span><span class="pcf-meta-val">${pillarsWithDates.length} / ${total}</span></div>
-        <div class="pcf-meta-item"><span class="pcf-meta-label">Completed</span><span class="pcf-meta-val green">${complete} / ${total}</span></div>
-        ${overdueHtml}
-      </div>
-      <div class="progress-bar-wrap"><div class="progress-bar-fill" style="width:${pct}%"></div></div>
-      <div class="pcf-meta-row" style="margin-top:8px;">
-        <div class="pcf-meta-item">
-          <span class="pcf-meta-label">Owner</span>
-          <span class="pcf-meta-val">${p.ownerName || 'Unassigned'}</span>
-        </div>
-        <div class="pcf-meta-item" style="margin-left:auto;">
-          ${p.alertsEnabled === false
-            ? '<span style="font-size:11px;color:var(--text-muted);">🔕 Alerts off</span>'
-            : (p.alertRecipients?.length > 0
-                ? '<span style="font-size:11px;color:var(--blue);">🔔 Custom recipients</span>'
-                : '<span style="font-size:11px;color:var(--green);">🔔 Alerts on</span>')}
+        <div class="pcf-header-right">
+          ${launchBadge}
+          <span class="status-chip status-${statusCls}">${statusLbl}</span>
         </div>
       </div>
+
+      <div class="pcf-progress-row">
+        <div class="pcf-progress-bar">
+          <div class="pcf-progress-fill" style="width:${pct}%"></div>
+        </div>
+        <span class="pcf-pct">${pct}%</span>
+      </div>
+
+      <div class="pcf-stats">
+        <div class="pcf-stat"><span class="pcf-stat-val green">${complete}</span><span class="pcf-stat-lbl">done</span></div>
+        <div class="pcf-stat-div"></div>
+        <div class="pcf-stat"><span class="pcf-stat-val">${Math.max(0,total-complete-delayed-overduePl)}</span><span class="pcf-stat-lbl">on track</span></div>
+        ${delayed > 0 ? `<div class="pcf-stat-div"></div><div class="pcf-stat"><span class="pcf-stat-val amber">${delayed}</span><span class="pcf-stat-lbl">delayed</span></div>` : ''}
+        ${overduePl > 0 ? `<div class="pcf-stat-div"></div><div class="pcf-stat"><span class="pcf-stat-val red">${overduePl}</span><span class="pcf-stat-lbl">overdue</span></div>` : ''}
+        <div class="pcf-stat-spacer"></div>
+        <span class="pcf-owner-chip">
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 3.6-7 8-7s8 3 8 7"/></svg>
+          ${p.ownerName?.split(' ')[0] || '—'}
+        </span>
+        ${p.alertsEnabled === false ? '<span class="pcf-badge-grey" title="Alerts off">🔕</span>' : ''}
+        ${p.gmailThreadId ? '<span class="pcf-badge-grey" title="Thread active">🧵</span>' : ''}
+      </div>
+
       <div class="pcf-actions">
-        <button class="btn-secondary-sm" onclick="viewProduct('${p.id}')">View pillars</button>
-        ${canEdit(p) ? `<button class="btn-secondary-sm" onclick="showWeeklyLog('${p.id}')">Weekly log</button>` : ''}
-        ${canEdit(p) && !p.onboardedAt ? `<button class="btn-secondary-sm" style="color:var(--amber);border-color:var(--amber);" onclick="reOnboardProduct('${p.id}')">⚠ Onboard</button>` : ''}
+        <button class="btn-secondary-sm" onclick="viewProduct('${p.id}')">Tasks</button>
+        ${canEdit(p) ? `<button class="btn-primary-sm" onclick="showQuickUpdate('${p.id}')">⚡ Update</button>` : ''}
+        ${canEdit(p) ? `<button class="btn-secondary-sm" onclick="showWeeklyLog('${p.id}')">Log</button>` : ''}
+        ${canEdit(p) && !p.onboardedAt ? `<button class="btn-secondary-sm" style="color:var(--amber);border-color:var(--amber);" onclick="reOnboardProduct('${p.id}')">Onboard</button>` : ''}
         ${editBtn}
         ${canEdit(p) ? `<button class="btn-secondary-sm" onclick="showShareModal('${p.id}')">Share</button>` : ''}
         ${getProductAccess(p) === 'owner' || currentRole === 'admin' ? `<button class="btn-secondary-sm" onclick="showHandoverModal('${p.id}')">Handover</button>` : ''}
-        <button class="btn-secondary-sm" onclick="showQuickUpdate('${p.id}')" title="Quick status update">⚡ Update</button>
-        <button class="btn-secondary-sm" onclick="showProductActivity('${p.id}')" title="View activity feed">Activity</button>
+        <button class="btn-secondary-sm" onclick="showProductActivity('${p.id}')">Activity</button>
       </div>
     </div>`;
 }
@@ -2144,25 +2167,37 @@ function renderTrackerTable(prod, filter) {
       : getPillarStatus(pd.deadline) === 'warning' ? `<span class="pill pill-amber">Due soon — ${formatDate(pd.deadline)}</span>`
       : `<span class="pill pill-green">${formatDate(pd.deadline)}</span>`;
 
-    // Status buttons
-    const delayLabel = delayedDays > 0 ? ` (${delayedDays}d)` : '';
     const taskId     = pl.id;
-    const statusCtrl = isBlocked
-      ? `<div class="status-btn-group"><span class="status-btn" style="opacity:.5;cursor:not-allowed;">🔗 Blocked</span></div>`
-      : (currentRole === 'admin' || isSuperAdmin || !taskLocked)
-        ? `<div class="status-btn-group">
-            <button class="status-btn status-btn-ontrack ${isOnTrack ? 'active' : ''}"
-              onclick="updatePillarStatus('${prod.id}','${taskId}','on-track')">On Track</button>
-            <button class="status-btn status-btn-delayed ${isDelayed ? 'active' : ''}"
-              onclick="updatePillarStatus('${prod.id}','${taskId}','delayed')">Delayed${delayLabel}</button>
-            <button class="status-btn status-btn-complete ${isComplete ? 'active' : ''}"
-              onclick="updatePillarStatus('${prod.id}','${taskId}','complete')">Complete</button>
-          </div>`
-        : `<div class="status-btn-group">
-            <span class="status-btn ${isOnTrack ? 'status-btn-ontrack active' : isDelayed ? 'status-btn-delayed active' : 'status-btn-complete active'}">
-              ${isOnTrack ? 'On Track' : isDelayed ? 'Delayed' + delayLabel : 'Complete'}
-            </span>
-          </div>`;
+    // Smart status control — dropdown showing current state, auto-coloured
+    const statusVal  = isBlocked ? 'blocked'
+                     : isComplete ? 'complete'
+                     : isDelayed  ? 'delayed'
+                     : delayedDays > 0 ? 'overdue'   // deadline passed but not marked
+                     : 'on-track';
+
+    const statusColor = isBlocked  ? '#6B7280'
+                      : isComplete ? 'var(--blue)'
+                      : isDelayed  ? 'var(--amber)'
+                      : delayedDays > 0 ? 'var(--red)'
+                      : 'var(--green)';
+
+    const statusLabel2 = isBlocked  ? '🔗 Blocked'
+                       : isComplete ? '✓ Complete'
+                       : isDelayed  ? `⚠ Delayed${delayedDays > 0 ? ' · '+delayedDays+'d overdue' : ''}`
+                       : delayedDays > 0 ? `${delayedDays}d overdue`
+                       : 'On Track';
+
+    const canChangeStatus = (currentRole === 'admin' || isSuperAdmin || !taskLocked) && !isBlocked;
+    const statusCtrl = canChangeStatus
+      ? `<div class="task-status-wrap">
+          <div class="task-status-badge" style="color:${statusColor};border-color:${statusColor}20;background:${statusColor}10;" onclick="openStatusDropdown('${prod.id}','${taskId}',this)">
+            ${statusLabel2}
+            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="flex-shrink:0;opacity:.7;"><polyline points="6 9 12 15 18 9"/></svg>
+          </div>
+        </div>`
+      : `<div class="task-status-badge" style="color:${statusColor};border-color:${statusColor}20;background:${statusColor}10;cursor:default;">
+          ${statusLabel2}
+        </div>`;
 
     const notesCtrl = (currentRole === 'admin' || isSuperAdmin || !taskLocked)
       ? `<input type="text" class="notes-input" placeholder="Add note..." value="${pd.notes||''}"
@@ -5441,6 +5476,47 @@ Write this as a proper briefing document in 3 sections:
 Write as if handing over to a capable colleague who needs context fast.`;
 }
 
+
+/* ── Smart status dropdown ── */
+window.openStatusDropdown = (productId, taskId, badgeEl) => {
+  document.querySelectorAll('.status-dropdown-menu').forEach(d => d.remove());
+  const prod  = trackerProductsCache[productId] || productListCache[productId];
+  const tasks = getProductTasks(prod);
+  const task  = tasks.find(t => t.id === taskId);
+  if (!task) return;
+
+  const options = [
+    { value: 'on-track', label: 'On Track', color: 'var(--green)', icon: '●' },
+    { value: 'delayed',  label: 'Delayed',  color: 'var(--amber)', icon: '⚠' },
+    { value: 'complete', label: 'Complete', color: 'var(--blue)',  icon: '✓' },
+  ];
+
+  const menu = document.createElement('div');
+  menu.className = 'status-dropdown-menu';
+  menu.innerHTML = options.map(o => `
+    <div class="status-dropdown-item ${task.status === o.value ? 'sdi-active' : ''}"
+         onclick="selectTaskStatus('${productId}','${taskId}','${o.value}',this)">
+      <span style="color:${o.color};font-size:12px;line-height:1;">${o.icon}</span>
+      <span>${o.label}</span>
+      ${task.status === o.value ? '<span class="sdi-current">current</span>' : ''}
+    </div>`).join('');
+
+  const rect = badgeEl.getBoundingClientRect();
+  menu.style.cssText = `position:fixed;top:${rect.bottom+4}px;left:${rect.left}px;z-index:9000;min-width:140px;`;
+  document.body.appendChild(menu);
+
+  setTimeout(() => {
+    document.addEventListener('click', function closer(e) {
+      if (!menu.contains(e.target)) { menu.remove(); document.removeEventListener('click', closer); }
+    });
+  }, 10);
+};
+
+window.selectTaskStatus = async (productId, taskId, newStatus, itemEl) => {
+  itemEl.closest('.status-dropdown-menu')?.remove();
+  await updatePillarStatus(productId, taskId, newStatus);
+};
+
 /* ══ DELAYED TASK NOTIFICATION ══════════════════════════════ */
 
 async function sendDelayedTaskNotification(productId, taskId, task, prod) {
@@ -5511,6 +5587,50 @@ Tone: professional, direct, not accusatory. This is a coordination message, not 
     },
   });
 }
+
+/* ── Smart status dropdown ── */
+window.openStatusDropdown = (productId, taskId, badgeEl) => {
+  // Remove any existing dropdowns
+  document.querySelectorAll('.status-dropdown-menu').forEach(d => d.remove());
+
+  const prod  = trackerProductsCache[productId] || productListCache[productId];
+  const tasks = getProductTasks(prod);
+  const task  = tasks.find(t => t.id === taskId);
+  if (!task) return;
+
+  const options = [
+    { value: 'on-track', label: 'On Track',  color: 'var(--green)', icon: '●' },
+    { value: 'delayed',  label: 'Delayed',   color: 'var(--amber)', icon: '⚠' },
+    { value: 'complete', label: 'Complete',  color: 'var(--blue)',  icon: '✓' },
+  ];
+
+  const menu = document.createElement('div');
+  menu.className = 'status-dropdown-menu';
+  menu.innerHTML = options.map(o => `
+    <div class="status-dropdown-item ${task.status === o.value ? 'active' : ''}"
+         style="--item-color:${o.color}"
+         onclick="selectTaskStatus('${productId}','${taskId}','${o.value}',this)">
+      <span style="color:${o.color};font-size:10px;">${o.icon}</span>
+      ${o.label}
+      ${task.status === o.value ? '<span style="margin-left:auto;color:var(--text-muted);font-size:11px;">current</span>' : ''}
+    </div>`).join('');
+
+  const rect = badgeEl.getBoundingClientRect();
+  menu.style.cssText = `position:fixed;top:${rect.bottom+4}px;left:${rect.left}px;z-index:9000;`;
+  document.body.appendChild(menu);
+
+  // Close on outside click
+  setTimeout(() => {
+    document.addEventListener('click', function closer(e) {
+      if (!menu.contains(e.target)) { menu.remove(); document.removeEventListener('click', closer); }
+    });
+  }, 10);
+};
+
+window.selectTaskStatus = async (productId, taskId, newStatus, itemEl) => {
+  itemEl.closest('.status-dropdown-menu')?.remove();
+  await updatePillarStatus(productId, taskId, newStatus);
+};
 
 // Register all real functions with the global dispatcher
 window.__npd_init({
