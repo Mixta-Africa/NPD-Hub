@@ -97,6 +97,27 @@ function sanitiseEmail(email) {
   return email.replace(/\./g, '_').replace(/@/g, '_');
 }
 
+const ICON = {
+  bell: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;vertical-align:middle;"><path d="M18 8A6 6 0 006 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 01-3.4 0"/></svg>`,
+  bell_off: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;vertical-align:middle;"><path d="M13.7 21a2 2 0 01-3.4 0"/><path d="M18.6 13a17 17 0 01-.6-5 6 6 0 00-9.3-5"/><path d="M6 8c0 7-3 9-3 9h13"/><line x1="2" y1="2" x2="22" y2="22"/></svg>`,
+  bolt: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;vertical-align:middle;"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>`,
+  thread: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;vertical-align:middle;"><path d="M21 11.5a8.38 8.38 0 01-.9 3.8 8.5 8.5 0 01-7.6 4.7 8.38 8.38 0 01-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 01-.9-3.8 8.5 8.5 0 014.7-7.6 8.38 8.38 0 013.8-.9h.5a8.48 8.48 0 018 8v.5z"/></svg>`,
+  warn: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;vertical-align:middle;"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>`,
+  lock: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;vertical-align:middle;"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg>`,
+  link: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;vertical-align:middle;"><path d="M10 13a5 5 0 007.54.54l3-3a5 5 0 00-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 00-7.54-.54l-3 3a5 5 0 007.07 7.07l1.71-1.71"/></svg>`,
+  check: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;vertical-align:middle;"><polyline points="20 6 9 17 4 12"/></svg>`,
+  calendar: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;vertical-align:middle;"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>`,
+  folder: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;vertical-align:middle;"><path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/></svg>`,
+  clipboard: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;vertical-align:middle;"><path d="M16 4h2a2 2 0 012 2v14a2 2 0 01-2 2H6a2 2 0 01-2-2V6a2 2 0 012-2h2"/><rect x="8" y="2" width="8" height="4" rx="1"/></svg>`,
+  refresh: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;vertical-align:middle;"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/></svg>`,
+  note: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;vertical-align:middle;"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.12 2.12 0 013 3L12 15l-4 1 1-4z"/></svg>`,
+  plus: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;vertical-align:middle;"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>`,
+  handshake: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;vertical-align:middle;"><path d="M11 17l2 2a1 1 0 001.41 0l2.83-2.83"/><path d="M13 12l2 2a1 1 0 001.41 0l2.83-2.83a2 2 0 000-2.83l-2.83-2.83"/><path d="M8 8l-2.83 2.83a2 2 0 000 2.83L8 16.5"/></svg>`,
+  paperclip: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;vertical-align:middle;"><path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48"/></svg>`,
+  rocket: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;vertical-align:middle;"><path d="M4.5 16.5c-1.5 1.26-2 5-2 5s3.74-.5 5-2c.71-.84.7-2.13-.09-2.91a2.18 2.18 0 00-2.91-.09z"/><path d="M12 15l-3-3a22 22 0 012-3.95A12.88 12.88 0 0122 2c0 2.72-.78 7.5-6 11a22.35 22.35 0 01-4 2z"/></svg>`,
+  check_circle: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;vertical-align:middle;"><path d="M22 11.08V12a10 10 0 11-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>`
+};
+
 /* ─── STATE ─── */
 let currentUser      = null;
 let currentRole      = null;      // 'admin' | 'member' | null
@@ -192,7 +213,7 @@ window.showSAChallenge = () => {
       <div style="background:#fff;border-radius:12px;width:100%;max-width:400px;overflow:hidden;box-shadow:0 8px 40px rgba(0,0,0,0.2);">
         <div style="background:#C0282D;padding:20px 24px;">
           <div style="color:white;font-size:11px;letter-spacing:.1em;text-transform:uppercase;margin-bottom:2px;">Mixta Africa NPD Hub</div>
-          <div style="color:white;font-size:18px;font-weight:700;">⚡ Super Admin Access</div>
+          <div style="color:white;font-size:18px;font-weight:700;display:flex;align-items:center;gap:6px;">${ICON.bolt} Super Admin Access</div>
         </div>
         <div style="padding:24px;">
           <p style="font-size:13px;color:#6b6b67;margin-bottom:20px;line-height:1.7;text-align:center;">
@@ -872,7 +893,7 @@ function _updateDashboardUI(list) {
     // Recent products panel
     const recentEl = document.getElementById('dash-recent');
     if (list.length === 0) {
-      recentEl.innerHTML = `<div class="empty-state-sm"><span class="empty-icon">📋</span><p>No products yet.${currentRole === 'admin' ? ' <button class="btn-primary-sm" onclick="loadView(\'products\')">Create one</button>' : ''}</p></div>`;
+      recentEl.innerHTML = `<div class="empty-state-sm"><span class="empty-icon" style="color:var(--text-muted);">${ICON.clipboard}</span><p>No products yet.${currentRole === 'admin' ? ' <button class="btn-primary-sm" onclick="loadView(\'products\')">Create one</button>' : ''}</p></div>`;
     } else {
       const sorted = list.sort((a,b) => b.createdAt - a.createdAt).slice(0,4);
       recentEl.innerHTML = sorted.map(p => `
@@ -886,7 +907,7 @@ function _updateDashboardUI(list) {
     // Deadlines panel
     const dlEl = document.getElementById('dash-deadlines');
     if (upcomingDeadlines.length === 0) {
-      dlEl.innerHTML = '<div class="empty-state-sm"><span class="empty-icon">📅</span><p>No deadlines this week.</p></div>';
+      dlEl.innerHTML = '<div class="empty-state-sm"><span class="empty-icon" style="color:var(--text-muted);">${ICON.calendar}</span><p>No deadlines this week.</p></div>';
     } else {
       upcomingDeadlines.sort((a,b) => new Date(a.date) - new Date(b.date));
       dlEl.innerHTML = upcomingDeadlines.slice(0,5).map(d => `
@@ -899,7 +920,7 @@ function _updateDashboardUI(list) {
           <button class="deadline-remind-btn"
             onclick="showReminderModal('${d.productId}','${d.pillarId}','${d.pillar}','${d.product}','${d.date}')"
             title="Send reminder email">
-            &#128276; Remind
+            ${ICON.bell} Remind
           </button>
         </div>`).join('');
     }
@@ -952,7 +973,7 @@ async function loadProductList() {
       .sort((a,b) => b.createdAt - a.createdAt);
 
     if (list.length === 0) {
-      area.innerHTML = '<div class="panel"><div class="empty-state"><span class="empty-icon">🏗️</span><h3>No products yet</h3><p>Create your first product launch to get started.</p>' +
+      area.innerHTML = '<div class="panel"><div class="empty-state"><span class="empty-icon" style="color:var(--text-muted);">${ICON.clipboard}</span><h3>No products yet</h3><p>Create your first product launch to get started.</p>' +
         (currentRole === 'admin' ? `<button class="btn-primary" onclick="showCreateProduct()">Create your first product</button>` : '<p class="muted">Contact an admin to initiate a product launch.</p>') +
         '</div></div>';
       return;
@@ -1046,15 +1067,15 @@ function renderProductCard(p) {
           <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 3.6-7 8-7s8 3 8 7"/></svg>
           ${p.ownerName?.split(' ')[0] || '—'}
         </span>
-        ${p.alertsEnabled === false ? '<span class="pcf-badge-grey" title="Alerts off">🔕</span>' : ''}
-        ${p.gmailThreadId ? '<span class="pcf-badge-grey" title="Thread active">🧵</span>' : ''}
+        ${p.alertsEnabled === false ? '<span class="pcf-badge-grey" title="Alerts off">' + ICON.bell_off + '</span>' : ''}
+        ${p.gmailThreadId ? '<span class="pcf-badge-grey" title="Thread active">' + ICON.thread + '</span>' : ''}
       </div>
 
       <div class="pcf-actions">
         <button class="btn-secondary-sm" onclick="viewProduct('${p.id}')">Tasks</button>
-        ${canEdit(p) ? `<button class="btn-primary-sm" onclick="showQuickUpdate('${p.id}')">⚡ Update</button>` : ''}
+        ${canEdit(p) ? `<button class="btn-primary-sm" onclick="showQuickUpdate('${p.id}')">${ICON.bolt} Update</button>` : ''}
         ${canEdit(p) ? `<button class="btn-secondary-sm" onclick="showWeeklyLog('${p.id}')">Log</button>` : ''}
-        ${canEdit(p) && !p.onboardedAt ? `<button class="btn-secondary-sm" style="color:var(--amber);border-color:var(--amber);" onclick="reOnboardProduct('${p.id}')">Onboard</button>` : ''}
+        ${canEdit(p) && !p.onboardedAt ? `<button class="btn-secondary-sm" style="color:var(--amber);border-color:var(--amber);" onclick="reOnboardProduct('${p.id}')">${ICON.warn} Onboard</button>` : ''}
         ${editBtn}
         ${canEdit(p) ? `<button class="btn-secondary-sm" onclick="showShareModal('${p.id}')">Share</button>` : ''}
         ${getProductAccess(p) === 'owner' || currentRole === 'admin' ? `<button class="btn-secondary-sm" onclick="showHandoverModal('${p.id}')">Handover</button>` : ''}
@@ -1115,12 +1136,12 @@ function buildTemplateChooser() {
       </p>
       <div class="tmpl-options">
         <div class="tmpl-option" onclick="selectTemplate('sop')">
-          <div class="tmpl-option-icon">📋</div>
+          <div class="tmpl-option-icon">${ICON.clipboard}</div>
           <div class="tmpl-option-title">Default SOP</div>
           <div class="tmpl-option-desc">Pre-filled with Mixta's 12 standard product development pillars</div>
         </div>
         <div class="tmpl-option" onclick="selectTemplate('blank')">
-          <div class="tmpl-option-icon">✏️</div>
+          <div class="tmpl-option-icon">${ICON.note}</div>
           <div class="tmpl-option-title">Blank</div>
           <div class="tmpl-option-desc">Start from scratch and build your own task structure</div>
         </div>
@@ -1280,7 +1301,7 @@ function buildEditProductForm(p) {
     return `<div class="pillar-date-row ${isLocked ? 'task-locked-row' : ''}">
       <div class="pillar-date-num">${i+1}</div>
       <div class="pillar-date-name">
-        ${isLocked ? '🔒 ' : ''}${t.title}
+        ${isLocked ? ICON.lock + ' ' : ''}${t.title}
         <span class="pillar-owner">${t.owner || ''}</span>
         ${preds}
       </div>
@@ -1811,14 +1832,13 @@ function renderCalendar(el) {
     </div><!-- /cal-month-view -->
     <div id="cal-gantt-view" style="display:none;">
       <div class="panel" style="margin-bottom:16px;">
-        <div class="cal-nav">
-          <span class="cal-month-label">Gantt — next</span>
-          <select id="gantt-months-sel" class="select-field" onchange="setGanttMonths(parseInt(this.value))" style="font-size:13px;">
-            <option value="2">2 months</option>
-            <option value="3" selected>3 months</option>
-            <option value="6">6 months</option>
-          </select>
-          <button class="cal-today-btn" onclick="drawGantt()">Refresh</button>
+        <div class="tracker-toolbar">
+          <span class="tracker-toolbar-label">Timeline span</span>
+          <div class="cal-view-toggle" id="gantt-span-toggle">
+            <button class="cal-view-btn" data-span="2" onclick="setGanttMonths(2)">2 months</button>
+            <button class="cal-view-btn active" data-span="3" onclick="setGanttMonths(3)">3 months</button>
+            <button class="cal-view-btn" data-span="6" onclick="setGanttMonths(6)">6 months</button>
+          </div>
         </div>
         <div id="gantt-container" style="overflow-x:auto;padding:14px 18px;"></div>
       </div>
@@ -1848,6 +1868,9 @@ window.setCalView = (mode) => {
 
 window.setGanttMonths = (n) => {
   ganttMonths = n;
+  document.querySelectorAll('#gantt-span-toggle .cal-view-btn').forEach(b => {
+    b.classList.toggle('active', parseInt(b.dataset.span) === n);
+  });
   drawGantt();
 };
 
@@ -2141,7 +2164,7 @@ async function loadTrackerProducts() {
     window._trackerFilter = null;
   } else {
     document.getElementById('tracker-body').innerHTML =
-      '<div class="panel"><div class="empty-state"><span class="empty-icon">📋</span><h3>No products yet</h3><p>Create a product first.</p></div></div>';
+      '<div class="panel"><div class="empty-state"><span class="empty-icon" style="color:var(--text-muted);">${ICON.clipboard}</span><h3>No products yet</h3><p>Create a product first.</p></div></div>';
   }
 }
 
@@ -2201,8 +2224,8 @@ function renderTrackerTable(prod, filter) {
     });
     const isBlocked  = blockedBy.length > 0;
     const blockedLabel = isBlocked
-      ? `<div style="font-size:11px;color:var(--amber);margin-top:3px;">
-          🔗 Blocked by: ${blockedBy.map(pid => allTasks.find(t => t.id === pid)?.title || pid).join(', ')}
+      ? `<div style="font-size:11px;color:var(--amber);margin-top:3px;display:inline-flex;align-items:center;gap:4px;">
+          ${ICON.link} Blocked by: ${blockedBy.map(pid => allTasks.find(t => t.id === pid)?.title || pid).join(', ')}
          </div>`
       : '';
 
@@ -2243,9 +2266,9 @@ function renderTrackerTable(prod, filter) {
                       : delayedDays > 0 ? 'var(--red)'
                       : 'var(--green)';
 
-    const statusLabel2 = isBlocked  ? '🔗 Blocked'
-                       : isComplete ? '✓ Complete'
-                       : isDelayed  ? `⚠ Delayed${delayedDays > 0 ? ' · '+delayedDays+'d overdue' : ''}`
+    const statusLabel2 = isBlocked  ? 'Blocked'
+                       : isComplete ? 'Complete'
+                       : isDelayed  ? `Delayed${delayedDays > 0 ? ' · '+delayedDays+'d overdue' : ''}`
                        : delayedDays > 0 ? `${delayedDays}d overdue`
                        : 'On Track';
 
@@ -2269,7 +2292,7 @@ function renderTrackerTable(prod, filter) {
     return `<tr class="tracker-row${isComplete?' tracker-row-done':isDelayed?' tracker-row-delayed':''}${isBlocked?' tracker-row-blocked':''}">
       <td class="tracker-num">${i+1}</td>
       <td class="tracker-pillar">
-        <div class="tracker-pillar-name">${taskLocked ? '🔒 ' : ''}${pl.title||pl.name||'Untitled'}</div>
+        <div class="tracker-pillar-name">${taskLocked ? ICON.lock + ' ' : ''}${pl.title||pl.name||'Untitled'}</div>
         <div class="tracker-pillar-owner">${pl.owner||''}</div>
         ${blockedLabel}
       </td>
@@ -2288,7 +2311,7 @@ function renderTrackerTable(prod, filter) {
       <div class="tracker-summary-top">
         <div>
           <div class="tracker-summary-name">${prod.name}</div>
-          <div class="tracker-summary-meta">Launch: ${formatDate(prod.launchDate)}${critCount > 0 ? ` · <span style="color:var(--amber);font-weight:600;">⚠ ${critCount} critical path task${critCount!==1?'s':''}</span>` : ''}</div>
+          <div class="tracker-summary-meta">Launch: ${formatDate(prod.launchDate)}${critCount > 0 ? ` · <span style="color:var(--amber);font-weight:600;">${ICON.warn} ${critCount} critical path task${critCount!==1?'s':''}</span>` : ''}</div>
         </div>
         <div class="tracker-pct-badge">${pct}%</div>
       </div>
@@ -2441,7 +2464,7 @@ async function loadDocsProducts() {
     renderDocsFolders(active[0]);
   } else {
     document.getElementById('docs-body').innerHTML =
-      '<div class="panel"><div class="empty-state"><span class="empty-icon">📁</span><h3>No products yet</h3><p>Create a product first.</p></div></div>';
+      '<div class="panel"><div class="empty-state"><span class="empty-icon" style="color:var(--text-muted);">${ICON.folder}</span><h3>No products yet</h3><p>Create a product first.</p></div></div>';
   }
 }
 
@@ -2750,7 +2773,7 @@ async function loadDeadlineStatus() {
     });
 
     if (alerts.length === 0) {
-      el.innerHTML = '<div class="empty-state-sm"><span class="empty-icon">✅</span><p>No imminent deadlines. All pillars are on track or have no date set.</p></div>';
+      el.innerHTML = '<div class="empty-state-sm"><span class="empty-icon" style="color:var(--green);">' + ICON.check_circle + '</span><p>No imminent deadlines. All pillars are on track or have no date set.</p></div>';
       return;
     }
 
@@ -2804,11 +2827,16 @@ window.generateProgressReport = async () => {
     ? prod.onboardedEmails
     : STAKEHOLDERS.filter(s => s.enabled !== false).map(s => s.email);
 
+  // Read test mode BEFORE opening composer so the To/CC fields show correctly
+  const reportTestMode = document.getElementById('report-send-mode')?.value === 'test';
+  const composerTo = reportTestMode ? [TEST_EMAIL] : recipients;
+  const composerCC = reportTestMode ? [] : (prod.defaultCCs || []);
+
   await openEmailComposer({
     type:        'report',
     subject:     `Progress Report: ${prod.name} — ${new Date().toLocaleDateString('en-GB',{day:'numeric',month:'short',year:'numeric'})}`,
-    toEmails:    recipients,
-    ccEmails:    prod.defaultCCs || [],
+    toEmails:    composerTo,
+    ccEmails:    composerCC,
     productId,
     draftPrompt: buildProgressReportPrompt(prod, tasks, pct),
     onSend: async ({ subject, body, toEmails, ccEmails, testMode }) => {
@@ -2994,7 +3022,7 @@ window.triggerDeadlineCheck = async () => {
       if (resultEl) {
         resultEl.style.display = 'block';
         resultEl.className = 'alert-result-box alert-result-ok';
-        resultEl.innerHTML = '✅ No alerts to send — all pillars are on track.';
+        resultEl.innerHTML = ICON.check_circle + ' No alerts to send — all pillars are on track.';
       }
     } else {
       const testMode = document.getElementById('alert-send-mode')?.value === 'test';
@@ -3003,7 +3031,7 @@ window.triggerDeadlineCheck = async () => {
         resultEl.style.display = 'block';
         resultEl.className = `alert-result-box ${result.ok ? 'alert-result-ok' : 'alert-result-err'}`;
         resultEl.innerHTML = result.ok
-          ? `✅ ${result.sent || alerts.length} alert email${(result.sent||alerts.length)>1?'s':''} sent.`
+          ? ICON.check_circle + ` ${result.sent || alerts.length} alert email${(result.sent||alerts.length)>1?'s':''} sent.`
           : `❌ Error: ${result.error}`;
       }
       loadDeadlineStatus();
@@ -3405,7 +3433,7 @@ async function renderTeamSection() {
 function renderSuperAdmin(el) {
   if (!isSuperAdmin) {
     el.innerHTML = `<div class="empty-state">
-      <span class="empty-icon">🔒</span>
+      <span class="empty-icon" style="color:var(--text-muted);">${ICON.lock}</span>
       <h3>Super admin access required</h3>
       <p>Your session has expired or you have not authenticated.</p>
       <button class="btn-primary" onclick="showSAChallenge()">Enter password</button>
@@ -3419,7 +3447,7 @@ function renderSuperAdmin(el) {
   el.innerHTML = `
     <div class="view-header">
       <div>
-        <h1 class="view-title">⚡ Circuit Box</h1>
+        <h1 class="view-title" style="display:flex;align-items:center;gap:8px;">${ICON.bolt} Circuit Box</h1>
         <p class="view-subtitle">Super admin — maintenance & debugging centre</p>
       </div>
       <div style="display:flex;align-items:center;gap:10px;">
@@ -3806,7 +3834,7 @@ async function renderSAConfig(el) {
         <div class="form-row">
           <label class="form-label">GAS endpoint URL</label>
           <input id="cfg-gas" class="input-field" value="${typeof GAS_ENDPOINT !== 'undefined' ? GAS_ENDPOINT : ''}" style="font-size:11px;font-family:monospace;"/>
-          <div style="font-size:11px;color:var(--text-muted);margin-top:4px;">⚠ Changing this here updates Firebase only. The deployed HTML still uses the GitHub Secret — update both if the GAS URL changes.</div>
+          <div style="font-size:11px;color:var(--text-muted);margin-top:4px;">Note: changing this here updates Firebase only. The deployed HTML still uses the GitHub Secret — update both if the GAS URL changes.</div>
         </div>
         <div class="form-actions">
           <button class="btn-primary" onclick="saveSystemConfig()">Save configuration</button>
@@ -4010,7 +4038,7 @@ async function renderSAErrors(el) {
     .slice(0, 50);
 
   if (list.length === 0) {
-    el.innerHTML = '<div class="empty-state-sm"><span class="empty-icon">✅</span><p>No errors logged yet.</p></div>';
+    el.innerHTML = '<div class="empty-state-sm"><span class="empty-icon" style="color:var(--green);">' + ICON.check_circle + '</span><p>No errors logged yet.</p></div>';
     return;
   }
 
@@ -4140,7 +4168,7 @@ async function renderSAProducts(el) {
 
     ${stuckHandovers.length > 0 ? `
     <div class="panel" style="margin-bottom:16px;">
-      <div class="panel-header"><span class="panel-title" style="color:var(--red);">⚠ Stuck handovers — return date passed</span></div>
+      <div class="panel-header"><span class="panel-title" style="color:var(--red);display:inline-flex;align-items:center;gap:6px;">${ICON.warn} Stuck handovers — return date passed</span></div>
       <div class="panel-body">
         ${stuckHandovers.map(p => `
           <div class="deadline-alert-row">
@@ -4259,7 +4287,7 @@ window.saPingGAS = async () => {
     const result = await callGAS('ping', {});
     const ms     = Date.now() - t0;
     res.className = `alert-result-box ${result.ok ? 'alert-result-ok' : 'alert-result-err'}`;
-    res.textContent = result.ok ? `✅ GAS live — ${ms}ms · ${result.message}` : `❌ ${result.error}`;
+    res.textContent = result.ok ? ICON.check_circle + ` GAS live — ${ms}ms · ${result.message}` : `❌ ${result.error}`;
   } catch(e) {
     res.className = 'alert-result-box alert-result-err';
     res.textContent = '❌ ' + e.message;
@@ -4399,14 +4427,14 @@ function renderKanban(prod) {
         <div class="kb-card-actions">
           ${col.id !== 'todo'        ? `<button class="kb-move-btn" onclick="moveKanbanTask('${prod.id}','${t.id}','on-track')">← To Do</button>` : ''}
           ${col.id !== 'in-progress' ? `<button class="kb-move-btn" onclick="moveKanbanTask('${prod.id}','${t.id}','delayed')">In Progress</button>` : ''}
-          ${col.id !== 'done'        ? `<button class="kb-move-btn kb-move-done" onclick="moveKanbanTask('${prod.id}','${t.id}','complete')">✓ Done</button>` : ''}
-        </div>` : blocked ? `<div style="font-size:10px;color:var(--amber);margin-top:6px;">🔗 Blocked</div>` : '';
+          ${col.id !== 'done'        ? `<button class="kb-move-btn kb-move-done" onclick="moveKanbanTask('${prod.id}','${t.id}','complete')">Done</button>` : ''}
+        </div>` : blocked ? `<div style="font-size:10px;color:var(--amber);margin-top:6px;display:inline-flex;align-items:center;gap:3px;">${ICON.link} Blocked</div>` : '';
 
       return `<div class="kb-card ${blocked ? 'kb-card-blocked' : ''}" draggable="${canEdit && !blocked}" 
                ondragstart="kbDragStart(event,'${t.id}')"
                ondragover="event.preventDefault()"
                ondrop="kbDrop(event,'${prod.id}','${col.id}')">
-        <div class="kb-card-title">${isLocked ? '🔒 ' : ''}${t.title||t.name||'Untitled'}</div>
+        <div class="kb-card-title">${isLocked ? ICON.lock + ' ' : ''}${t.title||t.name||'Untitled'}</div>
         <div class="kb-card-meta">
           ${t.owner ? `<span class="kb-card-owner">${t.owner}</span>` : ''}
           ${deadlineChip}
@@ -4591,9 +4619,7 @@ function renderTrackerGantt(prod) {
       return `<div class="tg-link" style="left:${left}%;width:${width}%;" title="Depends on: ${dep.title}"></div>`;
     }).join('');
 
-    const statusDot = t.status === 'complete' ? '✓'
-                    : t.status === 'delayed'   ? '!'
-                    : blocked ? '🔗' : '·';
+    const statusDot = '';
 
     return `<div class="gantt-row">
       <div class="gantt-label" title="${t.title||t.name}">
@@ -4606,7 +4632,7 @@ function renderTrackerGantt(prod) {
         <div class="tg-bar ${barCls}" style="left:${startPct}%;width:${barWidth}%;">
           ${barWidth > 8 && dur ? `<span class="tg-bar-label">${dur}d</span>` : ''}
           <div class="gantt-tooltip">
-            ${isCritical ? '⚠ Critical path · ' : ''}${t.title||t.name}<br/>
+            ${isCritical ? 'Critical path · ' : ''}${t.title||t.name}<br/>
             ${t.startDate||'?'} → ${t.deadline||'?'}${dur ? ' (' + dur + ' days)' : ''}
           </div>
         </div>
@@ -4771,7 +4797,7 @@ async function renderSATemplates(el) {
   const entries = Object.entries(SAVED_TEMPLATES);
 
   if (entries.length === 0) {
-    el.innerHTML = '<div class="empty-state-sm"><span class="empty-icon">📋</span><h3>No saved templates</h3><p>When you create a product with a custom task setup and save it as a template, it will appear here.</p></div>';
+    el.innerHTML = '<div class="empty-state-sm"><span class="empty-icon" style="color:var(--text-muted);">${ICON.clipboard}</span><h3>No saved templates</h3><p>When you create a product with a custom task setup and save it as a template, it will appear here.</p></div>';
     return;
   }
 
@@ -4842,12 +4868,12 @@ async function renderSAAllTasks(el) {
       const st = t.status || 'on-track';
       const stCls = st === 'complete' ? 'pill-blue' : st === 'delayed' ? 'pill-red' : 'pill-green';
       const pred  = (t.predecessors||[]).length > 0
-        ? `<span style="font-size:10px;color:var(--amber);">🔗 ${t.predecessors.length} dep${t.predecessors.length!==1?'s':''}</span>`
+        ? `<span style="font-size:10px;color:var(--amber);">${t.predecessors.length} dep${t.predecessors.length!==1?'s':''}</span>`
         : '';
       return `<tr class="tracker-row">
         <td class="tracker-num">${i+1}</td>
         <td class="tracker-pillar">
-          <div class="tracker-pillar-name">${locked ? '🔒 ' : ''}${t.title||t.name||'Untitled'}</div>
+          <div class="tracker-pillar-name">${locked ? ICON.lock + ' ' : ''}${t.title||t.name||'Untitled'}</div>
           <div class="tracker-pillar-owner">${t.owner||'—'}</div>
         </td>
         <td style="font-size:12px;color:var(--text-muted);">${t.deadline||'—'}</td>
@@ -4862,7 +4888,7 @@ async function renderSAAllTasks(el) {
       <div class="panel" style="margin-bottom:14px;">
         <div class="panel-header">
           <span class="panel-title">${prod.name}</span>
-          <span style="font-size:12px;color:var(--text-muted);">${tasks.length} tasks · ${locked ? '🔒 Locked' : 'Editable'}</span>
+          <span style="font-size:12px;color:var(--text-muted);">${tasks.length} tasks · ${locked ? 'Locked' : 'Editable'}</span>
         </div>
         <div style="overflow:auto;">
           <table class="tracker-table" style="min-width:500px;">
@@ -4976,8 +5002,8 @@ window.showProductActivity = async (productId) => {
     .sort((a, b) => b.timestamp - a.timestamp)
     .slice(0, 100);
 
-  const typeIcon = { status: '🔄', note: '📝', task_added: '➕', handover: '🤝',
-                     document: '📎', created: '🚀', baseline: '📅' };
+  const typeIcon = { status: ICON.refresh, note: ICON.note, task_added: ICON.plus, handover: ICON.handshake,
+                     document: ICON.paperclip, created: ICON.rocket, baseline: ICON.calendar };
   const typeColor = { status: 'var(--blue)', note: 'var(--text-muted)', task_added: 'var(--green)',
                       handover: 'var(--amber)', document: 'var(--text-muted)',
                       created: 'var(--green)', baseline: 'var(--red)' };
@@ -4988,7 +5014,7 @@ window.showProductActivity = async (productId) => {
                     ' ' + dt.toLocaleTimeString('en-GB', { hour:'2-digit', minute:'2-digit' });
     return `<div class="activity-row">
       <div class="activity-icon" style="color:${typeColor[e.type]||'var(--text-muted)'}">
-        ${typeIcon[e.type] || '•'}
+        ${typeIcon[e.type] || ''}
       </div>
       <div class="activity-body">
         <div class="activity-msg">${e.message}</div>
@@ -5052,9 +5078,9 @@ window.showQuickUpdate = async (productId) => {
   }).join('');
 
   const attentionHtml = attention.length > 0
-    ? `<div class="qu-section-label qu-label-red">⚠ Needs attention (${attention.length})</div>
+    ? `<div class="qu-section-label qu-label-red" style="display:inline-flex;align-items:center;gap:5px;">${ICON.warn} Needs attention (${attention.length})</div>
        ${buildTaskRows(attention)}`
-    : '<div class="qu-section-label" style="color:var(--green);">✅ No overdue or delayed tasks</div>';
+    : '<div class="qu-section-label" style="color:var(--green);display:inline-flex;align-items:center;gap:5px;">${ICON.check_circle} No overdue or delayed tasks</div>';
 
   const ontrackHtml = ontrack.length > 0
     ? `<details style="margin-top:12px;"><summary class="qu-section-label" style="cursor:pointer;">On track (${ontrack.length}) — click to show</summary>
@@ -5072,7 +5098,7 @@ window.showQuickUpdate = async (productId) => {
   modal.innerHTML = `
     <div style="background:#fff;border-radius:12px;width:100%;max-width:560px;max-height:85vh;overflow:hidden;display:flex;flex-direction:column;box-shadow:0 8px 40px rgba(0,0,0,0.2);">
       <div style="background:#C0282D;padding:16px 22px;flex-shrink:0;">
-        <div style="color:white;font-size:11px;letter-spacing:.08em;text-transform:uppercase;margin-bottom:2px;">Quick Update</div>
+        <div style="color:white;font-size:11px;letter-spacing:.08em;text-transform:uppercase;margin-bottom:2px;display:flex;align-items:center;gap:5px;">${ICON.bolt} Quick Update</div>
         <div style="color:white;font-size:17px;font-weight:700;">${fresh.name}</div>
         <div style="color:rgba(255,255,255,.75);font-size:12px;margin-top:2px;">${tasks.filter(t=>t.status==='complete').length}/${tasks.length} tasks complete</div>
       </div>
@@ -5094,7 +5120,7 @@ window.quickSetStatus = async (productId, taskId, newStatus, btn) => {
   const btns  = row?.querySelectorAll('.status-btn');
   btns?.forEach(b => b.classList.remove('active'));
   btn.classList.add('active');
-  btn.textContent = newStatus === 'complete' ? '✓ Done' : btn.textContent;
+  btn.textContent = newStatus === 'complete' ? 'Done' : btn.textContent;
 
   await updatePillarStatus(productId, taskId, newStatus);
   // Refresh the modal data silently after save
@@ -5173,13 +5199,13 @@ async function openEmailComposer({
       <div style="background:#1a1a18;padding:16px 22px;flex-shrink:0;display:flex;align-items:center;justify-content:space-between;">
         <div>
           <div style="color:rgba(255,255,255,.6);font-size:11px;letter-spacing:.08em;text-transform:uppercase;">
-            ${prod.gmailThreadId ? '↩ Reply in thread' : isThreadStarter ? '🧵 New thread' : 'Email Composer'}
+            ${prod.gmailThreadId ? 'Reply in thread' : isThreadStarter ? 'New thread' : 'Email Composer'}
           </div>
           <div style="color:white;font-size:16px;font-weight:600;margin-top:2px;">${prod.name || 'Compose email'}</div>
           ${prod.gmailThreadId ? `<div style="color:rgba(255,255,255,.5);font-size:11px;margin-top:2px;">Will reply to existing product thread</div>` : ''}
         </div>
         <div style="display:flex;align-items:center;gap:8px;">
-          <span class="email-ai-badge">⚡ AI Draft</span>
+          <span class="email-ai-badge">${ICON.bolt} AI Draft</span>
           <button onclick="document.getElementById('sa-modal').style.display='none'"
             style="background:rgba(255,255,255,.15);border:none;color:white;width:28px;height:28px;
                    border-radius:6px;cursor:pointer;font-size:14px;">✕</button>
@@ -5260,7 +5286,7 @@ async function openEmailComposer({
     const statusEl = document.getElementById('ec-ai-status');
     const sendBtn  = document.getElementById('ec-send-btn');
     if (bodyEl)   { bodyEl.placeholder = ''; bodyEl.value = ''; }
-    if (statusEl) statusEl.textContent = '⚠ AI draft failed — write manually or check API key';
+    if (statusEl) statusEl.textContent = 'AI draft failed — write manually or check API key';
     if (sendBtn)  sendBtn.disabled = false;
   }
 }
@@ -5279,7 +5305,7 @@ window.regenerateEmailDraft = async (type, productId) => {
     if (bodyEl)   bodyEl.value = draft;
     if (statusEl) statusEl.textContent = 'New draft ready';
   } catch(e) {
-    if (statusEl) statusEl.textContent = '⚠ Failed — try again';
+    if (statusEl) statusEl.textContent = 'Failed — try again';
   }
   if (regenBtn) regenBtn.disabled = false;
 };
@@ -5548,9 +5574,9 @@ window.openStatusDropdown = (productId, taskId, badgeEl) => {
   if (!task) return;
 
   const options = [
-    { value: 'on-track', label: 'On Track', color: 'var(--green)', icon: '●' },
-    { value: 'delayed',  label: 'Delayed',  color: 'var(--amber)', icon: '⚠' },
-    { value: 'complete', label: 'Complete', color: 'var(--blue)',  icon: '✓' },
+    { value: 'on-track', label: 'On Track', color: 'var(--green)' },
+    { value: 'delayed',  label: 'Delayed',  color: 'var(--amber)' },
+    { value: 'complete', label: 'Complete', color: 'var(--blue)'  },
   ];
 
   const menu = document.createElement('div');
@@ -5558,7 +5584,7 @@ window.openStatusDropdown = (productId, taskId, badgeEl) => {
   menu.innerHTML = options.map(o => `
     <div class="status-dropdown-item ${task.status === o.value ? 'sdi-active' : ''}"
          onclick="selectTaskStatus('${productId}','${taskId}','${o.value}',this)">
-      <span style="color:${o.color};font-size:12px;line-height:1;">${o.icon}</span>
+      <span class="sdi-dot" style="background:${o.color};"></span>
       <span>${o.label}</span>
       ${task.status === o.value ? '<span class="sdi-current">current</span>' : ''}
     </div>`).join('');
@@ -5650,49 +5676,7 @@ Tone: professional, direct, not accusatory. This is a coordination message, not 
   });
 }
 
-/* ── Smart status dropdown ── */
-window.openStatusDropdown = (productId, taskId, badgeEl) => {
-  // Remove any existing dropdowns
-  document.querySelectorAll('.status-dropdown-menu').forEach(d => d.remove());
 
-  const prod  = trackerProductsCache[productId] || productListCache[productId];
-  const tasks = getProductTasks(prod);
-  const task  = tasks.find(t => t.id === taskId);
-  if (!task) return;
-
-  const options = [
-    { value: 'on-track', label: 'On Track',  color: 'var(--green)', icon: '●' },
-    { value: 'delayed',  label: 'Delayed',   color: 'var(--amber)', icon: '⚠' },
-    { value: 'complete', label: 'Complete',  color: 'var(--blue)',  icon: '✓' },
-  ];
-
-  const menu = document.createElement('div');
-  menu.className = 'status-dropdown-menu';
-  menu.innerHTML = options.map(o => `
-    <div class="status-dropdown-item ${task.status === o.value ? 'active' : ''}"
-         style="--item-color:${o.color}"
-         onclick="selectTaskStatus('${productId}','${taskId}','${o.value}',this)">
-      <span style="color:${o.color};font-size:10px;">${o.icon}</span>
-      ${o.label}
-      ${task.status === o.value ? '<span style="margin-left:auto;color:var(--text-muted);font-size:11px;">current</span>' : ''}
-    </div>`).join('');
-
-  const rect = badgeEl.getBoundingClientRect();
-  menu.style.cssText = `position:fixed;top:${rect.bottom+4}px;left:${rect.left}px;z-index:9000;`;
-  document.body.appendChild(menu);
-
-  // Close on outside click
-  setTimeout(() => {
-    document.addEventListener('click', function closer(e) {
-      if (!menu.contains(e.target)) { menu.remove(); document.removeEventListener('click', closer); }
-    });
-  }, 10);
-};
-
-window.selectTaskStatus = async (productId, taskId, newStatus, itemEl) => {
-  itemEl.closest('.status-dropdown-menu')?.remove();
-  await updatePillarStatus(productId, taskId, newStatus);
-};
 
 // Register all real functions with the global dispatcher
 window.__npd_init({
@@ -6084,16 +6068,63 @@ a { color: inherit; text-decoration: none; }
   background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
   padding: 20px 22px;
 }
-.pcf-header  { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 14px; gap: 12px; }
-.pcf-name    { font-size: 15px; font-weight: 600; color: var(--text); margin-bottom: 4px; }
-.pcf-desc    { font-size: 13px; color: var(--text-mid); }
-.pcf-meta-row { display: flex; gap: 24px; flex-wrap: wrap; margin-bottom: 12px; }
-.pcf-meta-item { display: flex; flex-direction: column; gap: 2px; }
-.pcf-meta-label { font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: .05em; font-weight: 500; }
-.pcf-meta-val { font-size: 13px; font-weight: 500; color: var(--text); }
-.pcf-meta-val.green { color: var(--green); }
-.pcf-meta-val.red   { color: var(--red);   }
-.pcf-actions { display: flex; gap: 8px; margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--border); }
+/* Redesigned product card */
+.product-card-full { border:1px solid var(--border); border-radius:var(--radius); background:var(--surface); padding:20px 22px; margin-bottom:14px; transition:box-shadow .15s, border-color .15s; }
+.product-card-full:hover { box-shadow:0 3px 16px rgba(0,0,0,.07); border-color:var(--border-mid); }
+.pcf-header        { display:flex; align-items:flex-start; justify-content:space-between; gap:12px; margin-bottom:12px; }
+.pcf-header-left   { display:flex; align-items:flex-start; gap:12px; flex:1; min-width:0; }
+.pcf-header-right  { display:flex; align-items:center; gap:8px; flex-shrink:0; }
+.pcf-health-dot    { width:10px; height:10px; border-radius:50%; flex-shrink:0; margin-top:5px; }
+.pcf-health-green  { background:var(--green); box-shadow:0 0 0 3px rgba(22,163,74,.13); }
+.pcf-health-amber  { background:var(--amber); box-shadow:0 0 0 3px rgba(217,119,6,.13); animation:pulse-dot 2.4s ease-in-out infinite; }
+.pcf-health-red    { background:var(--red);   box-shadow:0 0 0 3px rgba(192,40,45,.13); animation:pulse-dot 2s ease-in-out infinite; }
+.pcf-health-done   { background:var(--blue);  box-shadow:0 0 0 3px rgba(37,99,235,.13); }
+@keyframes pulse-dot { 0%,100%{ box-shadow:0 0 0 3px rgba(192,40,45,.13);} 50%{ box-shadow:0 0 0 5px rgba(192,40,45,.05);} }
+.pcf-name-row      { display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-bottom:3px; }
+.pcf-name          { font-size:15px; font-weight:600; color:var(--text); }
+.pcf-slip          { font-size:10px; font-weight:600; padding:2px 7px; border-radius:99px; }
+.pcf-slip.red      { background:var(--red-light); color:var(--red); }
+.pcf-slip.green    { background:var(--green-light); color:var(--green); }
+.pcf-desc          { font-size:12px; color:var(--text-muted); line-height:1.5; }
+.pcf-progress-row  { display:flex; align-items:center; gap:10px; margin:12px 0 12px; }
+.pcf-progress-bar  { flex:1; height:6px; background:var(--border); border-radius:99px; overflow:hidden; }
+.pcf-progress-fill { height:100%; background:var(--green); border-radius:99px; transition:width .4s ease; }
+.pcf-pct           { font-size:12px; font-weight:700; color:var(--text-mid); width:36px; text-align:right; flex-shrink:0; }
+.pcf-stats         { display:flex; align-items:stretch; gap:0; margin-bottom:14px; background:var(--bg); border:1px solid var(--border); border-radius:10px; padding:2px; }
+.pcf-stat          { display:flex; flex-direction:column; align-items:center; justify-content:center; gap:3px; padding:10px 16px; flex-shrink:0; }
+.pcf-stat-val      { font-size:19px; font-weight:700; color:var(--text); line-height:1; }
+.pcf-stat-val.green{ color:var(--green); }
+.pcf-stat-val.amber{ color:var(--amber); }
+.pcf-stat-val.red  { color:var(--red);   }
+.pcf-stat-lbl      { font-size:10px; font-weight:600; color:var(--text-muted); text-transform:uppercase; letter-spacing:.05em; }
+.pcf-stat-div      { width:1px; background:var(--border); flex-shrink:0; margin:8px 0; }
+.pcf-stat-spacer   { flex:1; }
+.pcf-owner-chip    { display:inline-flex; align-items:center; gap:5px; font-size:11px; color:var(--text-muted); padding-right:12px; }
+.pcf-owner-chip svg{ opacity:.6; }
+.pcf-badge-grey    { display:inline-flex; align-items:center; padding:0 4px; color:var(--text-muted); opacity:.6; }
+.pcf-launch-badge  { font-size:11px; font-weight:600; padding:4px 9px; border-radius:6px; white-space:nowrap; }
+.pcf-launch-grey   { background:var(--bg); color:var(--text-muted); border:1px solid var(--border); }
+.pcf-launch-amber  { background:var(--amber-light); color:var(--amber); }
+.pcf-launch-red    { background:var(--red-light); color:var(--red); }
+.pcf-actions       { display:flex; gap:8px; margin-top:2px; padding-top:14px; border-top:1px solid var(--border); flex-wrap:wrap; }
+/* Product detail tabs */
+.pdt-header        { display:flex; align-items:center; justify-content:space-between; margin-bottom:16px; padding-bottom:14px; border-bottom:1px solid var(--border); }
+.pdt-meta          { display:flex; align-items:center; gap:8px; }
+.pdt-tabs          { display:flex; gap:2px; background:var(--bg); border-radius:8px; padding:3px; }
+.pdt-tab           { padding:5px 14px; font-size:12px; font-weight:500; border:none; background:none; border-radius:6px; cursor:pointer; color:var(--text-muted); transition:all .15s; }
+.pdt-tab.active    { background:white; color:var(--text); box-shadow:0 1px 3px rgba(0,0,0,.08); }
+.pdt-chip          { font-size:11px; font-weight:600; padding:3px 9px; border-radius:6px; }
+.chip-red          { background:var(--red-light); color:var(--red); }
+.chip-amber        { background:var(--amber-light); color:var(--amber); }
+.chip-grey         { background:var(--bg); color:var(--text-muted); border:1px solid var(--border); }
+.pdt-owner-chip    { display:inline-flex; align-items:center; gap:4px; font-size:12px; color:var(--text-muted); }
+.pdt-desc-block    { padding:4px 0; }
+.pdt-desc-text     { font-size:14px; color:var(--text); line-height:1.75; margin-bottom:20px; white-space:pre-wrap; }
+.pdt-desc-stats    { display:grid; grid-template-columns:repeat(3,1fr); gap:10px; }
+.pdt-ds-item       { background:var(--bg); border-radius:8px; padding:12px 14px; }
+.pdt-ds-label      { font-size:10px; font-weight:600; color:var(--text-muted); text-transform:uppercase; letter-spacing:.06em; display:block; margin-bottom:4px; }
+.pdt-ds-val        { font-size:14px; font-weight:600; color:var(--text); }
+.pdt-ds-val.green  { color:var(--green); }
 
 .progress-bar-wrap { height: 4px; background: var(--border); border-radius: 99px; overflow: hidden; margin-bottom: 4px; }
 .progress-bar-fill { height: 100%; background: var(--green); border-radius: 99px; transition: width .3s; }
@@ -6622,6 +6653,22 @@ textarea.input-field { resize: vertical; line-height: 1.6; }
 .qu-task-btns { display:flex; gap:4px; flex-shrink:0; align-items:center; }
 .qu-section-label { font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.06em; color:var(--text-muted); margin-bottom:8px; padding-top:4px; }
 .qu-label-red     { color:var(--red); }
+
+.tracker-toolbar { display:flex; align-items:center; gap:12px; padding:14px 18px; border-bottom:1px solid var(--border); }
+.tracker-toolbar-label { font-size:13px; font-weight:500; color:var(--text-mid); }
+
+.stat-value.red { animation: pulse-red 2.5s ease-in-out infinite; }
+@keyframes pulse-red { 0%,100% { opacity:1; } 50% { opacity:.6; } }
+
+/* Status dropdown menu */
+.status-dropdown-menu { background:white; border:1px solid var(--border); border-radius:10px; box-shadow:0 8px 24px rgba(0,0,0,.12); overflow:hidden; min-width:150px; }
+.status-dropdown-item { display:flex; align-items:center; gap:9px; padding:9px 14px; font-size:13px; cursor:pointer; color:var(--text); transition:background .1s; }
+.status-dropdown-item:hover { background:var(--bg); }
+.status-dropdown-item.sdi-active { background:var(--bg); font-weight:600; }
+.sdi-dot { width:8px; height:8px; border-radius:50%; flex-shrink:0; }
+.sdi-current { margin-left:auto; font-size:10px; color:var(--text-muted); font-weight:400; }
+.task-status-badge { display:inline-flex; align-items:center; gap:5px; font-size:11px; font-weight:600; padding:4px 11px; border-radius:99px; border:1.5px solid; cursor:pointer; white-space:nowrap; transition:opacity .12s; user-select:none; }
+.task-status-badge:hover { opacity:.82; }
 </style>
 
 <!-- ══════════════════════════════════════════
@@ -6655,7 +6702,7 @@ textarea.input-field { resize: vertical; line-height: 1.6; }
 ══════════════════════════════════════════ -->
 <div id="screen-denied" style="display:none;">
   <div class="denied-card">
-    <div class="denied-icon">🔒</div>
+    <div class="denied-icon" style="color:var(--text-muted);">${ICON.lock}</div>
     <h2>Access not granted</h2>
     <p>Your account (<span class="denied-email" id="denied-email"></span>) has not been added to the NPD Hub allowlist.<br/><br/>Contact a Commercial Strategy admin to request access.</p>
     <button class="btn-outline" onclick="handleSignOut()">Sign in with a different account</button>
@@ -6715,7 +6762,7 @@ textarea.input-field { resize: vertical; line-height: 1.6; }
         <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
         <span>Circuit Box</span>
       </button>
-      <button class="nav-item" style="font-size:11px;color:var(--text-muted);justify-content:center;" onclick="showSAChallenge()" title="Super admin access">⚡</button>
+      <button class="nav-item" style="font-size:11px;color:var(--text-muted);justify-content:center;" onclick="showSAChallenge()" title="Super admin access">${ICON.bolt}</button>
     </div>
 
     <div class="sidebar-bottom">
