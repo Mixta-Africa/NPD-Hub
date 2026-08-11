@@ -5662,7 +5662,6 @@ window.showQuickUpdate = async (productId) => {
   const prod  = productListCache[productId] || trackerProductsCache[productId];
   if (!prod) return;
 
-  // Refresh product data
   const snap  = await get(ref(db, 'products/' + productId));
   const fresh = snap.val() || prod;
   productListCache[productId] = fresh;
@@ -5675,68 +5674,94 @@ window.showQuickUpdate = async (productId) => {
       (t.deadline && getPillarStatus(t.deadline) === 'overdue')
     )
   );
-  const ontrack   = tasks.filter(t => t.status !== 'complete' && t.status !== 'delayed' && (!t.deadline || getPillarStatus(t.deadline) === 'ontrack'));
+  const ontrack = tasks.filter(t =>
+    t.status !== 'complete' && t.status !== 'delayed' &&
+    (!t.deadline || getPillarStatus(t.deadline) === 'ontrack')
+  );
 
-  const buildTaskRows = (taskList, showAll) => taskList.map(t => {
-    const due  = t.deadline ? new Date(t.deadline) : null;
+  const buildTaskRow = (t) => {
+    const due      = t.deadline ? new Date(t.deadline) : null;
     if (due) due.setHours(0,0,0,0);
     const daysOver = due && due < today ? Math.round((today - due) / 86400000) : 0;
-    const chip = !t.deadline ? '<span class="pill pill-grey" style="font-size:10px;">No date</span>'
-      : daysOver > 0 ? `<span class="pill pill-red" style="font-size:10px;">${daysOver}d overdue</span>`
-      : t.status === 'delayed' ? '<span class="pill pill-amber" style="font-size:10px;">Delayed</span>'
-      : `<span class="pill pill-green" style="font-size:10px;">${formatDate(t.deadline)}</span>`;
-
-    return `<div class="qu-task-row">
-      <div class="qu-task-info">
-        <div class="qu-task-name">${t.title||t.name||'Untitled'}</div>
-        <div class="qu-task-meta">${t.owner||''} ${chip}</div>
-      </div>
-      <div class="qu-task-btns">
-        <button class="status-btn status-btn-ontrack ${t.status==='on-track'?'active':''}"
-          onclick="quickSetStatus('${productId}','${t.id}','on-track',this)">On Track</button>
-        <button class="status-btn status-btn-delayed ${t.status==='delayed'?'active':''}"
-          onclick="quickSetStatus('${productId}','${t.id}','delayed',this)">Delayed</button>
-        <button class="status-btn status-btn-complete ${t.status==='complete'?'active':''}"
-          onclick="quickSetStatus('${productId}','${t.id}','complete',this)">Done</button>
-      </div>
-    </div>`;
-  }).join('');
+    const chip     = !t.deadline
+      ? '<span class="pill pill-grey" style="font-size:10px;">No date</span>'
+      : daysOver > 0
+        ? '<span class="pill pill-red" style="font-size:10px;">' + daysOver + 'd overdue</span>'
+        : t.status === 'delayed'
+          ? '<span class="pill pill-amber" style="font-size:10px;">Delayed</span>'
+          : '<span class="pill pill-green" style="font-size:10px;">' + formatDate(t.deadline) + '</span>';
+    const st = t.status || 'on-track';
+    return '<div class="qu-task-row" id="qtr-' + t.id + '">' +
+      '<div class="qu-task-info">' +
+        '<div class="qu-task-name">' + (t.title || t.name || 'Untitled') + '</div>' +
+        '<div class="qu-task-meta">' + (t.owner || '') + ' ' + chip + '</div>' +
+      '</div>' +
+      '<div class="qu-task-btns">' +
+        '<button class="status-btn status-btn-ontrack ' + (st === 'on-track' ? 'active' : '') + '" ' +
+          'onclick="quickSetStatus(\'' + productId + '\',\'' + t.id + '\',\'on-track\',this)">On Track</button>' +
+        '<button class="status-btn status-btn-delayed ' + (st === 'delayed' ? 'active' : '') + '" ' +
+          'onclick="quickSetStatus(\'' + productId + '\',\'' + t.id + '\',\'delayed\',this)">Delayed</button>' +
+        '<button class="status-btn status-btn-complete ' + (st === 'complete' ? 'active' : '') + '" ' +
+          'onclick="quickSetStatus(\'' + productId + '\',\'' + t.id + '\',\'complete\',this)">Done</button>' +
+      '</div>' +
+      '<input type="text" class="qu-note-input" placeholder="Add a note..." value="' + (t.notes || '') + '" ' +
+        'onblur="quickSaveNote(\'' + productId + '\',\'' + t.id + '\',this.value)" ' +
+        'style="width:100%;margin-top:8px;padding:6px 10px;border:1px solid var(--border);border-radius:6px;font-size:11px;font-family:Poppins,sans-serif;color:var(--text);outline:none;">' +
+    '</div>';
+  };
 
   const attentionHtml = attention.length > 0
-    ? `<div class="qu-section-label qu-label-red" style="display:inline-flex;align-items:center;gap:5px;">${ICON.warn} Needs attention (${attention.length})</div>
-       ${buildTaskRows(attention)}`
-    : '<div class="qu-section-label" style="color:var(--green);display:inline-flex;align-items:center;gap:5px;">${ICON.check_circle} No overdue or delayed tasks</div>';
+    ? '<div class="qu-section-label qu-label-red" style="display:flex;align-items:center;gap:5px;">' + ICON.warn + ' Needs attention (' + attention.length + ')</div>' +
+      attention.map(buildTaskRow).join('')
+    : '<div class="qu-section-label" style="color:var(--green);">All tasks on track</div>';
 
   const ontrackHtml = ontrack.length > 0
-    ? `<details style="margin-top:12px;"><summary class="qu-section-label" style="cursor:pointer;">On track (${ontrack.length}) — click to show</summary>
-       <div style="margin-top:8px;">${buildTaskRows(ontrack)}</div></details>`
+    ? '<details style="margin-top:12px;"><summary class="qu-section-label" style="cursor:pointer;list-style:none;">On track (' + ontrack.length + ') — tap to show</summary>' +
+      '<div style="margin-top:8px;">' + ontrack.map(buildTaskRow).join('') + '</div></details>'
     : '';
 
   let modal = document.getElementById('sa-modal');
   if (!modal) {
     modal = document.createElement('div');
     modal.id = 'sa-modal';
-    modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.45);display:flex;align-items:center;justify-content:center;z-index:2000;padding:20px;';
+    modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.45);display:flex;align-items:flex-end;justify-content:center;z-index:2000;padding:0;';
     document.body.appendChild(modal);
   }
 
-  modal.innerHTML = `
-    <div style="background:#fff;border-radius:12px;width:100%;max-width:560px;max-height:85vh;overflow:hidden;display:flex;flex-direction:column;box-shadow:0 8px 40px rgba(0,0,0,0.2);">
-      <div style="background:#C0282D;padding:16px 22px;flex-shrink:0;">
-        <div style="color:white;font-size:11px;letter-spacing:.08em;text-transform:uppercase;margin-bottom:2px;display:flex;align-items:center;gap:5px;">${ICON.bolt} Quick Update</div>
-        <div style="color:white;font-size:17px;font-weight:700;">${fresh.name}</div>
-        <div style="color:rgba(255,255,255,.75);font-size:12px;margin-top:2px;">${tasks.filter(t=>t.status==='complete').length}/${tasks.length} tasks complete</div>
-      </div>
-      <div style="overflow-y:auto;padding:16px 20px;flex:1;">
-        ${attentionHtml}
-        ${ontrackHtml}
-      </div>
-      <div style="padding:12px 20px;border-top:1px solid var(--border);display:flex;justify-content:flex-end;gap:8px;flex-shrink:0;">
-        <button class="btn-outline" onclick="document.getElementById('sa-modal').style.display='none'">Close</button>
-        <button class="btn-secondary-sm" onclick="document.getElementById('sa-modal').style.display='none';loadView('tracker')">Open tracker →</button>
-      </div>
-    </div>`;
+  const done  = tasks.filter(t => t.status === 'complete').length;
+  const pct   = tasks.length > 0 ? Math.round((done / tasks.length) * 100) : 0;
+
+  modal.innerHTML =
+    '<div style="background:#fff;border-radius:16px 16px 0 0;width:100%;max-width:600px;max-height:88vh;overflow:hidden;display:flex;flex-direction:column;">' +
+      '<div style="background:#C0282D;padding:18px 22px 16px;flex-shrink:0;">' +
+        '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">' +
+          '<div style="color:rgba(255,255,255,.8);font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.08em;">Quick Update</div>' +
+          '<button onclick="document.getElementById(\'sa-modal\').style.display=\'none\'" ' +
+            'style="background:rgba(255,255,255,.2);border:none;color:white;border-radius:6px;padding:4px 10px;font-size:12px;cursor:pointer;font-family:Poppins,sans-serif;">Done</button>' +
+        '</div>' +
+        '<div style="color:white;font-size:18px;font-weight:700;margin-bottom:8px;">' + fresh.name + '</div>' +
+        '<div style="background:rgba(255,255,255,.2);border-radius:4px;height:4px;overflow:hidden;">' +
+          '<div style="background:white;height:4px;width:' + pct + '%;border-radius:4px;transition:width .3s;"></div>' +
+        '</div>' +
+        '<div style="color:rgba(255,255,255,.8);font-size:11px;margin-top:5px;">' + done + ' of ' + tasks.length + ' tasks complete · ' + pct + '%</div>' +
+      '</div>' +
+      '<div style="overflow-y:auto;padding:16px 18px;flex:1;-webkit-overflow-scrolling:touch;">' +
+        attentionHtml + ontrackHtml +
+      '</div>' +
+      '<div style="padding:12px 18px;border-top:1px solid var(--border);flex-shrink:0;">' +
+        '<button class="btn-secondary-sm" style="width:100%;" onclick="document.getElementById(\'sa-modal\').style.display=\'none\';loadView(\'tracker\')">Open full tracker →</button>' +
+      '</div>' +
+    '</div>';
   modal.style.display = 'flex';
+};
+
+window.quickSaveNote = async (productId, taskId, notes) => {
+  try {
+    await set(ref(db, 'products/' + productId + '/tasks/' + taskId + '/notes'), notes);
+    if (productListCache[productId]?.tasks?.[taskId]) {
+      productListCache[productId].tasks[taskId].notes = notes;
+    }
+  } catch(e) { console.warn('Note save failed', e); }
 };
 
 window.quickSetStatus = async (productId, taskId, newStatus, btn) => {
@@ -6440,6 +6465,7 @@ window.__npd_init({
   generateGCCOLink:        window.generateGCCOLink,
   copyGCCOLink:            window.copyGCCOLink,
   postProductComment:      window.postProductComment,
+  quickSaveNote:           window.quickSaveNote,
 });
 
 </script>
@@ -6604,31 +6630,45 @@ a { color: inherit; text-decoration: none; }
 
 .stats-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-bottom: 20px; }
 .stat-card {
-  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
-  padding: 18px 20px;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
+  padding: 18px 20px; overflow: hidden;
 }
-.dash-stat-card { border-radius: 12px; transition: box-shadow 0.15s; }
-.dash-stat-card:hover { box-shadow: 0 2px 12px rgba(0,0,0,0.07); }
+.dash-stat-card { transition: box-shadow 0.15s; cursor: pointer; }
+.dash-stat-card:hover { box-shadow: 0 2px 12px rgba(0,0,0,0.07); transform: translateY(-1px); }
 .btn-link-sm { background: none; border: none; font-size: 11px; color: var(--red); font-weight: 500; font-family: 'Poppins', sans-serif; cursor: pointer; padding: 0; }
 .btn-link-sm:hover { opacity: 0.75; }
 .pillar-row-blocked { background: #FFFBEB; border-radius: 8px; }
-.stat-label { font-size: 12px; color: var(--text-muted); font-weight: 500; text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 8px; }
-.stat-value { font-size: 28px; font-weight: 600; line-height: 1; }
+.stat-label { font-size: 11px; color: var(--text-muted); font-weight: 600; text-transform: uppercase; letter-spacing: 0.07em; margin-bottom: 10px; }
+.stat-value { font-size: 30px; font-weight: 700; line-height: 1; color: var(--text); }
 .stat-value.green { color: var(--green); }
 .stat-value.red   { color: var(--red);   }
 .stat-value.amber { color: var(--amber); }
+.stat-nav-hint { font-size: 11px; color: var(--text-muted); margin-top: 8px; font-weight: 500; }
 
 .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 16px; }
 .panel {
-  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+  background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
   overflow: hidden;
 }
 .panel-header {
-  padding: 14px 18px; border-bottom: 1px solid var(--border);
+  padding: 13px 18px; border-bottom: 1px solid var(--border);
   display: flex; align-items: center; justify-content: space-between;
 }
-.panel-title { font-size: 13px; font-weight: 600; }
+.panel-title { font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-muted); }
 .panel-body  { padding: 18px; }
+.dash-product-row { display: flex; align-items: center; gap: 10px; padding: 10px 18px; border-bottom: 1px solid var(--border); cursor: pointer; transition: background 0.1s; }
+.dash-product-row:last-child { border-bottom: none; }
+.dash-product-row:hover { background: var(--bg); }
+.dash-product-name { font-size: 13px; font-weight: 600; color: var(--text); flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.deadline-row { display: flex; align-items: center; gap: 10px; padding: 10px 18px; border-bottom: 1px solid var(--border); transition: background 0.1s; }
+.deadline-row:last-child { border-bottom: none; }
+.deadline-row:hover { background: var(--bg); }
+.deadline-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
+.deadline-info { flex: 1; min-width: 0; }
+.deadline-pillar { font-size: 12px; font-weight: 600; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.deadline-product { font-size: 11px; color: var(--text-muted); margin-top: 1px; }
+.deadline-remind-btn { font-size: 10px; font-weight: 500; padding: 3px 8px; background: none; border: 1px solid var(--border); border-radius: 6px; color: var(--text-muted); cursor: pointer; font-family: 'Poppins', sans-serif; display: flex; align-items: center; gap: 3px; flex-shrink: 0; transition: border-color 0.1s, color 0.1s; }
+.deadline-remind-btn:hover { border-color: var(--red); color: var(--red); }
 
 .empty-state {
   text-align: center; padding: 48px 24px;
@@ -6862,20 +6902,6 @@ textarea.input-field { resize: vertical; line-height: 1.6; }
 .pill-grey  { background: #F3F4F6; color: #6B7280; }
 
 /* Dashboard panels */
-.dash-product-row { display: flex; align-items: center; gap: 10px; padding: 9px 0; border-bottom: 1px solid var(--border); cursor: pointer; }
-.dash-product-row:last-child { border-bottom: none; }
-.dash-product-row:hover { opacity: .8; }
-.dash-product-name { flex: 1; font-size: 13px; font-weight: 500; }
-.dash-product-meta { font-size: 12px; color: var(--text-muted); white-space: nowrap; }
-.deadline-row { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--border); }
-.deadline-row:last-child { border-bottom: none; }
-.deadline-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
-.deadline-ontrack { background: var(--green); }
-.deadline-warning { background: var(--amber); }
-.deadline-overdue { background: var(--red); }
-.deadline-info { flex: 1; }
-.deadline-pillar  { font-size: 13px; font-weight: 500; }
-.deadline-product { font-size: 12px; color: var(--text-muted); }
 .btn-secondary-sm { padding: 6px 14px; background: none; border: 1px solid var(--border-mid); border-radius: var(--radius); font-size: 12px; font-weight: 500; color: var(--text); transition: background .15s; }
 .btn-secondary-sm:hover { background: var(--bg); }
 
@@ -7091,32 +7117,7 @@ textarea.input-field { resize: vertical; line-height: 1.6; }
 .cb-pillar-actions { display:flex; gap:6px; flex-shrink:0; }
 
 /* ─── INTERACTIVE STAT CARDS ─── */
-.stat-card-link {
-  cursor: pointer; transition: box-shadow .15s, transform .1s;
-  position: relative;
-}
-.stat-card-link:hover {
-  box-shadow: 0 4px 14px rgba(0,0,0,0.10);
-  transform: translateY(-1px);
-}
-.stat-nav-hint {
-  font-size: 11px; color: var(--text-muted); margin-top: 8px;
-  font-weight: 500; letter-spacing: .03em;
-}
-.stat-card-link:hover .stat-nav-hint { color: var(--red); }
-
-/* ─── DEADLINE REMINDER BUTTON ─── */
-.deadline-remind-btn {
-  font-size: 11px; font-weight: 500; padding: 4px 10px;
-  background: none; border: 1px solid var(--border-mid);
-  border-radius: 6px; color: var(--text-mid); cursor: pointer;
-  white-space: nowrap; flex-shrink: 0;
-  transition: background .12s, color .12s, border-color .12s;
-  font-family: 'Poppins', sans-serif;
-}
-.deadline-remind-btn:hover {
-  background: var(--red-light); color: var(--red); border-color: var(--red-mid);
-}
+.stat-card-link { cursor: pointer; position: relative; }
 
 /* ─── TRACKER: 3-BUTTON STATUS SYSTEM ─── */
 .status-btn-group { display:flex; gap:4px; flex-wrap:nowrap; }
