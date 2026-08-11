@@ -422,9 +422,60 @@ function showApp() {
         dept:      'Commercial Strategy',
         createdAt: Date.now(),
       });
+      // First time this user has signed in — show welcome flow
+      setTimeout(() => showWelcomeModal(), 800);
     }
   });
 }
+
+function showWelcomeModal() {
+  const firstName = (currentUser.displayName || currentUser.email).split(' ')[0];
+  const overlay = document.createElement('div');
+  overlay.id = 'welcome-overlay';
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.45);z-index:9000;display:flex;align-items:center;justify-content:center;padding:20px;';
+  overlay.innerHTML =
+    '<div style="background:#fff;border-radius:16px;padding:40px 36px;max-width:480px;width:100%;text-align:center;">' +
+      '<div style="display:flex;justify-content:center;gap:32px;margin-bottom:28px;">' +
+        // Step 1 icon — compass/track
+        '<div style="display:flex;flex-direction:column;align-items:center;gap:8px;">' +
+          '<div style="width:52px;height:52px;border-radius:12px;background:#FEF2F2;display:flex;align-items:center;justify-content:center;">' +
+            '<svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="#C0282D" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polygon points="16.24 7.76 14.12 14.12 7.76 16.24 9.88 9.88 16.24 7.76"/></svg>' +
+          '</div>' +
+          '<span style="font-size:11px;color:#6B7280;font-weight:500;">Track</span>' +
+        '</div>' +
+        // Step 2 icon — team/share
+        '<div style="display:flex;flex-direction:column;align-items:center;gap:8px;">' +
+          '<div style="width:52px;height:52px;border-radius:12px;background:#F0FDF4;display:flex;align-items:center;justify-content:center;">' +
+            '<svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="#16A34A" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87"/><path d="M16 3.13a4 4 0 010 7.75"/></svg>' +
+          '</div>' +
+          '<span style="font-size:11px;color:#6B7280;font-weight:500;">Collaborate</span>' +
+        '</div>' +
+        // Step 3 icon — launch/rocket
+        '<div style="display:flex;flex-direction:column;align-items:center;gap:8px;">' +
+          '<div style="width:52px;height:52px;border-radius:12px;background:#EFF6FF;display:flex;align-items:center;justify-content:center;">' +
+            '<svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="#2563EB" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 16.5c-1.5 1.26-2 5-2 5s3.74-.5 5-2c.71-.84.7-2.13-.09-2.91a2.18 2.18 0 00-2.91-.09z"/><path d="M12 15l-3-3a22 22 0 012-3.95A12.88 12.88 0 0122 2c0 2.72-.78 7.5-6 11a22.35 22.35 0 01-4 2z"/><line x1="9" y1="15" x2="9.01" y2="15"/></svg>' +
+          '</div>' +
+          '<span style="font-size:11px;color:#6B7280;font-weight:500;">Launch</span>' +
+        '</div>' +
+      '</div>' +
+      '<div style="font-size:22px;font-weight:700;color:#1A1A1A;margin-bottom:10px;">Welcome, ' + firstName + '.</div>' +
+      '<div style="font-size:13px;color:#6B7280;line-height:1.7;margin-bottom:28px;">' +
+        'This is the Mixta Africa NPD Hub — your team\'s central workspace for tracking every product from idea to launch.' +
+        '<br><br>You\'ll see products you own or have been shared on, your personal action queue, and team deadlines — all in one place.' +
+      '</div>' +
+      '<div style="display:flex;flex-direction:column;gap:10px;">' +
+        '<button onclick="dismissWelcome(\'dashboard\')" style="background:#C0282D;color:#fff;border:none;border-radius:8px;padding:12px 20px;font-size:13px;font-weight:600;font-family:Poppins,sans-serif;cursor:pointer;">Go to my dashboard</button>' +
+        '<button onclick="dismissWelcome(\'myactions\')" style="background:#F8F8F7;color:#1A1A1A;border:1px solid #E5E5E3;border-radius:8px;padding:12px 20px;font-size:13px;font-weight:500;font-family:Poppins,sans-serif;cursor:pointer;">See what needs my attention</button>' +
+      '</div>' +
+    '</div>';
+  document.body.appendChild(overlay);
+}
+
+window.dismissWelcome = (dest) => {
+  const el = document.getElementById('welcome-overlay');
+  if (el) el.remove();
+  loadView(dest || 'dashboard');
+};
 
 /* ─── NAVIGATION ─── */
 window.loadView = (view) => {
@@ -440,6 +491,7 @@ window.loadView = (view) => {
   // Update page title
   const titles = {
     dashboard:  'Dashboard',
+    myactions:  'My Actions',
     products:   'Products',
     calendar:   'Launch Calendar',
     tracker:    'Task Tracker',
@@ -456,6 +508,7 @@ window.loadView = (view) => {
 
   switch(view) {
     case 'dashboard':  renderDashboard(content); break;
+    case 'myactions':  renderMyActions(content);  break;
     case 'products':   renderProducts(content);  break;
     case 'calendar':   renderCalendar(content);  break;
     case 'tracker':    renderTracker(content);   break;
@@ -802,47 +855,53 @@ function generateId() {
 
 /* ── DASHBOARD ── */
 function renderDashboard(el) {
-  el.innerHTML = `
-    <div class="view-header">
-      <div>
-        <h1 class="view-title">Good ${getGreeting()}, ${(currentUser?.displayName || 'there').split(' ')[0]}.</h1>
-        <p class="view-subtitle">${currentRole === 'admin' ? 'Team overview — all products' : 'My products — Commercial Strategy'}</p>
-      </div>
-      ${currentRole !== 'admin' ? `<div class="my-products-banner"><span class="my-products-label">Your products</span><button class="btn-outline" style="font-size:11px;padding:4px 10px;" onclick="loadView('products')">View all →</button></div>` : ''}
-      ${currentRole === 'admin' ? `<button class="btn-primary" onclick="loadView('products')">+ New product</button>` : ''}
-    </div>
-    <div class="stats-row">
-      <div class="stat-card stat-card-link" onclick="loadView('products')" title="Go to Products">
-        <div class="stat-label">Active Products</div>
-        <div class="stat-value" id="stat-active">—</div>
-        <div class="stat-nav-hint" id="stat-slip" style="color:var(--red);font-weight:500;"></div>
-      </div>
-      <div class="stat-card stat-card-link" onclick="dashNavToTracker('ontrack')" title="View on-track pillars">
-        <div class="stat-label">Pillars On Track</div>
-        <div class="stat-value green" id="stat-ontrack">—</div>
-        <div class="stat-nav-hint">View tracker →</div>
-      </div>
-      <div class="stat-card stat-card-link" onclick="dashNavToTracker('overdue')" title="View overdue pillars">
-        <div class="stat-label">Overdue</div>
-        <div class="stat-value red" id="stat-overdue">—</div>
-        <div class="stat-nav-hint">View tracker →</div>
-      </div>
-      <div class="stat-card stat-card-link" onclick="loadView('calendar')" title="View launch calendar">
-        <div class="stat-label">Deadlines This Week</div>
-        <div class="stat-value amber" id="stat-week">—</div>
-        <div class="stat-nav-hint">View calendar →</div>
-      </div>
-    </div>
-    <div class="two-col">
-      <div class="panel">
-        <div class="panel-header"><span class="panel-title">Recent Products</span></div>
-        <div class="panel-body" id="dash-recent"><div class="loading-row">Loading...</div></div>
-      </div>
-      <div class="panel">
-        <div class="panel-header"><span class="panel-title">Upcoming Deadlines</span></div>
-        <div class="panel-body" id="dash-deadlines"><div class="loading-row">Loading...</div></div>
-      </div>
-    </div>`;
+  const firstName = (currentUser?.displayName || 'there').split(' ')[0];
+  el.innerHTML =
+    '<div class="view-header">' +
+      '<div>' +
+        '<h1 class="view-title">Good ' + getGreeting() + ', ' + firstName + '.</h1>' +
+        '<p class="view-subtitle">' + (currentRole === 'admin' ? 'Team overview — all products' : 'My products — Commercial Strategy') + '</p>' +
+      '</div>' +
+      (currentRole === 'admin' ? '<button class="btn-primary" onclick="loadView(\'products\')">+ New product</button>' : '') +
+    '</div>' +
+    '<div class="stats-row">' +
+      '<div class="stat-card stat-card-link dash-stat-card" onclick="loadView(\'products\')" style="border-top:3px solid var(--red);">' +
+        '<div class="stat-label">Active Products</div>' +
+        '<div class="stat-value" id="stat-active">—</div>' +
+        '<div class="stat-nav-hint" id="stat-slip" style="color:var(--red);font-weight:500;min-height:16px;"></div>' +
+      '</div>' +
+      '<div class="stat-card stat-card-link dash-stat-card" onclick="dashNavToTracker(\'ontrack\')" style="border-top:3px solid var(--green);">' +
+        '<div class="stat-label">On Track</div>' +
+        '<div class="stat-value green" id="stat-ontrack">—</div>' +
+        '<div class="stat-nav-hint">View tracker →</div>' +
+      '</div>' +
+      '<div class="stat-card stat-card-link dash-stat-card" onclick="dashNavToTracker(\'overdue\')" style="border-top:3px solid var(--red);">' +
+        '<div class="stat-label">Overdue</div>' +
+        '<div class="stat-value red" id="stat-overdue">—</div>' +
+        '<div class="stat-nav-hint">View tracker →</div>' +
+      '</div>' +
+      '<div class="stat-card stat-card-link dash-stat-card" onclick="loadView(\'calendar\')" style="border-top:3px solid var(--amber);">' +
+        '<div class="stat-label">Due This Week</div>' +
+        '<div class="stat-value amber" id="stat-week">—</div>' +
+        '<div class="stat-nav-hint">View calendar →</div>' +
+      '</div>' +
+    '</div>' +
+    '<div class="two-col">' +
+      '<div class="panel">' +
+        '<div class="panel-header">' +
+          '<span class="panel-title">Products</span>' +
+          '<button class="btn-link-sm" onclick="loadView(\'products\')">View all →</button>' +
+        '</div>' +
+        '<div id="dash-recent"><div class="loading-row" style="padding:18px;">Loading...</div></div>' +
+      '</div>' +
+      '<div class="panel">' +
+        '<div class="panel-header">' +
+          '<span class="panel-title">Upcoming Deadlines</span>' +
+          '<button class="btn-link-sm" onclick="loadView(\'calendar\')">Calendar →</button>' +
+        '</div>' +
+        '<div id="dash-deadlines"><div class="loading-row" style="padding:18px;">Loading...</div></div>' +
+      '</div>' +
+    '</div>';
   loadDashboardStats();
 }
 
@@ -922,15 +981,40 @@ function _updateDashboardUI(list) {
     // Recent products panel
     const recentEl = document.getElementById('dash-recent');
     if (list.length === 0) {
-      recentEl.innerHTML = `<div class="empty-state-sm"><span class="empty-icon" style="color:var(--text-muted);">${ICON.clipboard}</span><p>No products yet.${currentRole === 'admin' ? ' <button class="btn-primary-sm" onclick="loadView(\'products\')">Create one</button>' : ''}</p></div>`;
+      recentEl.innerHTML = '<div class="empty-state-sm">' +
+        '<span class="empty-icon" style="color:var(--text-muted);">' + ICON.clipboard + '</span>' +
+        '<p>No products yet.' + (currentRole === 'admin' ? ' <button class="btn-primary-sm" onclick="loadView(\'products\')">Create one</button>' : '') + '</p>' +
+        '</div>';
     } else {
-      const sorted = list.sort((a,b) => b.createdAt - a.createdAt).slice(0,4);
-      recentEl.innerHTML = sorted.map(p => `
-        <div class="dash-product-row" onclick="viewProduct('${p.id}')">
-          <div class="dash-product-name">${p.name}</div>
-          <div class="dash-product-meta">Launch: ${formatDate(p.launchDate)}</div>
-          <span class="status-chip status-${p.status || 'active'}">${p.status === 'complete' ? 'Complete' : 'Active'}</span>
-        </div>`).join('');
+      const sorted = list.sort((a,b) => b.createdAt - a.createdAt).slice(0, 4);
+      recentEl.innerHTML = sorted.map(p => {
+        const tasks    = getProductTasks(p);
+        const total    = tasks.length;
+        const done     = tasks.filter(t => t.status === 'complete').length;
+        const overdueT = tasks.filter(t => resolveTaskStatus(t) === 'overdue').length;
+        const pct      = total > 0 ? Math.round((done / total) * 100) : 0;
+        const healthColor = overdueT > 0 ? 'var(--red)' : pct > 50 ? 'var(--green)' : 'var(--amber)';
+        const launchD  = p.launchDate ? new Date(p.launchDate) : null;
+        const daysLeft = launchD ? Math.round((launchD - today) / 86400000) : null;
+        const launchChip = daysLeft === null ? ''
+          : daysLeft < 0   ? '<span style="font-size:10px;font-weight:600;color:var(--red);background:#FEF2F2;padding:2px 7px;border-radius:10px;">' + Math.abs(daysLeft) + 'd overdue</span>'
+          : daysLeft === 0 ? '<span style="font-size:10px;font-weight:600;color:var(--red);background:#FEF2F2;padding:2px 7px;border-radius:10px;">Today</span>'
+          : daysLeft <= 14 ? '<span style="font-size:10px;font-weight:600;color:var(--amber);background:#FFFBEB;padding:2px 7px;border-radius:10px;">' + daysLeft + 'd left</span>'
+          : '<span style="font-size:10px;color:var(--text-muted);">' + formatDate(p.launchDate) + '</span>';
+        return '<div class="dash-product-row" onclick="viewProduct(\'' + p.id + '\')">' +
+          '<div style="width:8px;height:8px;border-radius:50%;background:' + healthColor + ';flex-shrink:0;margin-top:2px;"></div>' +
+          '<div style="flex:1;min-width:0;">' +
+            '<div class="dash-product-name">' + p.name + '</div>' +
+            '<div style="margin-top:5px;display:flex;align-items:center;gap:8px;">' +
+              '<div style="flex:1;height:3px;background:#F0F0EE;border-radius:2px;overflow:hidden;">' +
+                '<div style="height:3px;width:' + pct + '%;background:' + healthColor + ';border-radius:2px;transition:width 0.3s;"></div>' +
+              '</div>' +
+              '<span style="font-size:10px;color:var(--text-muted);flex-shrink:0;">' + pct + '%</span>' +
+            '</div>' +
+          '</div>' +
+          launchChip +
+        '</div>';
+      }).join('');
     }
 
     // Deadlines panel
@@ -939,22 +1023,172 @@ function _updateDashboardUI(list) {
       dlEl.innerHTML = '<div class="empty-state-sm"><span class="empty-icon" style="color:var(--text-muted);"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg></span><p>No deadlines this week.</p></div>';
     } else {
       upcomingDeadlines.sort((a,b) => new Date(a.date) - new Date(b.date));
-      dlEl.innerHTML = upcomingDeadlines.slice(0,5).map(d => `
-        <div class="deadline-row">
-          <div class="deadline-dot deadline-${d.status}"></div>
-          <div class="deadline-info">
-            <div class="deadline-pillar">${d.pillar}</div>
-            <div class="deadline-product">${d.product} — ${formatDate(d.date)}</div>
-          </div>
-          <button class="deadline-remind-btn"
-            onclick="showReminderModal('${d.productId}','${d.pillarId}','${d.pillar}','${d.product}','${d.date}')"
-            title="Send reminder email">
-            ${ICON.bell} Remind
-          </button>
-        </div>`).join('');
+      const dlColors = { overdue: 'var(--red)', warning: 'var(--amber)', ontrack: 'var(--green)' };
+      dlEl.innerHTML = upcomingDeadlines.slice(0,5).map(d => {
+        const dotColor = dlColors[d.status] || 'var(--text-muted)';
+        const due = new Date(d.date); due.setHours(0,0,0,0);
+        const daysUntil = Math.round((due - today) / 86400000);
+        const dateLabel = daysUntil < 0 ? Math.abs(daysUntil) + 'd ago'
+                        : daysUntil === 0 ? 'Today'
+                        : daysUntil === 1 ? 'Tomorrow'
+                        : formatDate(d.date);
+        return '<div class="deadline-row">' +
+          '<div class="deadline-dot" style="background:' + dotColor + ';"></div>' +
+          '<div class="deadline-info">' +
+            '<div class="deadline-pillar">' + d.pillar + '</div>' +
+            '<div class="deadline-product">' + d.product + '</div>' +
+          '</div>' +
+          '<div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px;flex-shrink:0;">' +
+            '<span style="font-size:10px;font-weight:600;color:' + dotColor + ';white-space:nowrap;">' + dateLabel + '</span>' +
+            '<button class="deadline-remind-btn" onclick="showReminderModal(\'' + d.productId + '\',\'' + d.pillarId + '\',\'' + d.pillar + '\',\'' + d.product + '\',\'' + d.date + '\')" title="Send reminder">' +
+              ICON.bell + ' Remind' +
+            '</button>' +
+          '</div>' +
+        '</div>';
+      }).join('');
     }
   } catch(e) {
     console.warn('Dashboard UI update failed:', e);
+  }
+}
+
+/* ── MY ACTIONS VIEW ── */
+function renderMyActions(el) {
+  const firstName = (currentUser.displayName || currentUser.email).split(' ')[0];
+  el.innerHTML =
+    '<div class="view-header">' +
+      '<div>' +
+        '<h1 class="view-title">My Actions</h1>' +
+        '<p class="view-subtitle">Tasks assigned to you that need attention right now</p>' +
+      '</div>' +
+    '</div>' +
+    '<div id="my-actions-body"><div class="loading-row" style="padding:32px;">Loading your tasks...</div></div>';
+  loadMyActions();
+}
+
+async function loadMyActions() {
+  const el = document.getElementById('my-actions-body');
+  if (!el) return;
+  try {
+    const snap = await get(ref(db, 'products'));
+    const products = snap.val() || {};
+    const userKey  = sanitiseEmail(currentUser.email);
+    const today    = new Date(); today.setHours(0,0,0,0);
+    const soon     = new Date(today); soon.setDate(soon.getDate() + 7);
+
+    const myTasks = [];
+
+    Object.values(products).forEach(prod => {
+      if (prod.status === 'archived') return;
+      const isOwner  = prod.ownerId === userKey;
+      const isShared = prod.sharedWith?.[userKey];
+      if (!isOwner && !isShared && currentRole !== 'admin') return;
+
+      const tasks = getProductTasks(prod);
+      const allTasksMap = {};
+      tasks.forEach(t => { allTasksMap[t.id] = t; });
+
+      tasks.forEach(task => {
+        // Is this task assigned to the current user?
+        const ownerEmail = (task.owner || '').toLowerCase().trim();
+        const myEmail    = (currentUser.email || '').toLowerCase().trim();
+        const myName     = (currentUser.displayName || '').toLowerCase().trim();
+        const isMyTask   = ownerEmail === myEmail ||
+                           ownerEmail.includes(myEmail.split('@')[0]) ||
+                           (myName && ownerEmail.includes(myName.split(' ')[0].toLowerCase()));
+        if (!isMyTask && !isOwner) return;
+
+        if (task.status === 'complete') return;
+
+        // Determine urgency
+        const eff = resolveTaskStatus(task);
+        if (eff === 'on-track' && !task.predecessors?.length) return;
+
+        // Check if blocked by predecessor
+        const blockedBy = (task.predecessors || []).filter(pid => {
+          const pred = allTasksMap[pid];
+          return pred && pred.status !== 'complete';
+        });
+        const isBlocked = blockedBy.length > 0;
+
+        // Priority order: blocked > overdue > delayed > due-soon
+        const priority = isBlocked ? 0 : eff === 'overdue' ? 1 : eff === 'delayed' ? 2 : eff === 'due-soon' ? 3 : 4;
+        if (priority === 4) return;
+
+        myTasks.push({
+          task, prod, eff, isBlocked, blockedBy,
+          blockedNames: blockedBy.map(pid => allTasksMap[pid]?.title || 'Unknown task'),
+          priority,
+        });
+      });
+    });
+
+    if (myTasks.length === 0) {
+      el.innerHTML =
+        '<div class="empty-state" style="padding:64px 24px;">' +
+          '<div style="margin-bottom:16px;">' +
+            '<svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="#16A34A" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">' +
+              '<path d="M22 11.08V12a10 10 0 11-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/>' +
+            '</svg>' +
+          '</div>' +
+          '<h3 style="font-size:15px;font-weight:600;margin-bottom:8px;color:#1A1A1A;">You\'re all clear</h3>' +
+          '<p style="font-size:13px;color:#6B7280;">No overdue, delayed, or blocked tasks assigned to you right now.</p>' +
+        '</div>';
+      return;
+    }
+
+    // Sort by priority
+    myTasks.sort((a, b) => a.priority - b.priority);
+
+    const sectionLabels = { 0: 'Blocked', 1: 'Overdue', 2: 'Delayed', 3: 'Due this week' };
+    const sectionColors = { 0: '#D97706', 1: '#C0282D', 2: '#C0282D', 3: '#D97706' };
+    const sectionBg     = { 0: '#FFFBEB', 1: '#FEF2F2', 2: '#FEF2F2', 3: '#FFFBEB' };
+
+    let lastPriority = -1;
+    let html = '<div style="display:flex;flex-direction:column;gap:8px;">';
+
+    myTasks.forEach(({ task, prod, eff, isBlocked, blockedNames, priority }) => {
+      if (priority !== lastPriority) {
+        if (lastPriority !== -1) html += '</div><div style="height:8px;"></div>';
+        const lbl = sectionLabels[priority];
+        const clr = sectionColors[priority];
+        html += '<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.08em;color:' + clr + ';padding:0 2px;margin-bottom:4px;">' + lbl + '</div>';
+        lastPriority = priority;
+      }
+
+      const daysOverdue = task.deadline
+        ? Math.round((today - new Date(task.deadline)) / 86400000)
+        : null;
+      const deadlineStr = task.deadline ? formatDate(task.deadline) : 'No date';
+      const color  = sectionColors[priority];
+      const bgCol  = sectionBg[priority];
+
+      html +=
+        '<div style="background:#fff;border:1px solid #E5E5E3;border-left:3px solid ' + color + ';border-radius:10px;padding:14px 16px;display:flex;align-items:flex-start;gap:14px;cursor:pointer;" onclick="loadView(\'tracker\')">' +
+          '<div style="flex:1;min-width:0;">' +
+            '<div style="font-size:13px;font-weight:600;color:#1A1A1A;margin-bottom:3px;">' + (task.title || 'Untitled task') + '</div>' +
+            '<div style="font-size:11px;color:#6B7280;margin-bottom:6px;">' + prod.name + '</div>' +
+            (isBlocked
+              ? '<div style="font-size:11px;color:#D97706;display:flex;align-items:center;gap:5px;">' +
+                  '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 007.54.54l3-3a5 5 0 00-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 00-7.54-.54l-3 3a5 5 0 007.07 7.07l1.71-1.71"/></svg>' +
+                  'Blocked by: ' + blockedNames.join(', ') +
+                '</div>'
+              : '') +
+          '</div>' +
+          '<div style="text-align:right;flex-shrink:0;">' +
+            '<div style="font-size:11px;font-weight:600;color:' + color + ';background:' + bgCol + ';padding:3px 8px;border-radius:20px;margin-bottom:4px;white-space:nowrap;">' +
+              (daysOverdue !== null && daysOverdue > 0 ? daysOverdue + 'd overdue' : deadlineStr) +
+            '</div>' +
+            '<div style="font-size:10px;color:#9CA3AF;">' + (task.owner || 'Unassigned') + '</div>' +
+          '</div>' +
+        '</div>';
+    });
+
+    html += '</div>';
+    el.innerHTML = html;
+  } catch(e) {
+    el.innerHTML = '<div class="loading-row muted" style="padding:24px;">Could not load your tasks. Try refreshing.</div>';
+    console.warn('loadMyActions error:', e);
   }
 }
 
@@ -5865,6 +6099,7 @@ window.__npd_init({
   showProductActivity:     window.showProductActivity,
   showQuickUpdate:         window.showQuickUpdate,
   quickSetStatus:          window.quickSetStatus,
+  dismissWelcome:          window.dismissWelcome,
 });
 
 </script>
@@ -6032,6 +6267,10 @@ a { color: inherit; text-decoration: none; }
   background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
   padding: 18px 20px;
 }
+.dash-stat-card { border-radius: 12px; transition: box-shadow 0.15s; }
+.dash-stat-card:hover { box-shadow: 0 2px 12px rgba(0,0,0,0.07); }
+.btn-link-sm { background: none; border: none; font-size: 11px; color: var(--red); font-weight: 500; font-family: 'Poppins', sans-serif; cursor: pointer; padding: 0; }
+.btn-link-sm:hover { opacity: 0.75; }
 .stat-label { font-size: 12px; color: var(--text-muted); font-weight: 500; text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 8px; }
 .stat-value { font-size: 28px; font-weight: 600; line-height: 1; }
 .stat-value.green { color: var(--green); }
@@ -6837,6 +7076,10 @@ textarea.input-field { resize: vertical; line-height: 1.6; }
       <button class="nav-item active" data-view="dashboard" onclick="loadView('dashboard')">
         <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
         <span>Dashboard</span>
+      </button>
+      <button class="nav-item" data-view="myactions" onclick="loadView('myactions')" id="nav-myactions">
+        <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 3.6-7 8-7s8 3 8 7"/><polyline points="16 11 17.5 12.5 21 9"/></svg>
+        <span>My Actions</span>
       </button>
       <button class="nav-item" data-view="products" onclick="loadView('products')">
         <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21 16V8a2 2 0 00-1-1.73l-7-4a2 2 0 00-2 0l-7 4A2 2 0 003 8v8a2 2 0 001 1.73l7 4a2 2 0 002 0l7-4A2 2 0 0021 16z"/></svg>
