@@ -495,6 +495,7 @@ window.loadView = (view) => {
     products:   'Products',
     calendar:   'Launch Calendar',
     tracker:    'Task Tracker',
+    workload:   'Department Workload',
     documents:  'Document Centre',
     reports:    'Progress Reports',
     settings:   'Settings'
@@ -512,6 +513,7 @@ window.loadView = (view) => {
     case 'products':   renderProducts(content);  break;
     case 'calendar':   renderCalendar(content);  break;
     case 'tracker':    renderTracker(content);   break;
+    case 'workload':   renderWorkload(content);  break;
     case 'documents':  renderDocuments(content); break;
     case 'reports':    renderReports(content);   break;
     case 'settings':    renderSettings(content);   break;
@@ -958,21 +960,30 @@ function _updateDashboardUI(list) {
     });
 
     document.getElementById('stat-active').textContent  = list.length;
-    // Portfolio slip summary
+    // Portfolio slip + at-risk summary
     const slipped = list.filter(p => p.baselineLaunchDate && p.baselineLaunchDate !== p.launchDate &&
       new Date(p.launchDate) > new Date(p.baselineLaunchDate));
+    const atRiskCount = list.filter(p => {
+      const tasks    = getProductTasks(p);
+      const issues   = tasks.filter(t => t.status === 'delayed' || (t.deadline && getPillarStatus(t.deadline) === 'overdue')).length;
+      const launch   = p.launchDate ? new Date(p.launchDate) : null;
+      if (launch) launch.setHours(0,0,0,0);
+      const days     = launch ? Math.round((launch - today) / 86400000) : null;
+      return issues >= 2 && days !== null && days >= 0 && days <= 21;
+    }).length;
     const slipEl  = document.getElementById('stat-slip');
     if (slipEl) {
+      const parts = [];
       if (slipped.length > 0) {
         const avgSlip = Math.round(slipped.reduce((sum, p) => {
           const bl  = new Date(p.baselineLaunchDate); bl.setHours(0,0,0,0);
           const cur = new Date(p.launchDate);         cur.setHours(0,0,0,0);
           return sum + Math.round((cur - bl) / 86400000);
         }, 0) / slipped.length);
-        slipEl.textContent = `${slipped.length} slipped · avg ${avgSlip}d`;
-      } else {
-        slipEl.textContent = '';
+        parts.push(slipped.length + ' slipped · avg ' + avgSlip + 'd');
       }
+      if (atRiskCount > 0) parts.push(atRiskCount + ' at risk');
+      slipEl.textContent = parts.join(' · ');
     }
     document.getElementById('stat-ontrack').textContent = ontrack || '0';
     document.getElementById('stat-overdue').textContent = overdue || '0';
@@ -1049,6 +1060,155 @@ function _updateDashboardUI(list) {
     }
   } catch(e) {
     console.warn('Dashboard UI update failed:', e);
+  }
+}
+
+/* ── DEPARTMENT WORKLOAD VIEW ── */
+function renderWorkload(el) {
+  el.innerHTML =
+    '<div class="view-header">' +
+      '<div>' +
+        '<h1 class="view-title">Department Workload</h1>' +
+        '<p class="view-subtitle">Task load across all departments — next 14 days</p>' +
+      '</div>' +
+    '</div>' +
+    '<div id="workload-body"><div class="loading-row" style="padding:32px;">Loading...</div></div>';
+  loadWorkload();
+}
+
+async function loadWorkload() {
+  const el = document.getElementById('workload-body');
+  if (!el) return;
+  try {
+    const snap     = await get(ref(db, 'products'));
+    const products = Object.values(snap.val() || {}).filter(p => p.status !== 'archived');
+    const today    = new Date(); today.setHours(0,0,0,0);
+    const horizon  = new Date(today); horizon.setDate(horizon.getDate() + 14);
+
+    // Build dept buckets: { deptName: { total, overdue, dueSoon, delayed, blocked, tasks[] } }
+    const depts = {};
+
+    const addToDept = (deptName, taskEntry) => {
+      const key = deptName || 'Unassigned';
+      if (!depts[key]) depts[key] = { total: 0, overdue: 0, dueSoon: 0, delayed: 0, blocked: 0, tasks: [] };
+      depts[key].total++;
+      depts[key].tasks.push(taskEntry);
+      if (taskEntry.eff === 'overdue')   depts[key].overdue++;
+      if (taskEntry.eff === 'due-soon')  depts[key].dueSoon++;
+      if (taskEntry.eff === 'delayed')   depts[key].delayed++;
+      if (taskEntry.isBlocked)           depts[key].blocked++;
+    };
+
+    products.forEach(prod => {
+      const tasks    = getProductTasks(prod);
+      const taskMap  = {};
+      tasks.forEach(t => { taskMap[t.id] = t; });
+
+      tasks.forEach(task => {
+        if (task.status === 'complete') return;
+        const eff      = resolveTaskStatus(task);
+        const isBlocked = (task.predecessors || []).some(pid => {
+          const pred = taskMap[pid];
+          return pred && pred.status !== 'complete';
+        });
+        // Only include tasks due within horizon or already overdue/delayed/blocked
+        const dueDate = task.deadline ? new Date(task.deadline) : null;
+        if (dueDate) dueDate.setHours(0,0,0,0);
+        const inWindow = dueDate && dueDate <= horizon;
+        const needsAttention = eff === 'overdue' || eff === 'delayed' || isBlocked;
+        if (!inWindow && !needsAttention) return;
+
+        const entry = { task, prod, eff, isBlocked };
+        // Map by task.owner (dept name stored there)
+        addToDept(task.owner || 'Unassigned', entry);
+      });
+    });
+
+    if (Object.keys(depts).length === 0) {
+      el.innerHTML = '<div class="empty-state" style="padding:64px 24px;text-align:center;">' +
+        '<p style="font-size:13px;color:#6B7280;">No active tasks due in the next 14 days.</p></div>';
+      return;
+    }
+
+    // Sort depts by total desc
+    const sorted = Object.entries(depts).sort((a, b) => b[1].total - a[1].total);
+    const maxTotal = sorted[0][1].total || 1;
+
+    let html = '<div style="display:flex;flex-direction:column;gap:12px;">';
+
+    sorted.forEach(([deptName, data]) => {
+      const pctOverdue  = Math.round((data.overdue  / data.total) * 100);
+      const pctDueSoon  = Math.round((data.dueSoon  / data.total) * 100);
+      const pctDelayed  = Math.round((data.delayed  / data.total) * 100);
+      const pctBlocked  = Math.round((data.blocked  / data.total) * 100);
+      const pctOnTrack  = Math.max(0, 100 - pctOverdue - pctDueSoon - pctDelayed);
+      const barWidth    = Math.round((data.total / maxTotal) * 100);
+      const heatColor   = data.overdue > 0 ? '#C0282D' : data.delayed > 0 ? '#C0282D' : data.dueSoon > 0 ? '#D97706' : '#16A34A';
+
+      // Task rows (max 4, sorted by urgency)
+      const urgencyOrder = { overdue: 0, delayed: 1, blocked: 2, 'due-soon': 3, 'on-track': 4 };
+      const taskRows = data.tasks
+        .sort((a, b) => (urgencyOrder[a.isBlocked ? 'blocked' : a.eff] || 4) - (urgencyOrder[b.isBlocked ? 'blocked' : b.eff] || 4))
+        .slice(0, 4)
+        .map(({ task, prod, eff, isBlocked }) => {
+          const color = isBlocked ? '#D97706' : eff === 'overdue' || eff === 'delayed' ? '#C0282D' : eff === 'due-soon' ? '#D97706' : '#16A34A';
+          const label = isBlocked ? 'Blocked' : eff === 'overdue' ? 'Overdue' : eff === 'delayed' ? 'Delayed' : eff === 'due-soon' ? 'Due soon' : 'On track';
+          return '<div style="display:flex;align-items:center;gap:10px;padding:7px 0;border-bottom:1px solid #F3F3F2;">' +
+            '<div style="flex:1;min-width:0;">' +
+              '<div style="font-size:11px;font-weight:500;color:#1A1A1A;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + (task.title || 'Untitled') + '</div>' +
+              '<div style="font-size:10px;color:#9CA3AF;">' + prod.name + (task.deadline ? ' · ' + formatDate(task.deadline) : '') + '</div>' +
+            '</div>' +
+            '<span style="font-size:10px;font-weight:600;color:' + color + ';background:' + color + '15;padding:2px 7px;border-radius:10px;flex-shrink:0;">' + label + '</span>' +
+          '</div>';
+        }).join('');
+
+      const moreCount = data.tasks.length - 4;
+
+      html +=
+        '<div style="background:#fff;border:1px solid #E5E5E3;border-radius:12px;overflow:hidden;">' +
+          // Header
+          '<div style="padding:14px 18px 12px;display:flex;align-items:center;gap:14px;">' +
+            '<div style="flex:1;min-width:0;">' +
+              '<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">' +
+                '<span style="font-size:13px;font-weight:700;color:#1A1A1A;">' + deptName + '</span>' +
+                '<span style="font-size:10px;font-weight:600;color:' + heatColor + ';background:' + heatColor + '15;padding:2px 8px;border-radius:10px;">' + data.total + ' task' + (data.total !== 1 ? 's' : '') + '</span>' +
+                (data.overdue  > 0 ? '<span style="font-size:10px;color:#C0282D;">' + data.overdue + ' overdue</span>'  : '') +
+                (data.delayed  > 0 ? '<span style="font-size:10px;color:#C0282D;">' + data.delayed + ' delayed</span>'  : '') +
+                (data.blocked  > 0 ? '<span style="font-size:10px;color:#D97706;">' + data.blocked + ' blocked</span>'  : '') +
+              '</div>' +
+              // Stacked bar
+              '<div style="height:6px;border-radius:3px;background:#F0F0EE;overflow:hidden;width:' + barWidth + '%;">' +
+                '<div style="height:6px;display:flex;">' +
+                  (pctOverdue > 0 ? '<div style="flex:' + pctOverdue + ';background:#C0282D;"></div>' : '') +
+                  (pctDelayed > 0 ? '<div style="flex:' + pctDelayed + ';background:#E05C5C;"></div>' : '') +
+                  (pctDueSoon > 0 ? '<div style="flex:' + pctDueSoon + ';background:#D97706;"></div>' : '') +
+                  (pctOnTrack > 0 ? '<div style="flex:' + pctOnTrack + ';background:#16A34A;"></div>' : '') +
+                '</div>' +
+              '</div>' +
+            '</div>' +
+          '</div>' +
+          // Task list
+          (taskRows
+            ? '<div style="padding:0 18px 4px;">' + taskRows +
+                (moreCount > 0 ? '<div style="font-size:11px;color:#9CA3AF;padding:8px 0;">+' + moreCount + ' more task' + (moreCount !== 1 ? 's' : '') + '</div>' : '') +
+              '</div>'
+            : '') +
+        '</div>';
+    });
+
+    html += '</div>';
+
+    // Legend
+    html = '<div style="display:flex;gap:16px;margin-bottom:16px;flex-wrap:wrap;">' +
+      '<div style="display:flex;align-items:center;gap:6px;font-size:11px;color:#6B7280;"><span style="width:10px;height:10px;border-radius:2px;background:#C0282D;display:inline-block;"></span>Overdue / Delayed</div>' +
+      '<div style="display:flex;align-items:center;gap:6px;font-size:11px;color:#6B7280;"><span style="width:10px;height:10px;border-radius:2px;background:#D97706;display:inline-block;"></span>Due soon / Blocked</div>' +
+      '<div style="display:flex;align-items:center;gap:6px;font-size:11px;color:#6B7280;"><span style="width:10px;height:10px;border-radius:2px;background:#16A34A;display:inline-block;"></span>On track</div>' +
+    '</div>' + html;
+
+    el.innerHTML = html;
+  } catch(e) {
+    el.innerHTML = '<div class="loading-row muted" style="padding:24px;">Could not load workload data.</div>';
+    console.warn('loadWorkload error:', e);
   }
 }
 
@@ -1282,11 +1442,23 @@ function renderProductCard(p) {
   const launch = p.launchDate ? new Date(p.launchDate) : null;
   if (launch) launch.setHours(0,0,0,0);
   const daysToLaunch = launch ? Math.round((launch - today2) / 86400000) : null;
+
+  // At-risk: 2+ delayed/overdue tasks AND launch within 21 days
+  const atRisk = daysToLaunch !== null && daysToLaunch >= 0 && daysToLaunch <= 21
+    && (delayed + overduePl) >= 2;
+
   const launchBadge = daysToLaunch === null ? `<span class="pcf-launch-badge pcf-launch-grey">${formatDate(p.launchDate)}</span>`
     : daysToLaunch < 0   ? `<span class="pcf-launch-badge pcf-launch-red">${Math.abs(daysToLaunch)}d overdue</span>`
     : daysToLaunch === 0 ? `<span class="pcf-launch-badge pcf-launch-red">Due today</span>`
     : daysToLaunch <= 14 ? `<span class="pcf-launch-badge pcf-launch-amber">${daysToLaunch}d left</span>`
     : `<span class="pcf-launch-badge pcf-launch-grey">${formatDate(p.launchDate)}</span>`;
+
+  const atRiskBadge = atRisk
+    ? '<span style="font-size:10px;font-weight:700;color:#D97706;background:#FFFBEB;border:1px solid #FDE68A;padding:2px 8px;border-radius:10px;letter-spacing:.03em;">' +
+        '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:middle;margin-right:3px;"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>' +
+        'At risk' +
+      '</span>'
+    : '';
 
   const healthCls = overduePl > 0 ? 'pcf-health-red'
                   : delayed > 0   ? 'pcf-health-amber'
@@ -1302,7 +1474,7 @@ function renderProductCard(p) {
         <div class="pcf-header-left">
           <div class="pcf-health-dot ${healthCls}" title="${healthTip}"></div>
           <div>
-            <div class="pcf-name-row"><span class="pcf-name">${p.name}</span>${slipHtml}</div>
+            <div class="pcf-name-row"><span class="pcf-name">${p.name}</span>${slipHtml}${atRiskBadge}</div>
             ${p.description ? `<div class="pcf-desc">${p.description.length > 110 ? p.description.slice(0,110)+'…' : p.description}</div>` : ''}
           </div>
         </div>
@@ -1956,9 +2128,15 @@ window.switchProductTab = (productId, tab, el) => {
   document.querySelectorAll('.pdt-tab').forEach(t => t.classList.remove('active'));
   if (el) el.classList.add('active');
   const body = document.getElementById('product-detail-body');
-  if (body) body.innerHTML = tab === 'description'
-    ? buildDescriptionTab(p)
-    : buildPillarDetail(p);
+  if (!body) return;
+  if (tab === 'description') {
+    body.innerHTML = buildDescriptionTab(p);
+  } else if (tab === 'comments') {
+    body.innerHTML = buildCommentsTab(p);
+    loadProductComments(productId);
+  } else {
+    body.innerHTML = buildPillarDetail(p);
+  }
 };
 
 function buildProductDetail(p, tab) {
@@ -1983,6 +2161,7 @@ function buildProductDetail(p, tab) {
     '<div class="pdt-tabs">' +
       '<button class="pdt-tab active" onclick="switchProductTab(\'' + p.id + '\',\'tasks\',this)">Tasks</button>' +
       '<button class="pdt-tab" onclick="switchProductTab(\'' + p.id + '\',\'description\',this)">Description</button>' +
+      '<button class="pdt-tab" onclick="switchProductTab(\'' + p.id + '\',\'comments\',this)">Comments</button>' +
     '</div>' +
     '</div>';
 
@@ -2089,6 +2268,74 @@ function buildPillarDetail(p) {
   return '<div class="pillar-detail-list">' + rows + '</div>' +
     '<div class="form-actions">' + editBtn + '<button class="btn-outline" onclick="closeProductModal()">Close</button></div>';
 }
+
+/* ══ COMMENTS TAB ══════════════════════════════════════════ */
+function buildCommentsTab(p) {
+  return '<div id="comments-list" style="min-height:80px;padding:4px 0 12px;">' +
+      '<div class="loading-row" style="padding:16px 0;font-size:12px;">Loading comments...</div>' +
+    '</div>' +
+    '<div style="border-top:1px solid #F0F0EE;padding-top:14px;">' +
+      '<textarea id="comment-input" placeholder="Add a comment — context, decisions, blockers..." ' +
+        'style="width:100%;border:1px solid #E5E5E3;border-radius:8px;padding:10px 12px;font-size:12px;font-family:Poppins,sans-serif;resize:none;outline:none;color:#1A1A1A;line-height:1.6;" rows="3"></textarea>' +
+      '<div style="display:flex;justify-content:flex-end;margin-top:8px;">' +
+        '<button onclick="postProductComment(\'' + p.id + '\')" ' +
+          'style="background:#C0282D;color:#fff;border:none;border-radius:7px;padding:8px 18px;font-size:12px;font-weight:600;font-family:Poppins,sans-serif;cursor:pointer;">Post</button>' +
+      '</div>' +
+    '</div>';
+}
+
+async function loadProductComments(productId) {
+  const el = document.getElementById('comments-list');
+  if (!el) return;
+  try {
+    const snap = await get(ref(db, 'products/' + productId + '/comments'));
+    if (!snap.exists()) {
+      el.innerHTML = '<div style="text-align:center;padding:24px 0;font-size:12px;color:#9CA3AF;">No comments yet. Be the first to add context.</div>';
+      return;
+    }
+    const comments = Object.values(snap.val()).sort((a, b) => a.createdAt - b.createdAt);
+    el.innerHTML = comments.map(c => {
+      const initials = (c.userName || c.userEmail || '?')[0].toUpperCase();
+      const name     = c.userName || c.userEmail.split('@')[0];
+      const time     = c.createdAt ? new Date(c.createdAt).toLocaleDateString('en-GB', { day:'numeric', month:'short', hour:'2-digit', minute:'2-digit' }) : '';
+      return '<div style="display:flex;gap:10px;padding:10px 0;border-bottom:1px solid #F3F3F2;">' +
+        '<div style="width:28px;height:28px;border-radius:50%;background:#FEF2F2;color:#C0282D;font-size:11px;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0;">' + initials + '</div>' +
+        '<div style="flex:1;min-width:0;">' +
+          '<div style="display:flex;align-items:baseline;gap:8px;margin-bottom:3px;">' +
+            '<span style="font-size:12px;font-weight:600;color:#1A1A1A;">' + name + '</span>' +
+            '<span style="font-size:10px;color:#9CA3AF;">' + time + '</span>' +
+          '</div>' +
+          '<div style="font-size:12px;color:#374151;line-height:1.6;word-break:break-word;">' + (c.text || '') + '</div>' +
+        '</div>' +
+      '</div>';
+    }).join('');
+  } catch(e) {
+    el.innerHTML = '<div style="font-size:12px;color:#9CA3AF;padding:12px 0;">Could not load comments.</div>';
+  }
+}
+
+window.postProductComment = async (productId) => {
+  const input = document.getElementById('comment-input');
+  if (!input) return;
+  const text = (input.value || '').trim();
+  if (!text) { showToast('Comment cannot be empty', 'error'); return; }
+
+  const commentId = 'c_' + Date.now();
+  const comment   = {
+    id:        commentId,
+    text,
+    userEmail: currentUser.email,
+    userName:  currentUser.displayName || currentUser.email.split('@')[0],
+    createdAt: Date.now(),
+  };
+  try {
+    await set(ref(db, 'products/' + productId + '/comments/' + commentId), comment);
+    input.value = '';
+    loadProductComments(productId);
+  } catch(e) {
+    showToast('Could not post comment', 'error');
+  }
+};
 
 /* ══ CALENDAR VIEW ══════════════════════════════════════════ */
 let calSelectedProduct = 'all';
@@ -6192,6 +6439,7 @@ window.__npd_init({
   dismissWelcome:          window.dismissWelcome,
   generateGCCOLink:        window.generateGCCOLink,
   copyGCCOLink:            window.copyGCCOLink,
+  postProductComment:      window.postProductComment,
 });
 
 </script>
@@ -7187,6 +7435,10 @@ textarea.input-field { resize: vertical; line-height: 1.6; }
       <button class="nav-item" data-view="tracker" onclick="loadView('tracker')">
         <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/></svg>
         <span>Task Tracker</span>
+      </button>
+      <button class="nav-item" data-view="workload" onclick="loadView('workload')">
+        <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="2" y="3" width="6" height="18" rx="1"/><rect x="9" y="8" width="6" height="13" rx="1"/><rect x="16" y="13" width="6" height="8" rx="1"/></svg>
+        <span>Workload</span>
       </button>
       <button class="nav-item" data-view="documents" onclick="loadView('documents')">
         <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
