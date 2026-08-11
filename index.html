@@ -1779,32 +1779,45 @@ function buildDescriptionTab(p) {
 
 
 function buildPillarDetail(p) {
-  const rows = PILLARS.map((pl, i) => {
-    const pd  = p.pillars?.[pl.id] || {};
-    const st  = pd.taskStatus || 'not-started';
-    const dst = pd.deadline ? getPillarStatus(pd.deadline) : 'no-date';
-    const deadlineChip = dst === 'no-date'
+  const tasks = getProductTasks(p);
+  if (!tasks.length) {
+    return '<div class="pillar-detail-list"><div class="muted" style="padding:24px 0;text-align:center;font-size:13px;">No tasks set up for this product yet.</div></div>' +
+      '<div class="form-actions">' +
+      (currentRole === 'admin' ? '<button class="btn-primary" onclick="editProduct(\'' + p.id + '\')">Edit dates</button>' : '') +
+      '<button class="btn-outline" onclick="closeProductModal()">Close</button></div>';
+  }
+  const rows = tasks.map(function(task, i) {
+    const meta = statusMeta(task);
+    const deadlineChip = !task.deadline
       ? '<span class="pill pill-grey">No date</span>'
-      : dst === 'overdue'
-        ? `<span class="pill pill-red">Overdue — ${formatDate(pd.deadline)}</span>`
-        : dst === 'warning'
-          ? `<span class="pill pill-amber">Due soon — ${formatDate(pd.deadline)}</span>`
-          : `<span class="pill pill-green">${formatDate(pd.deadline)}</span>`;
-    return `
-      <div class="pillar-detail-row">
-        <div class="pillar-detail-num">${i+1}</div>
-        <div class="pillar-detail-body">
-          <div class="pillar-detail-name">${pl.name}</div>
-          <div class="pillar-detail-meta"><span class="pillar-owner">${pl.owner}</span>${deadlineChip}</div>
-        </div>
-        <span class="task-status task-${st}">${statusLabel(st)}</span>
-      </div>`;
+      : meta.cls === 'overdue'
+        ? '<span class="pill pill-red">Overdue — ' + formatDate(task.deadline) + '</span>'
+        : meta.cls === 'due-soon'
+          ? '<span class="pill pill-amber">Due soon — ' + formatDate(task.deadline) + '</span>'
+          : meta.cls === 'complete'
+            ? '<span class="pill pill-blue">' + formatDate(task.deadline) + '</span>'
+            : '<span class="pill pill-green">' + formatDate(task.deadline) + '</span>';
+    const owner = task.owner || task.dept || '';
+    return '<div class="pillar-detail-row">' +
+      '<div class="pillar-detail-num">' + (i + 1) + '</div>' +
+      '<div class="pillar-detail-body">' +
+        '<div class="pillar-detail-name">' + (task.title || task.name || 'Untitled task') + '</div>' +
+        '<div class="pillar-detail-meta">' +
+          (owner ? '<span class="pillar-owner">' + owner + '</span>' : '') +
+          deadlineChip +
+        '</div>' +
+      '</div>' +
+      '<div class="task-status-badge" style="color:' + meta.color + ';border-color:' + meta.color + '20;background:' + meta.color + '10;cursor:pointer;" onclick="openStatusDropdown(\'' + p.id + '\',\'' + task.id + '\',this)">' +
+        meta.label +
+        '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="margin-left:4px;"><path d="M6 9l6 6 6-6"/></svg>' +
+      '</div>' +
+    '</div>';
   }).join('');
   const editBtn = currentRole === 'admin'
-    ? `<button class="btn-primary" onclick="editProduct('${p.id}')">Edit dates</button>`
+    ? '<button class="btn-primary" onclick="editProduct(\'' + p.id + '\')">Edit dates</button>'
     : '';
-  return `<div class="pillar-detail-list">${rows}</div>
-    <div class="form-actions">${editBtn}<button class="btn-outline" onclick="closeProductModal()">Close</button></div>`;
+  return '<div class="pillar-detail-list">' + rows + '</div>' +
+    '<div class="form-actions">' + editBtn + '<button class="btn-outline" onclick="closeProductModal()">Close</button></div>';
 }
 
 /* ══ CALENDAR VIEW ══════════════════════════════════════════ */
