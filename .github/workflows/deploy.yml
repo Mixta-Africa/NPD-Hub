@@ -1,3 +1,14 @@
+# ─────────────────────────────────────────────────────────────
+# NPD Hub — GitHub Actions Deploy
+#
+# PRIMARY host:  Cloudflare Pages (npd-hub.pages.dev)
+#                Cloudflare pulls from this repo and runs build.sh
+#                with secrets set in the Cloudflare dashboard.
+#
+# FALLBACK host: GitHub Pages (mixta-africa.github.io/NPD-Hub/)
+#                This workflow keeps GitHub Pages in sync.
+# ─────────────────────────────────────────────────────────────
+
 name: Deploy NPD Hub
 
 on:
@@ -6,7 +17,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
   pages: write
   id-token: write
 
@@ -15,8 +26,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # ── Job 1: Deploy to GitHub Pages (fallback) ──────────────────────────────
-  deploy-pages:
+  deploy:
     runs-on: ubuntu-latest
     environment:
       name: github-pages
@@ -56,39 +66,3 @@ jobs:
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
-
-  # ── Job 2: Push injected build to netlify-deploy branch (PRIMARY) ─────────
-  deploy-netlify-branch:
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Inject secrets into index.html
-        run: |
-          sed -i "s|__FIREBASE_API_KEY__|${{ secrets.FIREBASE_API_KEY }}|g"                       index.html
-          sed -i "s|__FIREBASE_AUTH_DOMAIN__|${{ secrets.FIREBASE_AUTH_DOMAIN }}|g"               index.html
-          sed -i "s|__FIREBASE_DATABASE_URL__|${{ secrets.FIREBASE_DATABASE_URL }}|g"             index.html
-          sed -i "s|__FIREBASE_PROJECT_ID__|${{ secrets.FIREBASE_PROJECT_ID }}|g"                 index.html
-          sed -i "s|__FIREBASE_STORAGE_BUCKET__|${{ secrets.FIREBASE_STORAGE_BUCKET }}|g"         index.html
-          sed -i "s|__FIREBASE_MESSAGING_SENDER_ID__|${{ secrets.FIREBASE_MESSAGING_SENDER_ID }}|g" index.html
-          sed -i "s|__FIREBASE_APP_ID__|${{ secrets.FIREBASE_APP_ID }}|g"                         index.html
-          sed -i "s|__GAS_ENDPOINT__|${{ secrets.GAS_ENDPOINT }}|g"                               index.html
-          sed -i "s|__SUPER_ADMIN_HASH__|${{ secrets.SUPER_ADMIN_HASH }}|g"                       index.html
-          sed -i "s|__GROQ_API_KEY__|${{ secrets.GROQ_API_KEY }}|g"                               index.html
-          if grep -q "__FIREBASE_\|__GAS_\|__GROQ_\|__SUPER_" index.html; then
-            echo "ERROR: Some placeholders were not replaced — check GitHub Secrets"
-            exit 1
-          fi
-          echo "All secrets injected successfully"
-
-      - name: Push built files to netlify-deploy branch
-        run: |
-          git config user.name  "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git checkout --orphan netlify-deploy-tmp
-          git add index.html manifest.json README.md
-          git commit -m "chore: netlify deploy from main@${{ github.sha }}"
-          git push origin netlify-deploy-tmp:netlify-deploy --force
-          echo "Pushed to netlify-deploy branch"
