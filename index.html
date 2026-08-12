@@ -415,21 +415,24 @@ function showApp() {
   const userKey = sanitiseEmail(currentUser.email);
   get(ref(db, `users/${userKey}`)).then(snap => {
     if (!snap.exists()) {
+      const detectedDept = detectDeptFromEmail(currentUser.email);
       set(ref(db, `users/${userKey}`), {
         name:      currentUser.displayName || currentUser.email.split('@')[0],
         email:     currentUser.email,
         role:      currentRole,
-        dept:      'Commercial Strategy',
+        dept:      detectedDept,
         createdAt: Date.now(),
       });
-      // First time this user has signed in — show welcome flow
-      setTimeout(() => showWelcomeModal(), 800);
+      setTimeout(() => showWelcomeModal(detectedDept), 800);
     }
   });
 }
 
-function showWelcomeModal() {
+function showWelcomeModal(detectedDept) {
   const firstName = (currentUser.displayName || currentUser.email).split(' ')[0];
+  const deptLine  = detectedDept && detectedDept !== 'Commercial Strategy'
+    ? '<br><br>We\'ve detected you\'re in <strong>' + detectedDept + '</strong> — tasks assigned to your department will appear in your action queue.'
+    : '';
   const overlay = document.createElement('div');
   overlay.id = 'welcome-overlay';
   overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.45);z-index:9000;display:flex;align-items:center;justify-content:center;padding:20px;';
@@ -462,6 +465,7 @@ function showWelcomeModal() {
       '<div style="font-size:13px;color:#6B7280;line-height:1.7;margin-bottom:28px;">' +
         'This is the Mixta Africa NPD Hub — your team\'s central workspace for tracking every product from idea to launch.' +
         '<br><br>You\'ll see products you own or have been shared on, your personal action queue, and team deadlines — all in one place.' +
+        deptLine +
       '</div>' +
       '<div style="display:flex;flex-direction:column;gap:10px;">' +
         '<button onclick="dismissWelcome(\'dashboard\')" style="background:#C0282D;color:#fff;border:none;border-radius:8px;padding:12px 20px;font-size:13px;font-weight:600;font-family:Poppins,sans-serif;cursor:pointer;">Go to my dashboard</button>' +
@@ -547,32 +551,98 @@ let PILLARS = [
 /* ══ STAKEHOLDER LIST (from Dashboard_Mailing_List_NPD.xlsx) ══ */
 // STAKEHOLDERS — loaded from Firebase /config/stakeholders at runtime
 let STAKEHOLDERS = [
-  { id: 's1',  name: 'Design Team',        email: 'dcs_nigeria@mixtafrica.com',              dept: 'Design',    pillarIds: ['p4'],               enabled: true },
-  { id: 's2',  name: 'Arokodare A.',       email: 'a.arokodare@mixtafrica.com',              dept: 'Design',    pillarIds: ['p4'],               enabled: true },
-  { id: 's3',  name: 'Uwadiale C.',        email: 'c.uwadiale@mixtafrica.com',               dept: 'Design',    pillarIds: ['p4'],               enabled: true },
-  { id: 's4',  name: 'Uwuigbe A.',         email: 'a.uwuigbe@mixtafrica.com',                dept: 'Design',    pillarIds: ['p4'],               enabled: true },
-  { id: 's5',  name: 'Deji Alli',          email: 'deji.alli@mixtafrica.com',                dept: 'AMC',       pillarIds: ['p6','p7','p8','p12'], enabled: true },
-  { id: 's6',  name: 'Sade Hughes',        email: 's.hughes@mixtafrica.com',                 dept: 'AMC',       pillarIds: ['p6','p7','p8','p12'], enabled: true },
-  { id: 's7',  name: 'Busola Ajayi',       email: 'b.ajayi@mixtafrica.com',                  dept: 'AMC',       pillarIds: ['p6','p7','p8','p12'], enabled: true },
-  { id: 's8',  name: 'Tola Akinsulire',    email: 't.akinsulire@mixtafrica.com',             dept: 'AMC',       pillarIds: ['p6','p7','p8','p12'], enabled: true },
-  { id: 's9',  name: 'Peter Ozolua',       email: 'p.ozolua@mixtafrica.com',                 dept: 'AMC',       pillarIds: ['p6','p7','p8','p12'], enabled: true },
-  { id: 's10', name: 'Uche Ndubuisi',      email: 'u.ndubuisi@mixtafrica.com',               dept: 'AMC',       pillarIds: ['p6','p7','p8','p12'], enabled: true },
-  { id: 's11', name: 'IPD Team',           email: 'ipd_nigeria@mixtafrica.com',              dept: 'IPD',       pillarIds: [],                    enabled: true },
-  { id: 's12', name: 'PMO Team',           email: 'pmo_nigeria@mixtafrica.com',              dept: 'IPD/PMO',   pillarIds: ['p11'],               enabled: true },
-  { id: 's13', name: 'Wasiu Salami',       email: 'w.salami@mixtafrica.com',                 dept: 'IPD',       pillarIds: [],                    enabled: true },
-  { id: 's14', name: 'Tobi Banjo',         email: 't.banjo@mixtafrica.com',                  dept: 'IPD',       pillarIds: [],                    enabled: true },
-  { id: 's15', name: 'Herve Kacou',        email: 'h.kacou@mixtafrica.com',                  dept: 'IPD',       pillarIds: [],                    enabled: true },
-  { id: 's16', name: 'Costing & Proc.',    email: 'mn_costingandprocurement@mixtafrica.com', dept: 'Costing',   pillarIds: ['p4','p5','p10'],     enabled: true },
-  { id: 's17', name: 'Olamide James',      email: 'o.james@mixtafrica.com',                  dept: 'Costing',   pillarIds: ['p4','p5','p10'],     enabled: true },
-  { id: 's18', name: 'Jumoke Olowe',       email: 'j.olowe@mixtafrica.com',                  dept: 'Costing',   pillarIds: ['p4','p5','p10'],     enabled: true },
-  { id: 's19', name: 'Opeyemi Ogunewu',    email: 'o.ogunewu@mixtafrica.com',                dept: 'Costing',   pillarIds: ['p4','p5','p10'],     enabled: true },
-  { id: 's20', name: 'Tobi Ibidokun',      email: 't.ibidokun@mixtafrica.com',               dept: 'Costing',   pillarIds: ['p4','p5','p10'],     enabled: true },
-  { id: 's21', name: 'MCC Team',           email: 'mcc@mixtafrica.com',                      dept: 'MCC',       pillarIds: ['p3','p11'],          enabled: true },
-  { id: 's22', name: 'Kolawole O.',        email: 'o.kolawole@mixtafrica.com',               dept: 'MCC',       pillarIds: ['p3','p11'],          enabled: true },
-  { id: 's23', name: 'Haastrup K.',        email: 'k.haastrup@mixtafrica.com',               dept: 'MCC',       pillarIds: ['p3','p11'],          enabled: true },
-]
+  // ── Design ──────────────────────────────────────────────────
+  { id: 's_d1',  name: 'Design Team',              email: 'dcs_nigeria@mixtafrica.com',              dept: 'Design',              isDeptEmail: true,  enabled: true },
+  { id: 's_d2',  name: 'A. Arokodare',             email: 'a.arokodare@mixtafrica.com',              dept: 'Design',              isDeptEmail: false, enabled: true },
+  { id: 's_d3',  name: 'C. Uwadiale',              email: 'c.uwadiale@mixtafrica.com',               dept: 'Design',              isDeptEmail: false, enabled: true },
+  { id: 's_d4',  name: 'A. Uwuigbe',               email: 'a.uwuigbe@mixtafrica.com',                dept: 'Design',              isDeptEmail: false, enabled: true },
+  { id: 's_d5',  name: 'A. Adesiyun',              email: 'a.adesiyun@mixtafrica.com',               dept: 'Design',              isDeptEmail: false, enabled: true },
+  { id: 's_d6',  name: 'L. Oyenuga',               email: 'l.oyenuga@mixtafrica.com',                dept: 'Design',              isDeptEmail: false, enabled: true },
+  { id: 's_d7',  name: 'O. Shobajo',               email: 'o.shobajo@mixtafrica.com',                dept: 'Design',              isDeptEmail: false, enabled: true },
+  { id: 's_d8',  name: 'O. Ashafa',                email: 'o.ashafa@mixtafrica.com',                 dept: 'Design',              isDeptEmail: false, enabled: true },
+  { id: 's_d9',  name: 'O. Edo-Osagie',            email: 'o.edo-osagie@mixtafrica.com',             dept: 'Design',              isDeptEmail: false, enabled: true },
+  // ── AMC ─────────────────────────────────────────────────────
+  { id: 's_a1',  name: 'Deji Alli',                email: 'deji.alli@mixtafrica.com',                dept: 'AMC',                 isDeptEmail: true,  enabled: true },
+  { id: 's_a2',  name: 'S. Hughes',                email: 's.hughes@mixtafrica.com',                 dept: 'AMC',                 isDeptEmail: false, enabled: true },
+  { id: 's_a3',  name: 'B. Ajayi',                 email: 'b.ajayi@mixtafrica.com',                  dept: 'AMC',                 isDeptEmail: false, enabled: true },
+  // ── IPD / PMO ────────────────────────────────────────────────
+  { id: 's_i1',  name: 'IPD Team',                 email: 'ipd_nigeria@mixtafrica.com',              dept: 'IPD',                 isDeptEmail: true,  enabled: true },
+  { id: 's_i2',  name: 'PMO Team',                 email: 'pmo_nigeria@mixtafrica.com',              dept: 'IPD',                 isDeptEmail: false, enabled: true },
+  { id: 's_i3',  name: 'W. Salami',                email: 'w.salami@mixtafrica.com',                 dept: 'IPD',                 isDeptEmail: false, enabled: true },
+  { id: 's_i4',  name: 'T. Banjo',                 email: 't.banjo@mixtafrica.com',                  dept: 'IPD',                 isDeptEmail: false, enabled: true },
+  { id: 's_i5',  name: 'H. Kacou',                 email: 'h.kacou@mixtafrica.com',                  dept: 'IPD',                 isDeptEmail: false, enabled: true },
+  // ── Costing ─────────────────────────────────────────────────
+  { id: 's_c1',  name: 'Costing & Procurement',    email: 'mn_costingandprocurement@mixtafrica.com', dept: 'Costing',             isDeptEmail: true,  enabled: true },
+  { id: 's_c2',  name: 'O. James',                 email: 'o.james@mixtafrica.com',                  dept: 'Costing',             isDeptEmail: false, enabled: true },
+  { id: 's_c3',  name: 'J. Olowe',                 email: 'j.olowe@mixtafrica.com',                  dept: 'Costing',             isDeptEmail: false, enabled: true },
+  { id: 's_c4',  name: 'T. Ibidokun',              email: 't.ibidokun@mixtafrica.com',               dept: 'Costing',             isDeptEmail: false, enabled: true },
+  // ── MCC ─────────────────────────────────────────────────────
+  { id: 's_m1',  name: 'MCC Team',                 email: 'mcc@mixtafrica.com',                      dept: 'MCC',                 isDeptEmail: true,  enabled: true },
+  { id: 's_m2',  name: 'K. Haastrup',              email: 'k.haastrup@mixtafrica.com',               dept: 'MCC',                 isDeptEmail: false, enabled: true },
+  { id: 's_m3',  name: 'N. Anaeto',                email: 'n.anaeto@mixtafrica.com',                 dept: 'MCC',                 isDeptEmail: false, enabled: true },
+  { id: 's_m4',  name: 'D. Ariyo',                 email: 'd.ariyo@mixtafrica.com',                  dept: 'MCC',                 isDeptEmail: false, enabled: true },
+  { id: 's_m5',  name: 'D. Salawu',                email: 'd.salawu@mixtafrica.com',                 dept: 'MCC',                 isDeptEmail: false, enabled: true },
+  { id: 's_m6',  name: 'E. Idada',                 email: 'e.idada@mixtafrica.com',                  dept: 'MCC',                 isDeptEmail: false, enabled: true },
+  { id: 's_m7',  name: 'O. Kolawole',              email: 'o.kolawole@mixtafrica.com',               dept: 'MCC',                 isDeptEmail: false, enabled: true },
+  { id: 's_m8',  name: 'E. Etim',                  email: 'e.etim@mixtafrica.com',                   dept: 'MCC',                 isDeptEmail: false, enabled: true },
+  // ── Sales ────────────────────────────────────────────────────
+  { id: 's_s1',  name: 'A. Cameron-Cole',          email: 'a.cameron-cole@mixtafrica.com',           dept: 'Sales',               isDeptEmail: true,  enabled: true },
+  { id: 's_s2',  name: 'E. Ezeh',                  email: 'e.ezeh@mixtafrica.com',                   dept: 'Sales',               isDeptEmail: false, enabled: true },
+  { id: 's_s3',  name: 'M. Adaran',                email: 'm.adaran@mixtafrica.com',                 dept: 'Sales',               isDeptEmail: false, enabled: true },
+  // ── Legal ────────────────────────────────────────────────────
+  { id: 's_l1',  name: 'Legal Team',               email: 'legal@mixtafrica.com',                    dept: 'Legal',               isDeptEmail: true,  enabled: true },
+  { id: 's_l2',  name: 'R. Idaeho',                email: 'r.idaeho@mixtafrica.com',                 dept: 'Legal',               isDeptEmail: false, enabled: true },
+  { id: 's_l3',  name: 'O. Shoyoye',               email: 'o.shoyoye@mixtafrica.com',                dept: 'Legal',               isDeptEmail: false, enabled: true },
+  // ── FINCON ───────────────────────────────────────────────────
+  { id: 's_f1',  name: 'FINCON Team',              email: 'mixta_fincon@mixtafrica.com',             dept: 'FINCON',              isDeptEmail: true,  enabled: true },
+  { id: 's_f2',  name: 'O. Ekpikie',               email: 'o.ekpikie@mixtafrica.com',                dept: 'FINCON',              isDeptEmail: false, enabled: true },
+  { id: 's_f3',  name: 'O. Tona-Obafemi',          email: 'o.tona-obafemi@mixtafrica.com',           dept: 'FINCON',              isDeptEmail: false, enabled: true },
+  { id: 's_f4',  name: 'O. Isabu',                 email: 'o.isabu@mixtafrica.com',                  dept: 'FINCON',              isDeptEmail: false, enabled: true },
+  { id: 's_f5',  name: 'A. Omotayo',               email: 'a.omotayo@mixtafrica.com',                dept: 'FINCON',              isDeptEmail: false, enabled: true },
+  // ── Operations ──────────────────────────────────────────────
+  { id: 's_o1',  name: 'U. Ojembe',                email: 'u.ojembe@mixtafrica.com',                 dept: 'Operations',          isDeptEmail: true,  enabled: true },
+  { id: 's_o2',  name: 'O. Ajala',                 email: 'o.ajala@mixtafrica.com',                  dept: 'Operations',          isDeptEmail: false, enabled: true },
+  { id: 's_o3',  name: 'C. Ajie',                  email: 'c.ajie@mixtafrica.com',                   dept: 'Operations',          isDeptEmail: false, enabled: true },
+  { id: 's_o4',  name: 'R. Jolaiya',               email: 'r.jolaiya@mixtafrica.com',                dept: 'Operations',          isDeptEmail: false, enabled: true },
+  // ── Commercial Strategy ─────────────────────────────────────
+  { id: 's_cs1', name: 'O. Olasunkanmi',           email: 'o.olasunkanmi@mixtafrica.com',            dept: 'Commercial Strategy', isDeptEmail: true,  enabled: true },
+  { id: 's_cs2', name: 'T. Adebule',               email: 't.adebule@mixtafrica.com',                dept: 'Commercial Strategy', isDeptEmail: false, enabled: true },
+  { id: 's_cs3', name: 'T. Adeniyi',               email: 't.adeniyi@mixtafrica.com',                dept: 'Commercial Strategy', isDeptEmail: false, enabled: true },
+];
 
-/* ══ PHASE 7: MULTI-USER WORKSPACE ══════════════════════════ */
+// ── Department lookup helpers ────────────────────────────────
+function getDepts() {
+  const seen = []; const order = [];
+  STAKEHOLDERS.forEach(s => { if (s.enabled !== false && !seen.includes(s.dept)) { seen.push(s.dept); order.push(s.dept); } });
+  return order;
+}
+
+function detectDeptFromEmail(email) {
+  const match = STAKEHOLDERS.find(s => s.email === email);
+  return match ? match.dept : 'Commercial Strategy';
+}
+
+// Build a grouped <select> for task owner — dept groups + individual members
+function buildOwnerSelect(id, selectedValue, extraStyle) {
+  const style = extraStyle || 'width:100%;';
+  let html = '<select id="' + id + '" class="select-field" style="' + style + '">' +
+    '<option value="">-- Select owner --</option>';
+  const depts = getDepts();
+  depts.forEach(dept => {
+    const members = STAKEHOLDERS.filter(s => s.enabled !== false && s.dept === dept);
+    if (!members.length) return;
+    html += '<optgroup label="' + dept + '">';
+    members.forEach(s => {
+      const val = s.name + ' (' + dept + ')';
+      const sel = selectedValue && (selectedValue === val || selectedValue === s.name || selectedValue === dept) ? ' selected' : '';
+      const prefix = s.isDeptEmail ? dept + ' (whole dept)' : s.name;
+      html += '<option value="' + val + '"' + sel + '>' + prefix + '</option>';
+    });
+    html += '</optgroup>';
+  });
+  html += '</select>';
+  return html;
+}
 
 // Commercial Strategy team (admin populates via Settings)
 // Stored in Firebase at /users/{sanitised_email}/
@@ -1818,8 +1888,8 @@ window.showAddTaskToProduct = (productId) => {
     </p>
     <div class="form-row"><label class="form-label">Task name <span class="req">*</span></label>
       <input type="text" id="at-title" class="input-field" placeholder="e.g. Regulatory approval"/></div>
-    <div class="form-row"><label class="form-label">Owner department</label>
-      <input type="text" id="at-owner" class="input-field" placeholder="e.g. Legal"/></div>
+    <div class="form-row"><label class="form-label">Owner / Department</label>
+      ${buildOwnerSelect('at-owner', '')}</div>
     <div class="form-row"><label class="form-label">Start date</label>
       <input type="date" id="at-start" class="input-field"/></div>
     <div class="form-row"><label class="form-label">Deadline</label>
@@ -4091,6 +4161,7 @@ function renderSuperAdmin(el) {
       <button class="sa-tab" onclick="switchSATab('departments', this)">Departments</button>
       <button class="sa-tab" onclick="switchSATab('templates', this)">Templates</button>
       <button class="sa-tab" onclick="switchSATab('tasks', this)">All Tasks</button>
+      <button class="sa-tab" onclick="switchSATab('people', this)">People</button>
       <button class="sa-tab" onclick="switchSATab('audit', this)">Audit Log</button>
       <button class="sa-tab" onclick="switchSATab('users', this)">Users</button>
       <button class="sa-tab" onclick="switchSATab('products', this)">Products</button>
@@ -4126,11 +4197,146 @@ async function loadSATab(tab) {
     case 'departments':   await renderSADepartments(el);   break;
     case 'templates':     await renderSATemplates(el);      break;
     case 'tasks':         await renderSAAllTasks(el);       break;
+    case 'people':        await renderSAPeople(el);         break;
     case 'users':         await renderSAUsers(el);         break;
     case 'products':      await renderSAProducts(el);      break;
     case 'maintenance':   await renderSAMaintenance(el);   break;
   }
 }
+
+/* ── TAB: PEOPLE (Department Directory) ─────────────────── */
+async function renderSAPeople(el) {
+  const depts = getDepts();
+
+  let html = '<div style="margin-bottom:16px;display:flex;align-items:center;justify-content:space-between;">' +
+    '<div style="font-size:12px;color:var(--text-muted);">' + STAKEHOLDERS.length + ' people across ' + depts.length + ' departments</div>' +
+    '<button class="btn-primary" style="font-size:11px;padding:7px 14px;" onclick="saAddStakeholder()">+ Add person</button>' +
+  '</div>';
+
+  depts.forEach(dept => {
+    const members = STAKEHOLDERS.filter(s => s.dept === dept);
+    html += '<div class="panel" style="margin-bottom:12px;">' +
+      '<div class="panel-header">' +
+        '<span class="panel-title">' + dept + '</span>' +
+        '<span style="font-size:11px;color:var(--text-muted);">' + members.length + ' member' + (members.length !== 1 ? 's' : '') + '</span>' +
+      '</div>' +
+      '<div style="padding:0;">' +
+        members.map(s => '<div style="display:flex;align-items:center;gap:12px;padding:10px 18px;border-bottom:1px solid var(--border);">' +
+          '<div style="width:32px;height:32px;border-radius:50%;background:#FEF2F2;color:#C0282D;font-size:12px;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0;">' +
+            (s.name[0] || '?').toUpperCase() +
+          '</div>' +
+          '<div style="flex:1;min-width:0;">' +
+            '<div style="font-size:12px;font-weight:600;color:var(--text);">' + s.name +
+              (s.isDeptEmail ? ' <span style="font-size:10px;font-weight:400;background:#EFF6FF;color:#2563EB;padding:1px 6px;border-radius:10px;">dept email</span>' : '') +
+            '</div>' +
+            '<div style="font-size:11px;color:var(--text-muted);">' + s.email + '</div>' +
+          '</div>' +
+          '<button onclick="saEditStakeholder(\'' + s.id + '\')" style="background:none;border:1px solid var(--border);border-radius:6px;padding:4px 10px;font-size:11px;color:var(--text-muted);cursor:pointer;font-family:Poppins,sans-serif;">Edit</button>' +
+          '<button onclick="saToggleStakeholder(\'' + s.id + '\')" style="background:none;border:1px solid var(--border);border-radius:6px;padding:4px 10px;font-size:11px;color:' + (s.enabled !== false ? 'var(--green)' : 'var(--red)') + ';cursor:pointer;font-family:Poppins,sans-serif;">' +
+            (s.enabled !== false ? 'Active' : 'Disabled') +
+          '</button>' +
+        '</div>').join('') +
+      '</div>' +
+    '</div>';
+  });
+
+  html += '<div id="people-edit-panel"></div>';
+  el.innerHTML = html;
+}
+
+window.saToggleStakeholder = async (id) => {
+  const idx = STAKEHOLDERS.findIndex(s => s.id === id);
+  if (idx === -1) return;
+  STAKEHOLDERS[idx].enabled = STAKEHOLDERS[idx].enabled === false;
+  await set(ref(db, 'config/stakeholders'), STAKEHOLDERS);
+  showToast('Updated.', 'success');
+  loadSATab('people');
+};
+
+window.saEditStakeholder = (id) => {
+  const s   = STAKEHOLDERS.find(x => x.id === id);
+  if (!s) return;
+  const el  = document.getElementById('people-edit-panel');
+  if (!el) return;
+  el.innerHTML =
+    '<div class="panel" style="margin-top:12px;">' +
+      '<div class="panel-header"><span class="panel-title">Edit — ' + s.name + '</span></div>' +
+      '<div class="panel-body">' +
+        '<div class="form-row"><label class="form-label">Name</label>' +
+          '<input id="sep-name" class="input-field" value="' + s.name + '"/></div>' +
+        '<div class="form-row"><label class="form-label">Email</label>' +
+          '<input id="sep-email" class="input-field" value="' + s.email + '"/></div>' +
+        '<div class="form-row"><label class="form-label">Department</label>' +
+          '<select id="sep-dept" class="select-field" style="width:100%;">' +
+            getDepts().map(d => '<option value="' + d + '"' + (d === s.dept ? ' selected' : '') + '>' + d + '</option>').join('') +
+          '</select></div>' +
+        '<div class="form-row"><label class="form-label">Type</label>' +
+          '<select id="sep-type" class="select-field" style="width:100%;">' +
+            '<option value="false"' + (!s.isDeptEmail ? ' selected' : '') + '>Individual</option>' +
+            '<option value="true"' + (s.isDeptEmail ? ' selected' : '') + '>Dept email (alias)</option>' +
+          '</select></div>' +
+        '<div class="form-actions">' +
+          '<button class="btn-outline" onclick="document.getElementById(\'people-edit-panel\').innerHTML=\'\'">Cancel</button>' +
+          '<button class="btn-primary" onclick="saSaveStakeholder(\'' + id + '\')">Save</button>' +
+        '</div>' +
+      '</div>' +
+    '</div>';
+  el.scrollIntoView({ behavior: 'smooth' });
+};
+
+window.saSaveStakeholder = async (id) => {
+  const idx = STAKEHOLDERS.findIndex(s => s.id === id);
+  if (idx === -1) return;
+  STAKEHOLDERS[idx].name        = document.getElementById('sep-name')?.value.trim()  || STAKEHOLDERS[idx].name;
+  STAKEHOLDERS[idx].email       = document.getElementById('sep-email')?.value.trim() || STAKEHOLDERS[idx].email;
+  STAKEHOLDERS[idx].dept        = document.getElementById('sep-dept')?.value         || STAKEHOLDERS[idx].dept;
+  STAKEHOLDERS[idx].isDeptEmail = document.getElementById('sep-type')?.value === 'true';
+  await set(ref(db, 'config/stakeholders'), STAKEHOLDERS);
+  showToast('Saved.', 'success');
+  loadSATab('people');
+};
+
+window.saAddStakeholder = () => {
+  const el = document.getElementById('people-edit-panel');
+  if (!el) return;
+  const newId = 's_new_' + Date.now();
+  el.innerHTML =
+    '<div class="panel" style="margin-top:12px;">' +
+      '<div class="panel-header"><span class="panel-title">Add person</span></div>' +
+      '<div class="panel-body">' +
+        '<div class="form-row"><label class="form-label">Name <span class="req">*</span></label>' +
+          '<input id="sep-name" class="input-field" placeholder="e.g. A. Surname"/></div>' +
+        '<div class="form-row"><label class="form-label">Email <span class="req">*</span></label>' +
+          '<input id="sep-email" class="input-field" placeholder="name@mixtafrica.com"/></div>' +
+        '<div class="form-row"><label class="form-label">Department</label>' +
+          '<select id="sep-dept" class="select-field" style="width:100%;">' +
+            getDepts().map(d => '<option value="' + d + '">' + d + '</option>').join('') +
+          '</select></div>' +
+        '<div class="form-row"><label class="form-label">Type</label>' +
+          '<select id="sep-type" class="select-field" style="width:100%;">' +
+            '<option value="false">Individual</option>' +
+            '<option value="true">Dept email (alias)</option>' +
+          '</select></div>' +
+        '<div class="form-actions">' +
+          '<button class="btn-outline" onclick="document.getElementById(\'people-edit-panel\').innerHTML=\'\'">Cancel</button>' +
+          '<button class="btn-primary" onclick="saConfirmAddStakeholder(\'' + newId + '\')">Add</button>' +
+        '</div>' +
+      '</div>' +
+    '</div>';
+  el.scrollIntoView({ behavior: 'smooth' });
+};
+
+window.saConfirmAddStakeholder = async (newId) => {
+  const name  = document.getElementById('sep-name')?.value.trim();
+  const email = document.getElementById('sep-email')?.value.trim();
+  const dept  = document.getElementById('sep-dept')?.value || 'Commercial Strategy';
+  const isDeptEmail = document.getElementById('sep-type')?.value === 'true';
+  if (!name || !email) { showToast('Name and email are required.', 'error'); return; }
+  STAKEHOLDERS.push({ id: newId, name, email, dept, isDeptEmail, enabled: true });
+  await set(ref(db, 'config/stakeholders'), STAKEHOLDERS);
+  showToast(name + ' added.', 'success');
+  loadSATab('people');
+};
 
 /* ══ CIRCUIT BOX — MASTER EDIT PANEL TABS ══════════════════ */
 
@@ -4219,10 +4425,8 @@ window.editPillar = (id) => {
       <div class="panel-body">
         <div class="form-row"><label class="form-label">Name</label>
           <input id="pe-name" class="input-field" value="${pl.name}"/></div>
-        <div class="form-row"><label class="form-label">Owner department</label>
-          <input id="pe-owner" class="input-field" value="${pl.owner}"/></div>
-        <div class="form-row"><label class="form-label">Dept key</label>
-          <input id="pe-dept" class="input-field" value="${pl.dept}"/></div>
+        <div class="form-row"><label class="form-label">Owner / Department</label>
+          ${buildOwnerSelect('pe-owner', pl.owner)}</div>
         <div class="form-actions">
           <button class="btn-outline" onclick="document.getElementById('pillar-edit-panel').innerHTML=''">Cancel</button>
           <button class="btn-primary" onclick="savePillar('${id}')">Save changes</button>
@@ -4235,9 +4439,11 @@ window.editPillar = (id) => {
 window.savePillar = async (id) => {
   const idx = PILLARS.findIndex(p => p.id === id);
   if (idx === -1) return;
-  PILLARS[idx].name  = document.getElementById('pe-name')?.value.trim()  || PILLARS[idx].name;
-  PILLARS[idx].owner = document.getElementById('pe-owner')?.value.trim() || PILLARS[idx].owner;
-  PILLARS[idx].dept  = document.getElementById('pe-dept')?.value.trim()  || PILLARS[idx].dept;
+  const ownerVal = document.getElementById('pe-owner')?.value || '';
+  const deptMatch = STAKEHOLDERS.find(s => (s.name + ' (' + s.dept + ')') === ownerVal || s.name === ownerVal);
+  PILLARS[idx].name  = document.getElementById('pe-name')?.value.trim() || PILLARS[idx].name;
+  PILLARS[idx].owner = ownerVal || PILLARS[idx].owner;
+  PILLARS[idx].dept  = deptMatch ? deptMatch.dept.toLowerCase() : PILLARS[idx].dept;
   try {
     await set(ref(db, 'config/pillars'), PILLARS);
     showToast('Pillar updated.', 'success');
@@ -4276,10 +4482,8 @@ window.showAddPillar = () => {
       <div class="panel-body">
         <div class="form-row"><label class="form-label">Name <span class="req">*</span></label>
           <input id="pe-name" class="input-field" placeholder="e.g. Legal Review"/></div>
-        <div class="form-row"><label class="form-label">Owner department</label>
-          <input id="pe-owner" class="input-field" placeholder="e.g. Legal"/></div>
-        <div class="form-row"><label class="form-label">Dept key</label>
-          <input id="pe-dept" class="input-field" placeholder="e.g. legal"/></div>
+        <div class="form-row"><label class="form-label">Owner / Department</label>
+          ${buildOwnerSelect('pe-owner', '')}</div>
         <div class="form-actions">
           <button class="btn-outline" onclick="document.getElementById('pillar-edit-panel').innerHTML=''">Cancel</button>
           <button class="btn-primary" onclick="addNewPillar('${newId}')">Add pillar</button>
@@ -6466,6 +6670,11 @@ window.__npd_init({
   copyGCCOLink:            window.copyGCCOLink,
   postProductComment:      window.postProductComment,
   quickSaveNote:           window.quickSaveNote,
+  saToggleStakeholder:     window.saToggleStakeholder,
+  saEditStakeholder:       window.saEditStakeholder,
+  saSaveStakeholder:       window.saSaveStakeholder,
+  saAddStakeholder:        window.saAddStakeholder,
+  saConfirmAddStakeholder: window.saConfirmAddStakeholder,
 });
 
 </script>
