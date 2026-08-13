@@ -115,12 +115,33 @@ function dailyDeadlineCheck() {
     }
 
     tasks.forEach(function(task) {
-      if (!task.deadline || task.status === 'complete') return;
-      var due  = new Date(task.deadline); due.setHours(0,0,0,0);
-      var diff = Math.round((due - today) / 86400000);
-      if (diff > THRESHOLD_DAYS) return; // not yet due
+      var taskStatus = task.status || task.taskStatus || 'on-track';
+      // Never alert on complete tasks
+      if (taskStatus === 'complete') return;
+      // Always alert on explicitly delayed tasks (regardless of deadline date)
+      var isDelayed = taskStatus === 'delayed';
+      if (!task.deadline && !isDelayed) return;
 
-      var daysOverdue = diff < 0 ? Math.abs(diff) : 0;
+      var diff = null;
+      var daysOverdue = 0;
+      if (task.deadline) {
+        var due  = new Date(task.deadline); due.setHours(0,0,0,0);
+        diff = Math.round((due - today) / 86400000);
+        daysOverdue = diff < 0 ? Math.abs(diff) : 0;
+      }
+
+      // Skip future tasks that are not delayed and not within threshold
+      if (!isDelayed && diff !== null && diff > THRESHOLD_DAYS) return;
+      // Skip tasks with no deadline that are not delayed
+      if (!isDelayed && diff === null) return;
+
+      var alertType = diff === null
+        ? 'delayed'
+        : diff < 0  ? 'overdue'
+        : diff === 0 ? 'due'
+        : isDelayed  ? 'delayed'
+        : 'warning';
+
       alerts.push({
         productName: prod.name,
         productId:   prod.id,
@@ -130,8 +151,9 @@ function dailyDeadlineCheck() {
         deptEmails:  deptEmails,
         daysUntil:   diff,
         daysOverdue: daysOverdue,
-        deadline:    task.deadline,
-        alertType:   diff < 0 ? 'overdue' : diff === 0 ? 'due' : 'warning',
+        deadline:    task.deadline || null,
+        taskStatus:  taskStatus,
+        alertType:   alertType,
       });
     });
   });
@@ -164,8 +186,12 @@ function dailyDeadlineCheck() {
         var thread = GmailApp.getThreadById(threadId);
         if (thread) {
           var alertLines = prodAlerts.map(function(a) {
-            var prefix = a.daysOverdue > 0 ? a.daysOverdue + 'd OVERDUE' : 'DUE TODAY';
-            return '[' + prefix + '] ' + a.pillarName + ' (' + a.ownerDept + ') — ' + a.deadline;
+            var prefix = a.alertType === 'overdue'
+              ? '[OVERDUE ' + a.daysOverdue + 'd]'
+              : a.alertType === 'due'
+              ? '[DUE TODAY]'
+              : '[DUE IN ' + a.daysUntil + 'D]';
+            return prefix + ' ' + a.pillarName + ' (' + a.ownerDept + ') — ' + a.deadline;
           }).join('\n');
           var bodyText = 'Daily NPD Hub deadline update for ' + (prod.name || productId) + ':\n\n' + alertLines + '\n\nPlease update task statuses on the NPD Hub.';
 
@@ -198,6 +224,252 @@ function dailyDeadlineCheck() {
   });
 
   Logger.log('Total emails sent: ' + totalSent);
+
+  // ── Check for products that launched today → generate retrospective ──
+  Object.values(products).forEach(function(prod) {
+    if (!prod.launchDate || prod.status === 'archived') return;
+    var launch = new Date(prod.launchDate); launch.setHours(0,0,0,0);
+    if (launch.getTime() === today.getTime()) {
+      try {
+        generateRetrospective(prod, authParam);
+        Logger.log('Retrospective generated for: ' + prod.name);
+      } catch(e) {
+        Logger.log('Retrospective failed for ' + prod.name + ': ' + e.message);
+      }
+    }
+  });
+}
+
+// ── TODO DIGEST ─────────────────────────────────────────────
+function installTodoTrigger() {
+  var triggers = ScriptApp.getProjectTriggers();
+  triggers.forEach(function(t) {
+    if (t.getHandlerFunction() === 'dailyTodoCheck') ScriptApp.deleteTrigger(t);
+  });
+  // Read configured hour from Firebase (default 8am)
+  var authParam = '?auth=' + FIREBASE_DB_SECRET;
+  var schedSnap = JSON.parse(UrlFetchApp.fetch(FIREBASE_DB_URL + '/config/emailSchedule.json' + authParam, { muteHttpExceptions: true }).getContentText()) || {};
+  var hour = schedSnap.todoHour !== undefined ? parseInt(schedSnap.todoHour) : 8;
+  ScriptApp.newTrigger('dailyTodoCheck').timeBased().atHour(hour).everyDays(1).inTimezone('Africa/Lagos').create();
+  Logger.log('Todo trigger installed at ' + hour + ':00 WAT');
+}
+
+function dailyTodoCheck() {
+  var authParam  = '?auth=' + FIREBASE_DB_SECRET;
+  var today      = new Date(); today.setHours(0,0,0,0);
+  var dayOfWeek  = today.getDay(); // 0=Sun, 1=Mon
+  var schedSnap  = JSON.parse(UrlFetchApp.fetch(FIREBASE_DB_URL + '/config/emailSchedule.json' + authParam, { muteHttpExceptions: true }).getContentText()) || {};
+  var weeklyDay  = schedSnap.todoDay !== undefined ? parseInt(schedSnap.todoDay) : 1; // default Monday
+
+  var products = JSON.parse(UrlFetchApp.fetch(FIREBASE_DB_URL + '/products.json' + authParam, { muteHttpExceptions: true }).getContentText()) || {};
+  var users    = JSON.parse(UrlFetchApp.fetch(FIREBASE_DB_URL + '/users.json' + authParam, { muteHttpExceptions: true }).getContentText()) || {};
+  var isWeekly = dayOfWeek === weeklyDay;
+
+  // Build a per-user task map
+  var userTasks = {}; // { email: { overdue:[], dueSoon:[], onTrack:[] } }
+
+  Object.values(products).forEach(function(prod) {
+    if (prod.status === 'archived') return;
+    var tasks = Object.values(prod.tasks || prod.pillars || {});
+    tasks.forEach(function(task) {
+      if ((task.status || task.taskStatus) === 'complete') return;
+      var ownerEmail = '';
+      // Try to match task owner to a stakeholder email
+      var STAKEDB = JSON.parse(UrlFetchApp.fetch(FIREBASE_DB_URL + '/config/stakeholders.json' + authParam, { muteHttpExceptions: true }).getContentText());
+      var stakeArr = STAKEDB ? (Array.isArray(STAKEDB) ? STAKEDB : Object.values(STAKEDB)) : [];
+      var matched = stakeArr.find(function(s) { return s.name === (task.owner || '') || s.dept === (task.owner || ''); });
+      if (matched) ownerEmail = matched.email;
+      if (!ownerEmail) return;
+      if (!userTasks[ownerEmail]) userTasks[ownerEmail] = { overdue: [], dueSoon: [], onTrack: [], productName: prod.name };
+      var d = task.deadline ? new Date(task.deadline) : null;
+      if (d) d.setHours(0,0,0,0);
+      var daysUntil = d ? Math.round((d - today) / 86400000) : null;
+      var entry = { title: task.title || task.name || 'Untitled', product: prod.name, deadline: task.deadline, daysUntil: daysUntil, status: task.status || task.taskStatus || '' };
+      if (daysUntil !== null && daysUntil < 0) userTasks[ownerEmail].overdue.push(entry);
+      else if (daysUntil !== null && daysUntil <= 7) userTasks[ownerEmail].dueSoon.push(entry);
+      else userTasks[ownerEmail].onTrack.push(entry);
+    });
+  });
+
+  var digestType = isWeekly ? 'Weekly' : 'Daily';
+  Object.keys(userTasks).forEach(function(email) {
+    try {
+      var data = userTasks[email];
+      var all  = data.overdue.concat(data.dueSoon).concat(data.onTrack);
+      if (all.length === 0) return;
+      var html = buildTodoEmail(email, data, digestType, today);
+      var subject = '[' + digestType + ' Tasks] Your NPD Hub action list — ' + Utilities.formatDate(today, 'Africa/Lagos', 'dd MMM yyyy');
+      GmailApp.sendEmail(email, subject, '', { htmlBody: html, name: SENDER_NAME });
+      Logger.log('Todo digest sent to ' + email);
+    } catch(e) { Logger.log('Todo digest failed for ' + email + ': ' + e.message); }
+  });
+}
+
+function sendTodoDigest(body) {
+  // Manual trigger from dashboard — sends to requesting user
+  try {
+    var authParam = '?auth=' + FIREBASE_DB_SECRET;
+    var today     = new Date(); today.setHours(0,0,0,0);
+    var email     = body.email || '';
+    if (!email) return { ok: false, error: 'No email provided' };
+    var products  = JSON.parse(UrlFetchApp.fetch(FIREBASE_DB_URL + '/products.json' + authParam, { muteHttpExceptions: true }).getContentText()) || {};
+    var data      = { overdue: [], dueSoon: [], onTrack: [] };
+    Object.values(products).forEach(function(prod) {
+      if (prod.status === 'archived') return;
+      var tasks = Object.values(prod.tasks || prod.pillars || {});
+      tasks.forEach(function(task) {
+        if ((task.status || task.taskStatus) === 'complete') return;
+        var d = task.deadline ? new Date(task.deadline) : null;
+        if (d) d.setHours(0,0,0,0);
+        var daysUntil = d ? Math.round((d - today) / 86400000) : null;
+        var entry = { title: task.title || task.name || 'Untitled', product: prod.name, deadline: task.deadline, daysUntil: daysUntil, status: task.status || '' };
+        if (daysUntil !== null && daysUntil < 0) data.overdue.push(entry);
+        else if (daysUntil !== null && daysUntil <= 7) data.dueSoon.push(entry);
+        else data.onTrack.push(entry);
+      });
+    });
+    var html    = buildTodoEmail(email, data, 'On-demand', today);
+    var subject = '[Task Digest] Your NPD Hub tasks — ' + Utilities.formatDate(today, 'Africa/Lagos', 'dd MMM yyyy');
+    GmailApp.sendEmail(email, subject, '', { htmlBody: html, name: SENDER_NAME });
+    return { ok: true, message: 'Digest sent to ' + email };
+  } catch(err) { return { ok: false, error: err.message }; }
+}
+
+function buildTodoEmail(email, data, digestType, today) {
+  var totalCount = data.overdue.length + data.dueSoon.length + data.onTrack.length;
+  var dateStr = Utilities.formatDate(today, 'Africa/Lagos', 'EEEE, dd MMMM yyyy');
+
+  var buildSection = function(items, label, color) {
+    if (!items.length) return '';
+    return '<div style="margin-bottom:20px;">' +
+      '<div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:' + color + ';margin-bottom:8px;">' + label + ' (' + items.length + ')</div>' +
+      items.map(function(t) {
+        var dueStr = t.deadline ? (t.daysUntil < 0 ? Math.abs(t.daysUntil) + 'd overdue' : t.daysUntil === 0 ? 'Due today' : 'Due in ' + t.daysUntil + 'd') : 'No date';
+        return '<div style="display:flex;align-items:flex-start;gap:10px;padding:10px 0;border-bottom:1px solid #F0F0EE;">' +
+          '<div style="width:8px;height:8px;border-radius:50%;background:' + color + ';margin-top:4px;flex-shrink:0;"></div>' +
+          '<div style="flex:1;">' +
+            '<div style="font-size:13px;font-weight:600;color:#1A1A18;">' + t.title + '</div>' +
+            '<div style="font-size:11px;color:#9A9A96;margin-top:2px;">' + t.product + ' · ' + dueStr + '</div>' +
+          '</div></div>';
+      }).join('') +
+    '</div>';
+  };
+
+  return '<!DOCTYPE html><html><body style="font-family:Arial,sans-serif;background:#F8F8F7;margin:0;padding:24px;">' +
+    '<div style="max-width:600px;margin:0 auto;background:#fff;border-radius:8px;overflow:hidden;border:1px solid #E5E4E0;">' +
+    '<div style="background:#1A1A18;padding:20px 28px;">' +
+      '<div style="color:rgba(255,255,255,.6);font-size:11px;text-transform:uppercase;letter-spacing:.1em;margin-bottom:4px;">Mixta Africa NPD Hub · ' + digestType + ' Task Digest</div>' +
+      '<div style="color:white;font-size:20px;font-weight:700;">' + totalCount + ' task' + (totalCount !== 1 ? 's' : '') + ' on your list</div>' +
+      '<div style="color:rgba(255,255,255,.6);font-size:12px;margin-top:4px;">' + dateStr + '</div>' +
+    '</div>' +
+    '<div style="padding:24px 28px;">' +
+      buildSection(data.overdue,  'Overdue',       '#C0282D') +
+      buildSection(data.dueSoon,  'Due this week', '#D97706') +
+      buildSection(data.onTrack,  'Coming up',     '#16A34A') +
+      (totalCount === 0 ? '<p style="font-size:14px;color:#16A34A;text-align:center;padding:20px 0;">You\'re all clear — no active tasks assigned to you.</p>' : '') +
+      '<p style="font-size:12px;color:#9A9A96;margin-top:20px;">Auto-generated by the Mixta Africa NPD Hub. Log in to update your task statuses.</p>' +
+    '</div></div></body></html>';
+}
+
+function generateRetrospective(prod, authParam) {
+  var tasks = Object.values(prod.tasks || prod.pillars || {});
+  var total = tasks.length;
+  if (total === 0) return;
+
+  var complete  = tasks.filter(function(t) { return (t.status || t.taskStatus) === 'complete'; });
+  var delayed   = tasks.filter(function(t) { return (t.status || t.taskStatus) === 'delayed'; });
+  var overdueTasks = tasks.filter(function(t) {
+    if ((t.status || t.taskStatus) === 'complete') return false;
+    if (!t.deadline) return false;
+    var d = new Date(t.deadline); d.setHours(0,0,0,0);
+    return d < new Date();
+  });
+  var onTime    = tasks.filter(function(t) {
+    return (t.status || t.taskStatus) === 'complete' && t.deadline;
+  });
+
+  var pct  = Math.round((complete.length / total) * 100);
+  var slip = 0;
+  if (prod.baselineLaunchDate && prod.baselineLaunchDate !== prod.launchDate) {
+    var bl  = new Date(prod.baselineLaunchDate); bl.setHours(0,0,0,0);
+    var cur = new Date(prod.launchDate);         cur.setHours(0,0,0,0);
+    slip    = Math.round((cur - bl) / 86400000);
+  }
+
+  var today = new Date();
+  var weekKey = 'retro_' + today.getFullYear() + '_' + (today.getMonth() + 1) + '_' + today.getDate();
+
+  var retro = {
+    type:            'retrospective',
+    generatedAt:     today.toISOString(),
+    launchDate:      prod.launchDate,
+    totalTasks:      total,
+    completedTasks:  complete.length,
+    pctComplete:     pct,
+    delayedTasks:    delayed.length,
+    overdueTasks:    overdueTasks.length,
+    slipDays:        slip,
+    completedNames:  complete.map(function(t) { return t.title || t.name || ''; }).filter(Boolean),
+    openNames:       overdueTasks.concat(delayed).map(function(t) { return t.title || t.name || ''; }).filter(Boolean),
+    summary:         prod.name + ' reached its launch date with ' + pct + '% of tasks complete.' +
+                     (overdueTasks.length > 0 ? ' ' + overdueTasks.length + ' task(s) remain overdue.' : '') +
+                     (slip > 0 ? ' Launch slipped by ' + slip + ' days from baseline.' : slip < 0 ? ' Launch was ' + Math.abs(slip) + ' days ahead of baseline.' : ' Launched on the original target date.'),
+  };
+
+  // Store in weeklyLog
+  UrlFetchApp.fetch(
+    FIREBASE_DB_URL + '/products/' + prod.id + '/weeklyLog/' + weekKey + '.json' + authParam,
+    { method: 'put', contentType: 'application/json', payload: JSON.stringify(retro), muteHttpExceptions: true }
+  );
+
+  // Email retrospective to owner/alert recipients
+  var users     = JSON.parse(UrlFetchApp.fetch(FIREBASE_DB_URL + '/users.json' + authParam, { muteHttpExceptions: true }).getContentText()) || {};
+  var recipients = [];
+  if (prod.alertRecipients && prod.alertRecipients.length > 0) {
+    recipients = prod.alertRecipients;
+  } else if (prod.ownerId && users[prod.ownerId] && users[prod.ownerId].email) {
+    recipients = [users[prod.ownerId].email];
+  }
+  if (recipients.length === 0) return;
+
+  var html = '<!DOCTYPE html><html><body style="font-family:Arial,sans-serif;background:#f8f8f7;margin:0;padding:24px;">' +
+    '<div style="max-width:600px;margin:0 auto;background:#fff;border-radius:8px;overflow:hidden;border:1px solid #e5e4e0;">' +
+    '<div style="background:#2563EB;padding:20px 28px;">' +
+      '<div style="color:rgba(255,255,255,.8);font-size:11px;text-transform:uppercase;letter-spacing:.1em;margin-bottom:4px;">Mixta Africa — NPD Hub</div>' +
+      '<div style="color:white;font-size:20px;font-weight:700;">Launch Retrospective</div>' +
+      '<div style="color:rgba(255,255,255,.8);font-size:13px;margin-top:4px;">' + prod.name + ' · ' + prod.launchDate + '</div>' +
+    '</div>' +
+    '<div style="padding:24px 28px;">' +
+      '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:24px;">' +
+        '<div style="background:#f8f8f7;border-radius:8px;padding:14px 16px;text-align:center;">' +
+          '<div style="font-size:24px;font-weight:700;color:#1a1a18;">' + pct + '%</div>' +
+          '<div style="font-size:11px;color:#9a9a96;text-transform:uppercase;letter-spacing:.06em;margin-top:3px;">Complete</div>' +
+        '</div>' +
+        '<div style="background:#f8f8f7;border-radius:8px;padding:14px 16px;text-align:center;">' +
+          '<div style="font-size:24px;font-weight:700;color:' + (overdueTasks.length > 0 ? '#C0282D' : '#16A34A') + ';">' + overdueTasks.length + '</div>' +
+          '<div style="font-size:11px;color:#9a9a96;text-transform:uppercase;letter-spacing:.06em;margin-top:3px;">Overdue</div>' +
+        '</div>' +
+        '<div style="background:#f8f8f7;border-radius:8px;padding:14px 16px;text-align:center;">' +
+          '<div style="font-size:24px;font-weight:700;color:' + (slip > 0 ? '#D97706' : '#16A34A') + ';">' + (slip > 0 ? '+' + slip + 'd' : slip < 0 ? Math.abs(slip) + 'd early' : 'On time') + '</div>' +
+          '<div style="font-size:11px;color:#9a9a96;text-transform:uppercase;letter-spacing:.06em;margin-top:3px;">vs Baseline</div>' +
+        '</div>' +
+      '</div>' +
+      '<p style="font-size:14px;color:#1a1a18;line-height:1.7;margin:0 0 20px;">' + retro.summary + '</p>' +
+      (retro.completedNames.length > 0
+        ? '<div style="margin-bottom:16px;"><div style="font-size:11px;font-weight:700;color:#16A34A;text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px;">Completed tasks</div>' +
+          retro.completedNames.map(function(n) { return '<div style="font-size:13px;color:#1a1a18;padding:4px 0;border-bottom:1px solid #f0f0ee;">' + n + '</div>'; }).join('') + '</div>'
+        : '') +
+      (retro.openNames.length > 0
+        ? '<div><div style="font-size:11px;font-weight:700;color:#C0282D;text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px;">Still open / overdue</div>' +
+          retro.openNames.map(function(n) { return '<div style="font-size:13px;color:#1a1a18;padding:4px 0;border-bottom:1px solid #f0f0ee;">' + n + '</div>'; }).join('') + '</div>'
+        : '') +
+      '<p style="font-size:12px;color:#9a9a96;margin-top:20px;">Auto-generated by Mixta Africa NPD Hub on launch date. Full history is in the product\'s weekly log.</p>' +
+    '</div></div></body></html>';
+
+  var subject = '[Launched] Retrospective: ' + prod.name + ' — ' + prod.launchDate;
+  recipients.forEach(function(email) {
+    try { GmailApp.sendEmail(email, subject, '', { htmlBody: html, name: SENDER_NAME }); } catch(e) { Logger.log('Retro email failed: ' + e.message); }
+  });
 }
 
 
@@ -234,7 +506,9 @@ function doPost(e) {
       case 'sendComposedEmail':     result = sendComposedEmail(body);             break;
       case 'replyToThread':         result = replyToThread(body);                break;
       case 'getThreadSubject':      result = getThreadSubject(body);             break;
-      case 'ping':                  result = { ok: true, message: 'NPD Hub GAS v2.0 is live.', ts: new Date().toISOString() }; break;
+      case 'gccoGenerateLink':      result = gccoGenerateLink(body);             break;
+      case 'sendTodoDigest':        result = sendTodoDigest(body);              break;
+      case 'ping':                  result = { ok: true, message: 'NPD Hub GAS v2.1 is live.', ts: new Date().toISOString() }; break;
       default:                      result = { ok: false, error: 'Unknown action: ' + action };
     }
 
@@ -249,10 +523,217 @@ function doPost(e) {
   }
 }
 
+function gccoGenerateLink(body) {
+  try {
+    var authParam = '?auth=' + FIREBASE_DB_SECRET;
+    var token = Utilities.getUuid();
+    UrlFetchApp.fetch(FIREBASE_DB_URL + '/config/gccoToken.json' + authParam, {
+      method: 'put', contentType: 'application/json', muteHttpExceptions: true,
+      payload: JSON.stringify({ token: token, generatedAt: new Date().toISOString(), generatedBy: body.generatedBy || '' }),
+    });
+    // Use the deployed web app URL directly — ScriptApp.getService().getUrl()
+    // can fail if called from doPost context; fall back to manual URL construction
+    var gasUrl;
+    try { gasUrl = ScriptApp.getService().getUrl(); } catch(e) { gasUrl = ''; }
+    if (!gasUrl) {
+      // Derive from the script ID
+      gasUrl = 'https://script.google.com/macros/s/' + ScriptApp.getScriptId() + '/exec';
+    }
+    var url = gasUrl + '?action=gcco&token=' + token;
+    return { ok: true, url: url };
+  } catch(err) {
+    return { ok: false, error: err.message };
+  }
+}
+
 function doGet(e) {
+  var action = e && e.parameter && e.parameter.action ? e.parameter.action : '';
+
+  // ── Action: acknowledge a task alert ──────────────────────────
+    if (action === 'ack') {
+    var productId = e.parameter.p || '';
+    var taskId    = e.parameter.t || '';
+    var ackType   = e.parameter.type || 'acknowledged';
+    var email     = e.parameter.email || '';
+
+    if (!productId || !taskId) {
+      return HtmlService.createHtmlOutput(buildSimplePage(
+        'Invalid link',
+        'This acknowledgement link is missing required information. Please contact your team lead.',
+        '#C0282D'
+      )).setTitle('NPD Hub');
+    }
+
+    try {
+      var authParam = '?auth=' + FIREBASE_DB_SECRET;
+      var ackPath   = FIREBASE_DB_URL + '/products/' + productId + '/tasks/' + taskId + '/acknowledgement.json' + authParam;
+      var payload   = JSON.stringify({
+        type:        ackType,
+        acknowledgedBy: email,
+        acknowledgedAt: new Date().toISOString(),
+      });
+      UrlFetchApp.fetch(ackPath, { method: 'put', contentType: 'application/json', payload: payload, muteHttpExceptions: true });
+
+      var actId    = 'ack_' + Date.now();
+      var actPath  = FIREBASE_DB_URL + '/products/' + productId + '/activity/' + actId + '.json' + authParam;
+      var actLabel = ackType === 'needs_more_time' ? 'Requested more time' : 'Acknowledged';
+      UrlFetchApp.fetch(actPath, {
+        method: 'put', contentType: 'application/json', muteHttpExceptions: true,
+        payload: JSON.stringify({
+          id: actId, type: 'acknowledgement',
+          message: actLabel + ': alert for task ' + taskId,
+          user: email, userName: email.split('@')[0], timestamp: Date.now(),
+        }),
+      });
+
+      var title   = ackType === 'needs_more_time' ? 'Request received' : 'Alert acknowledged';
+      var msg     = ackType === 'needs_more_time'
+        ? 'Your request for more time has been logged. Your team lead will follow up.'
+        : 'Thank you. This alert has been marked as acknowledged and logged in the NPD Hub.';
+      return HtmlService.createHtmlOutput(buildSimplePage(title, msg, '#16A34A')).setTitle('NPD Hub');
+    } catch(err) {
+      return HtmlService.createHtmlOutput(buildSimplePage(
+        'Something went wrong',
+        'Could not log your acknowledgement. Please reply directly to this email instead.',
+        '#C0282D'
+      )).setTitle('NPD Hub');
+    }
+  }
+
+  // ── Action: GCCO read-only dashboard ─────────────────────────
+  if (action === 'gcco') {
+    var token = e.parameter.token || '';
+    if (!token) {
+      return HtmlService.createHtmlOutput(buildSimplePage(
+        'Access denied',
+        'This link is invalid or has expired. Please request a new one from your team lead.',
+        '#C0282D'
+      )).setTitle('NPD Hub — Access Denied');
+    }
+    try {
+      var authParam = '?auth=' + FIREBASE_DB_SECRET;
+      var tokenSnap = JSON.parse(UrlFetchApp.fetch(
+        FIREBASE_DB_URL + '/config/gccoToken.json' + authParam, { muteHttpExceptions: true }
+      ).getContentText());
+      if (!tokenSnap || tokenSnap.token !== token) {
+        return HtmlService.createHtmlOutput(buildSimplePage(
+          'Access denied',
+          'This link is invalid or has expired.',
+          '#C0282D'
+        )).setTitle('NPD Hub — Access Denied');
+      }
+      var prodData = JSON.parse(UrlFetchApp.fetch(
+        FIREBASE_DB_URL + '/products.json' + authParam, { muteHttpExceptions: true }
+      ).getContentText()) || {};
+      return HtmlService.createHtmlOutput(buildGCCODashboard(prodData))
+        .setTitle('NPD Portfolio — Mixta Africa')
+        .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
+    } catch(err) {
+      return HtmlService.createHtmlOutput(buildSimplePage(
+        'Error loading dashboard',
+        'Could not load portfolio data. Please try again later.',
+        '#C0282D'
+      )).setTitle('NPD Hub — Error');
+    }
+  }
+
+  // ── Default: health check ─────────────────────────────────────
   return ContentService
-    .createTextOutput(JSON.stringify({ ok: true, message: 'NPD Hub GAS v2.0 running.' }))
+    .createTextOutput(JSON.stringify({ ok: true, message: 'NPD Hub GAS v2.1 running.' }))
     .setMimeType(ContentService.MimeType.JSON);
+}
+
+function buildSimplePage(title, message, color) {
+  return '<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">' +
+    '<style>body{font-family:Arial,sans-serif;background:#F8F8F7;margin:0;display:flex;align-items:center;justify-content:center;min-height:100vh;padding:24px;}' +
+    '.card{background:#fff;border-radius:12px;padding:40px 36px;max-width:420px;width:100%;text-align:center;border:1px solid #E5E4E0;}' +
+    '.dot{width:52px;height:52px;border-radius:50%;margin:0 auto 20px;display:flex;align-items:center;justify-content:center;}' +
+    'h2{font-size:18px;font-weight:700;color:#1A1A18;margin:0 0 10px;}p{font-size:14px;color:#6B6B67;line-height:1.7;margin:0;}' +
+    '.brand{font-size:11px;color:#9A9A96;margin-top:24px;text-transform:uppercase;letter-spacing:.06em;}</style></head><body>' +
+    '<div class="card">' +
+      '<div class="dot" style="background:' + color + '20;">' +
+        '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="' + color + '" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' +
+          (color === '#16A34A'
+            ? '<path d="M22 11.08V12a10 10 0 11-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/>'
+            : '<circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>') +
+        '</svg>' +
+      '</div>' +
+      '<h2>' + title + '</h2>' +
+      '<p>' + message + '</p>' +
+      '<div class="brand">Mixta Africa — NPD Hub</div>' +
+    '</div></body></html>';
+}
+
+function buildGCCODashboard(prodData) {
+  var today    = new Date(); today.setHours(0,0,0,0);
+  var products = Object.values(prodData || {}).filter(function(p) { return p.status !== 'archived'; });
+  var totalActive = products.length;
+  var totalOverdue = 0;
+  var totalOnTrack = 0;
+
+  var rows = products.map(function(p) {
+    var tasks = Object.values(p.tasks || p.pillars || {});
+    var done = 0, overdue = 0, delayed = 0, onTrack = 0, total = tasks.length;
+    tasks.forEach(function(t) {
+      var st = t.status || t.taskStatus || '';
+      if (st === 'complete') { done++; return; }
+      if (st === 'delayed')  { delayed++; overdue++; return; }
+      if (t.deadline) {
+        var d = new Date(t.deadline); d.setHours(0,0,0,0);
+        if (d < today) { overdue++; return; }
+      }
+      onTrack++;
+    });
+    totalOverdue += overdue;
+    totalOnTrack += onTrack;
+    var pct = total > 0 ? Math.round((done / total) * 100) : 0;
+    var launch = p.launchDate ? new Date(p.launchDate) : null;
+    var daysLeft = launch ? Math.round((launch - today) / 86400000) : null;
+    var launchStr = daysLeft === null ? '—'
+      : daysLeft < 0  ? Math.abs(daysLeft) + 'd overdue'
+      : daysLeft === 0 ? 'Today'
+      : daysLeft + 'd to go';
+    var launchColor = daysLeft !== null && daysLeft < 0 ? '#C0282D' : daysLeft !== null && daysLeft <= 14 ? '#D97706' : '#16A34A';
+    var healthColor = overdue > 0 ? '#C0282D' : pct > 50 ? '#16A34A' : '#D97706';
+    return '<tr>' +
+      '<td style="padding:12px 16px;font-weight:600;color:#1A1A18;">' + (p.name || '—') + '</td>' +
+      '<td style="padding:12px 16px;"><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:' + healthColor + ';margin-right:6px;"></span>' + pct + '% done</td>' +
+      '<td style="padding:12px 16px;color:' + (overdue > 0 ? '#C0282D' : '#16A34A') + ';font-weight:' + (overdue > 0 ? '600' : '400') + ';">' +
+        (overdue > 0 ? overdue + ' overdue' + (delayed > 0 ? ' (' + delayed + ' delayed)' : '') : 'On track') +
+      '</td>' +
+      '<td style="padding:12px 16px;color:' + launchColor + ';font-weight:500;">' + launchStr + '</td>' +
+      '<td style="padding:12px 16px;color:#6B6B67;font-size:12px;">' + (p.ownerName || '—') + '</td>' +
+    '</tr>';
+  }).join('');
+
+  var genTime = Utilities.formatDate(new Date(), 'Africa/Lagos', 'dd MMM yyyy, hh:mm a') + ' WAT';
+  return '<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">' +
+    '<title>NPD Portfolio — Mixta Africa</title>' +
+    '<style>*{box-sizing:border-box;margin:0;padding:0;}body{font-family:Arial,sans-serif;background:#F8F8F7;padding:24px;}' +
+    '.header{background:#C0282D;border-radius:10px;padding:20px 28px;margin-bottom:20px;display:flex;align-items:center;justify-content:space-between;}' +
+    '.header h1{color:#fff;font-size:18px;font-weight:700;}.header p{color:#FFD5D5;font-size:12px;margin-top:3px;}' +
+    '.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:20px;}' +
+    '.stat{background:#fff;border-radius:8px;padding:16px 20px;border:1px solid #E5E4E0;}' +
+    '.stat-lbl{font-size:11px;color:#9A9A96;text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px;}' +
+    '.stat-val{font-size:28px;font-weight:700;}' +
+    'table{width:100%;background:#fff;border-radius:8px;border:1px solid #E5E4E0;border-collapse:collapse;overflow:hidden;}' +
+    'thead{background:#F8F8F7;}th{padding:10px 16px;text-align:left;font-size:11px;color:#9A9A96;text-transform:uppercase;letter-spacing:.06em;font-weight:600;}' +
+    'tr:not(:last-child){border-bottom:1px solid #F0F0EE;}' +
+    '.footer{text-align:center;font-size:11px;color:#9A9A96;margin-top:20px;}' +
+    '.ro-badge{background:#FEF2F2;color:#C0282D;font-size:10px;font-weight:600;padding:3px 8px;border-radius:10px;letter-spacing:.04em;}</style></head><body>' +
+    '<div class="header">' +
+      '<div><h1>NPD Portfolio Overview</h1><p>Mixta Africa — Commercial Strategy</p></div>' +
+      '<span class="ro-badge">READ ONLY</span>' +
+    '</div>' +
+    '<div class="stats">' +
+      '<div class="stat"><div class="stat-lbl">Active Products</div><div class="stat-val">' + totalActive + '</div></div>' +
+      '<div class="stat"><div class="stat-lbl">Overdue Tasks</div><div class="stat-val" style="color:#C0282D;">' + totalOverdue + '</div></div>' +
+      '<div class="stat"><div class="stat-lbl">On Track Tasks</div><div class="stat-val" style="color:#16A34A;">' + totalOnTrack + '</div></div>' +
+    '</div>' +
+    '<table><thead><tr><th>Product</th><th>Progress</th><th>Status</th><th>Launch</th><th>Owner</th></tr></thead>' +
+    '<tbody>' + rows + '</tbody></table>' +
+    '<div class="footer">Generated ' + genTime + ' &nbsp;·&nbsp; Mixta Africa NPD Hub &nbsp;·&nbsp; Read-only view</div>' +
+    '</body></html>';
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -441,11 +922,16 @@ function checkAndSendDeadlineAlerts(body) {
     alerts.forEach(function(alert) {
       try {
         var subject = buildAlertSubject(alert);
-        var html    = buildAlertEmail(alert);
         var alertRecipients = resolveRecipients(alert.deptEmails || [], body.testMode);
         var alertSubject = (body.testMode ? '[TEST] ' : '') + subject;
         alertRecipients.forEach(function(email) {
           try {
+            // Pass recipient email and taskId so acknowledge links are personalised
+            var alertWithRecipient = Object.assign({}, alert, {
+              recipientEmail: email,
+              taskId: alert.pillarId || alert.taskId || '',
+            });
+            var html = buildAlertEmail(alertWithRecipient);
             GmailApp.sendEmail(email, alertSubject, '', { htmlBody: html, name: SENDER_NAME });
             sent++;
           } catch(e) {
@@ -469,27 +955,40 @@ function checkAndSendDeadlineAlerts(body) {
 
 function buildAlertSubject(alert) {
   var daysStr = alert.daysOverdue > 0 ? ' (' + alert.daysOverdue + 'd overdue)' : '';
-  var prefix  = alert.alertType === 'overdue' ? '🔴 OVERDUE' + daysStr
-              : alert.alertType === 'due'     ? '🟠 DUE TODAY'
-              : '🟡 DUE IN ' + alert.daysUntil + 'D';
-  return prefix + ': ' + alert.pillarName + ' — ' + alert.productName;
+  var prefix  = alert.alertType === 'overdue' ? '[OVERDUE' + daysStr + ']'
+              : alert.alertType === 'due'     ? '[DUE TODAY]'
+              : '[DUE IN ' + alert.daysUntil + 'D]';
+  return prefix + ' ' + alert.pillarName + ' — ' + alert.productName;
 }
 
 function buildAlertEmail(alert) {
-  var daysText = alert.daysUntil < 0
+  var daysText = alert.daysUntil === null
+    ? 'Marked as delayed'
+    : alert.daysUntil < 0
     ? Math.abs(alert.daysUntil) + ' day' + (Math.abs(alert.daysUntil) > 1 ? 's' : '') + ' overdue'
     : alert.daysUntil === 0 ? 'Due today'
     : 'Due in ' + alert.daysUntil + ' day' + (alert.daysUntil > 1 ? 's' : '');
 
-  var headerBg = alert.alertType === 'overdue' ? '#C0282D'
+  var headerBg = alert.alertType === 'overdue' || alert.alertType === 'delayed' ? '#C0282D'
                : alert.alertType === 'due'     ? '#D97706'
                : '#D97706';
 
   var urgencyMsg = alert.alertType === 'overdue'
-    ? 'This pillar is <strong>overdue</strong>. Immediate action is required to update the task status or escalate.'
+    ? 'This task is <strong>' + Math.abs(alert.daysUntil) + ' day' + (Math.abs(alert.daysUntil) > 1 ? 's' : '') + ' overdue</strong>. Immediate action is required — update the status or escalate.'
+    : alert.alertType === 'delayed'
+    ? 'This task has been <strong>marked as delayed</strong>. Please provide an updated timeline and communicate the impact to your team lead.'
     : alert.alertType === 'due'
-    ? 'This pillar is <strong>due today</strong>. Please update the task status on the NPD Hub.'
-    : 'This pillar deadline is <strong>3 days away</strong>. Please review progress and ensure it is on track.';
+    ? 'This task is <strong>due today</strong>. Please update the status on the NPD Hub.'
+    : 'This task deadline is <strong>' + alert.daysUntil + ' day' + (alert.daysUntil > 1 ? 's' : '') + ' away</strong>. Please review progress and ensure it is on track.';
+
+  // Build acknowledge URLs using ScriptApp.getService().getUrl()
+  var baseUrl = ScriptApp.getService().getUrl();
+  var ackUrl  = baseUrl + '?action=ack&p=' + encodeURIComponent(alert.productId || '') +
+    '&t=' + encodeURIComponent(alert.taskId || '') +
+    '&type=acknowledged&email=' + encodeURIComponent(alert.recipientEmail || '');
+  var moreUrl = baseUrl + '?action=ack&p=' + encodeURIComponent(alert.productId || '') +
+    '&t=' + encodeURIComponent(alert.taskId || '') +
+    '&type=needs_more_time&email=' + encodeURIComponent(alert.recipientEmail || '');
 
   return '<!DOCTYPE html><html><body style="font-family:Arial,sans-serif;background:#f8f8f7;margin:0;padding:24px;">' +
   '<div style="max-width:600px;margin:0 auto;background:#ffffff;border-radius:8px;overflow:hidden;border:1px solid #e5e4e0;">' +
@@ -508,7 +1007,12 @@ function buildAlertEmail(alert) {
       '<div style="font-size:13px;color:#6b6b67;margin-top:4px;"><strong>Deadline:</strong> ' + alert.deadline + '</div>' +
     '</div>' +
 
-    '<p style="font-size:14px;color:#1a1a18;line-height:1.7;margin:0 0 20px;">' + urgencyMsg + '</p>' +
+    '<p style="font-size:14px;color:#1a1a18;line-height:1.7;margin:0 0 24px;">' + urgencyMsg + '</p>' +
+
+    '<div style="display:flex;gap:12px;margin-bottom:24px;">' +
+      '<a href="' + ackUrl + '" style="flex:1;display:inline-block;background:#16A34A;color:#ffffff;text-align:center;padding:12px 16px;border-radius:8px;font-size:13px;font-weight:700;text-decoration:none;">I have seen this</a>' +
+      '<a href="' + moreUrl + '" style="flex:1;display:inline-block;background:#F8F8F7;color:#1A1A18;text-align:center;padding:12px 16px;border-radius:8px;font-size:13px;font-weight:600;text-decoration:none;border:1px solid #E5E4E0;">I need more time</a>' +
+    '</div>' +
 
     '<p style="font-size:12px;color:#9a9a96;line-height:1.6;margin:0;">This is an automated alert from the Mixta Africa NPD Hub deadline monitoring system. Only your department received this alert.</p>' +
   '</div>' +
