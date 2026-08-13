@@ -874,6 +874,7 @@ async function callGAS(action, payload) {
 
 /* ── STATUS HELPERS ── */
 function getPillarStatus(deadline) {
+  // Date-only check — used where we only have a deadline string
   if (!deadline) return 'no-date';
   const today = new Date(); today.setHours(0,0,0,0);
   const due   = new Date(deadline); due.setHours(0,0,0,0);
@@ -882,16 +883,13 @@ function getPillarStatus(deadline) {
   if (diff <= 3) return 'warning';
   return 'ontrack';
 }
-/* ── UNIFIED STATUS RESOLVER ──────────────────────────────────
-   Single source of truth for a task's effective status.
-   Priority: complete > delayed (explicit) > overdue (date) > due-soon > on-track
-   Every part of the dashboard references THIS so a change anywhere
-   propagates everywhere. ────────────────────────────────────── */
-function resolveTaskStatus(task) {
+
+// Full task status — always prefer this over getPillarStatus when you have the task object
+// Returns: 'complete' | 'delayed' | 'overdue' | 'due-soon' | 'on-track'
+function getTaskEffectiveStatus(task) {
   const s = task.status || task.taskStatus || 'on-track';
   if (s === 'complete') return 'complete';
-  if (s === 'delayed')  return 'delayed';
-  // Not explicitly delayed/complete → derive from deadline
+  if (s === 'delayed')  return 'delayed';   // explicit delay always wins
   if (!task.deadline)   return 'on-track';
   const today = new Date(); today.setHours(0,0,0,0);
   const due   = new Date(task.deadline); due.setHours(0,0,0,0);
@@ -899,6 +897,14 @@ function resolveTaskStatus(task) {
   if (diff < 0)  return 'overdue';
   if (diff <= 3) return 'due-soon';
   return 'on-track';
+}
+/* ── UNIFIED STATUS RESOLVER ──────────────────────────────────
+   Single source of truth for a task's effective status.
+   Priority: complete > delayed (explicit) > overdue (date) > due-soon > on-track
+   Every part of the dashboard references THIS so a change anywhere
+   propagates everywhere. ────────────────────────────────────── */
+function resolveTaskStatus(task) {
+  return getTaskEffectiveStatus(task);
 }
 
 // Colour + label lookup — used by every status pill/dot on the dashboard
@@ -1010,14 +1016,14 @@ function _updateDashboardUI(list) {
     const upcomingDeadlines = [];
 
     list.forEach(prod => {
-      // Use unified task system — works for both new tasks{} and legacy pillars{}
       const tasks = getProductTasks(prod);
       tasks.forEach(task => {
+        if (task.status === 'complete' || task.taskStatus === 'complete') return;
+        const eff = resolveTaskStatus(task);
+        if (eff === 'on-track' || eff === 'due-soon') ontrack++;
+        if (eff === 'overdue' || eff === 'delayed') overdue++;
+        // Upcoming deadlines panel — tasks due within 7 days (non-complete)
         if (!task.deadline) return;
-        if (task.status === 'complete') return;
-        const st  = getPillarStatus(task.deadline);
-        if (st === 'ontrack') ontrack++;
-        if (st === 'overdue') overdue++;
         const due = new Date(task.deadline); due.setHours(0,0,0,0);
         if (due >= today && due <= weekEnd) {
           thisWeek++;
@@ -1027,7 +1033,7 @@ function _updateDashboardUI(list) {
             pillar:    task.title || task.name,
             pillarId:  task.id,
             date:      task.deadline,
-            status:    st,
+            status:    eff,
           });
         }
       });
@@ -1038,11 +1044,14 @@ function _updateDashboardUI(list) {
     const slipped = list.filter(p => p.baselineLaunchDate && p.baselineLaunchDate !== p.launchDate &&
       new Date(p.launchDate) > new Date(p.baselineLaunchDate));
     const atRiskCount = list.filter(p => {
-      const tasks    = getProductTasks(p);
-      const issues   = tasks.filter(t => t.status === 'delayed' || (t.deadline && getPillarStatus(t.deadline) === 'overdue')).length;
-      const launch   = p.launchDate ? new Date(p.launchDate) : null;
+      const tasks  = getProductTasks(p);
+      const issues = tasks.filter(t => {
+        const eff = resolveTaskStatus(t);
+        return eff === 'overdue' || eff === 'delayed';
+      }).length;
+      const launch = p.launchDate ? new Date(p.launchDate) : null;
       if (launch) launch.setHours(0,0,0,0);
-      const days     = launch ? Math.round((launch - today) / 86400000) : null;
+      const days = launch ? Math.round((launch - today) / 86400000) : null;
       return issues >= 2 && days !== null && days >= 0 && days <= 21;
     }).length;
     const slipEl  = document.getElementById('stat-slip');
@@ -1108,7 +1117,7 @@ function _updateDashboardUI(list) {
       dlEl.innerHTML = '<div class="empty-state-sm"><span class="empty-icon" style="color:var(--text-muted);"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg></span><p>No deadlines this week.</p></div>';
     } else {
       upcomingDeadlines.sort((a,b) => new Date(a.date) - new Date(b.date));
-      const dlColors = { overdue: 'var(--red)', warning: 'var(--amber)', ontrack: 'var(--green)' };
+      const dlColors = { overdue: 'var(--red)', delayed: 'var(--red)', 'due-soon': 'var(--amber)', warning: 'var(--amber)', 'on-track': 'var(--green)', ontrack: 'var(--green)' };
       dlEl.innerHTML = upcomingDeadlines.slice(0,5).map(d => {
         const dotColor = dlColors[d.status] || 'var(--text-muted)';
         const due = new Date(d.date); due.setHours(0,0,0,0);
@@ -1483,18 +1492,17 @@ async function loadProductList() {
 }
 
 function renderProductCard(p) {
-  // Use unified task system — works for both new tasks{} and legacy pillars{}
-  const allTasks      = getProductTasks(p);
-  const total         = allTasks.length || 1;
-  const complete      = allTasks.filter(t => t.status === 'complete').length;
-  const overduePl     = allTasks.filter(t =>
-    t.deadline && t.status !== 'complete' && getPillarStatus(t.deadline) === 'overdue'
-  ).length;
-  const delayed       = allTasks.filter(t => t.status === 'delayed').length;
-  const pillarsWithDates = allTasks.filter(t => t.deadline);
-  const pct           = Math.round((complete / total) * 100);
-  const statusCls = p.status || 'active';
-  const statusLbl = p.status === 'complete' ? 'Complete' : 'Active';
+  const allTasks   = getProductTasks(p);
+  const total      = allTasks.length || 1;
+  const complete   = allTasks.filter(t => resolveTaskStatus(t) === 'complete').length;
+  const overduePl  = allTasks.filter(t => {
+    const eff = resolveTaskStatus(t);
+    return eff === 'overdue' || eff === 'delayed';
+  }).length;
+  const delayed    = allTasks.filter(t => t.status === 'delayed').length;
+  const pct        = Math.round((complete / total) * 100);
+  const statusCls  = p.status || 'active';
+  const statusLbl  = p.status === 'complete' ? 'Complete' : 'Active';
   const overdueHtml = overduePl > 0
     ? `<div class="pcf-meta-item"><span class="pcf-meta-label">Overdue</span><span class="pcf-meta-val red">${overduePl}</span></div>`
     : '';
