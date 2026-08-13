@@ -86,29 +86,45 @@ jobs:
                 }));
               }
 
+              // Skip if alerts disabled for this product
+              if (prod.alertsEnabled === false) return;
+
+              // Recipient: manual override → owner → fallback
+              let deptEmails = [];
+              if (prod.alertRecipients && prod.alertRecipients.length > 0) {
+                deptEmails = prod.alertRecipients;
+              } else if (prod.ownerId && users[prod.ownerId]?.email) {
+                deptEmails = [users[prod.ownerId].email];
+              } else {
+                console.log('No recipient for ' + prod.name + ' — skipping');
+                return;
+              }
+
               tasks.forEach(task => {
-                if (!task.deadline || task.status === 'complete') return;
-                const due  = new Date(task.deadline); due.setHours(0,0,0,0);
-                const diff = Math.round((due - today) / (86400000));
+                const taskStatus = task.status || 'on-track';
+                // Never alert on complete tasks
+                if (taskStatus === 'complete') return;
+                const isDelayed = taskStatus === 'delayed';
 
-                // KEY CHANGE: overdue tasks fire EVERY DAY with no cutoff
-                if (diff > THRESHOLD_DAYS) return;
-
-                const daysOverdue = diff < 0 ? Math.abs(diff) : 0;
-
-                // Skip if alerts disabled for this product
-                if (prod.alertsEnabled === false) return;
-
-                // Recipient: manual override → owner → fallback
-                let deptEmails = [];
-                if (prod.alertRecipients && prod.alertRecipients.length > 0) {
-                  deptEmails = prod.alertRecipients;
-                } else if (prod.ownerId && users[prod.ownerId]?.email) {
-                  deptEmails = [users[prod.ownerId].email];
-                } else {
-                  console.log('No recipient for ' + prod.name + ' — skipping');
-                  return;
+                let diff = null;
+                let daysOverdue = 0;
+                if (task.deadline) {
+                  const due = new Date(task.deadline); due.setHours(0,0,0,0);
+                  diff = Math.round((due - today) / 86400000);
+                  daysOverdue = diff < 0 ? Math.abs(diff) : 0;
                 }
+
+                // Skip future non-delayed tasks beyond threshold
+                if (!isDelayed && diff !== null && diff > THRESHOLD_DAYS) return;
+                // Skip tasks with no deadline that are not delayed
+                if (!isDelayed && diff === null) return;
+
+                const alertType = diff === null
+                  ? 'delayed'
+                  : diff < 0  ? 'overdue'
+                  : diff === 0 ? 'due'
+                  : isDelayed  ? 'delayed'
+                  : 'warning';
 
                 alerts.push({
                   productName: prod.name,
@@ -119,8 +135,9 @@ jobs:
                   deptEmails,
                   daysUntil:   diff,
                   daysOverdue,
-                  deadline:    task.deadline,
-                  alertType:   diff < 0 ? 'overdue' : diff === 0 ? 'due' : 'warning',
+                  deadline:    task.deadline || null,
+                  taskStatus,
+                  alertType,
                 });
               });
             });
