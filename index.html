@@ -1720,11 +1720,13 @@ function buildTaskEditorForm() {
     </div>
     ${buildOwnerField(null)}
 
-    <div class="form-section-label" style="margin-top:20px;display:flex;align-items:center;justify-content:space-between;">
+    <div class="form-section-label" style="margin-top:20px;">
       <span>Tasks <span class="form-hint">— ${_editingTasks.length} task${_editingTasks.length!==1?'s':''}</span></span>
-      <button class="btn-primary-sm" onclick="addNewTaskRow()">+ Add task</button>
     </div>
-    <div id="task-editor-list">${taskRows || '<div class="muted" style="padding:12px 0;font-size:13px;">No tasks yet. Click + Add task to begin.</div>'}</div>
+    <div id="task-editor-list">
+      ${taskRows || '<div class="muted" style="padding:12px 0;font-size:13px;">No tasks yet. Add one below.</div>'}
+      <button class="btn-outline" style="margin-top:10px;width:100%;font-size:12px;" onclick="addNewTaskRow()">+ Add task</button>
+    </div>
 
     <div class="form-actions" style="flex-direction:column;gap:8px;">
       <div style="display:flex;gap:10px;justify-content:flex-end;">
@@ -1735,62 +1737,113 @@ function buildTaskEditorForm() {
     </div>`;
 }
 
+function buildOwnerDeptOptions(selectedDept) {
+  return getDepts().map(d =>
+    '<option value="' + d + '"' + (selectedDept === d ? ' selected' : '') + '>' + d + '</option>'
+  ).join('');
+}
+
+function buildOwnerIndividualOptions(dept, selectedName) {
+  const members = STAKEHOLDERS.filter(s => s.dept === dept && s.enabled !== false);
+  if (!members.length) return '<option value="">— no members —</option>';
+  return members.map(s =>
+    '<option value="' + s.name + '"' + (selectedName === s.name ? ' selected' : '') + '>' +
+      (s.isDeptEmail ? dept + ' (whole dept)' : s.name) +
+    '</option>'
+  ).join('');
+}
+
 function buildTaskRow(t, i) {
   const predOptions = _editingTasks
     .filter(x => x.id !== t.id)
-    .map(x => `<option value="${x.id}" ${(t.predecessors||[]).includes(x.id)?'selected':''}>${x.title||'Untitled'}</option>`)
+    .map(x => '<option value="' + x.id + '"' + ((t.predecessors||[]).includes(x.id) ? ' selected' : '') + '>' + (x.title||'Untitled') + '</option>')
     .join('');
 
-  return `<div class="task-edit-row" id="terow-${t.id}">
-    <div class="task-edit-header">
-      <div class="task-edit-num">${i+1}</div>
-      <input type="text" class="input-field task-edit-title" placeholder="Task name"
-        value="${t.title}" onblur="updateEditingTask('${t.id}','title',this.value)"/>
-      <button class="btn-danger-xs" onclick="removeEditingTask('${t.id}')">✕</button>
-    </div>
-    <div class="task-edit-body">
-      <div class="task-edit-col">
-        <label class="form-label">Start date</label>
-        <input type="date" class="input-field" value="${t.startDate||''}"
-          onchange="updateEditingTask('${t.id}','startDate',this.value)"/>
-      </div>
-      <div class="task-edit-col">
-        <label class="form-label">Deadline</label>
-        <input type="date" class="input-field" value="${t.deadline||''}"
-          onchange="updateEditingTask('${t.id}','deadline',this.value)"/>
-      </div>
-      <div class="task-edit-col">
-        <label class="form-label">Owner dept</label>
-        <input type="text" class="input-field" placeholder="e.g. Design" value="${t.owner||''}"
-          onblur="updateEditingTask('${t.id}','owner',this.value)"/>
-      </div>
-      <div class="task-edit-col task-edit-col-wide">
-        <label class="form-label">Depends on <span class="form-hint">— hold Ctrl/Cmd to select multiple</span></label>
-        <select class="select-field" multiple style="height:56px;font-size:12px;"
-          onchange="updateEditingTaskPreds('${t.id}',this)">
-          <option value="" disabled style="color:var(--text-muted);">No dependency</option>
-          ${predOptions}
-        </select>
-      </div>
-    </div>
-  </div>`;
+  // Parse existing owner into dept + individual
+  const existingDept = t.ownerDept || (getDepts().find(d => STAKEHOLDERS.some(s => s.dept === d && s.name === t.owner)) || getDepts()[0]);
+  const existingInd  = t.ownerIndividual || t.owner || '';
+
+  return '<div class="task-edit-row" id="terow-' + t.id + '">' +
+    '<div class="task-edit-header">' +
+      '<div class="task-edit-num">' + (i+1) + '</div>' +
+      '<input type="text" class="input-field task-edit-title" placeholder="Task name" value="' + (t.title||'') + '"' +
+        ' onblur="updateEditingTask(\'' + t.id + '\',\'title\',this.value)"/>' +
+      '<button class="btn-danger-xs" onclick="removeEditingTask(\'' + t.id + '\')">✕</button>' +
+    '</div>' +
+    '<div class="task-edit-body">' +
+      '<div class="task-edit-col">' +
+        '<label class="form-label">Deadline <span class="req">*</span></label>' +
+        '<input type="date" class="input-field" value="' + (t.deadline||'') + '"' +
+          ' onchange="updateEditingTask(\'' + t.id + '\',\'deadline\',this.value)"/>' +
+      '</div>' +
+      '<div class="task-edit-col">' +
+        '<label class="form-label">Department</label>' +
+        '<select class="select-field" onchange="updateTaskOwnerDept(\'' + t.id + '\',this.value)">' +
+          buildOwnerDeptOptions(existingDept) +
+        '</select>' +
+      '</div>' +
+      '<div class="task-edit-col" id="ind-col-' + t.id + '">' +
+        '<label class="form-label">Individual owner</label>' +
+        '<select class="select-field" onchange="updateEditingTask(\'' + t.id + '\',\'ownerIndividual\',this.value);updateEditingTask(\'' + t.id + '\',\'owner\',this.value)">' +
+          buildOwnerIndividualOptions(existingDept, existingInd) +
+        '</select>' +
+      '</div>' +
+      '<div class="task-edit-col task-edit-col-wide">' +
+        '<label class="form-label">Depends on <span class="form-hint">— hold Ctrl/Cmd for multiple</span></label>' +
+        '<select class="select-field" multiple style="height:52px;font-size:12px;" onchange="updateEditingTaskPreds(\'' + t.id + '\',this)">' +
+          '<option value="" disabled style="color:var(--text-muted);">No dependency</option>' +
+          predOptions +
+        '</select>' +
+      '</div>' +
+    '</div>' +
+  '</div>';
+}
+
+window.updateTaskOwnerDept = (id, dept) => {
+  const t = _editingTasks.find(x => x.id === id);
+  if (!t) return;
+  t.ownerDept = dept;
+  t.owner = dept; // default owner to dept until individual is chosen
+  t.ownerIndividual = '';
+  // Re-render just the individual select for this row
+  const indCol = document.getElementById('ind-col-' + id);
+  if (indCol) {
+    const sel = indCol.querySelector('select');
+    if (sel) sel.innerHTML = buildOwnerIndividualOptions(dept, '');
+  }
+};
+
+function renderTaskEditorList() {
+  const container = document.getElementById('task-editor-list');
+  if (!container) return;
+  container.innerHTML = (_editingTasks.length
+    ? _editingTasks.map((t, i) => buildTaskRow(t, i)).join('')
+    : '<div class="muted" style="padding:12px 0;font-size:13px;">No tasks yet. Add one below.</div>') +
+    '<button class="btn-outline" style="margin-top:10px;width:100%;font-size:12px;" onclick="addNewTaskRow()">' +
+      '+ Add task' +
+    '</button>';
 }
 
 window.addNewTaskRow = () => {
   const t = {
-    id: generateTaskId(), title: '', description: '', owner: '',
-    ownerEmails: [], deadline: '', startDate: '', status: 'on-track',
+    id: generateTaskId(), title: '', owner: '',
+    ownerDept: getDepts()[0] || '', ownerIndividual: '',
+    deadline: '', status: 'on-track',
     predecessors: [], locked: false, pillarId: null,
     order: _editingTasks.length, kanbanCol: 'todo',
   };
   _editingTasks.push(t);
-  document.getElementById('task-editor-list').innerHTML = _editingTasks.map(buildTaskRow).join('');
+  renderTaskEditorList();
+  // Scroll to the newly added row
+  setTimeout(() => {
+    const newRow = document.getElementById('terow-' + t.id);
+    if (newRow) newRow.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }, 80);
 };
 
 window.removeEditingTask = (id) => {
   _editingTasks = _editingTasks.filter(t => t.id !== id);
-  document.getElementById('task-editor-list').innerHTML = _editingTasks.map(buildTaskRow).join('') ||
-    '<div class="muted" style="padding:12px 0;font-size:13px;">No tasks yet.</div>';
+  renderTaskEditorList();
 };
 
 window.updateEditingTask = (id, field, value) => {
@@ -1901,38 +1954,48 @@ function buildOwnerField(p) {
 window.showAddTaskToProduct = (productId) => {
   const prod = productListCache[productId];
   if (!prod) return;
+  const firstDept = getDepts()[0] || '';
   document.getElementById('modal-title-text').textContent = 'Add task — ' + prod.name;
-  document.getElementById('modal-body-content').innerHTML = `
-    <p style="font-size:13px;color:var(--text-mid);margin-bottom:16px;line-height:1.7;">
-      Add a new task to this product. Existing tasks cannot be deleted once the first deadline has passed.
-    </p>
-    <div class="form-row"><label class="form-label">Task name <span class="req">*</span></label>
-      <input type="text" id="at-title" class="input-field" placeholder="e.g. Regulatory approval"/></div>
-    <div class="form-row"><label class="form-label">Owner / Department</label>
-      ${buildOwnerSelect('at-owner', '')}</div>
-    <div class="form-row"><label class="form-label">Start date</label>
-      <input type="date" id="at-start" class="input-field"/></div>
-    <div class="form-row"><label class="form-label">Deadline</label>
-      <input type="date" id="at-deadline" class="input-field"/></div>
-    <div class="form-actions">
-      <button class="btn-outline" onclick="closeProductModal()">Cancel</button>
-      <button class="btn-primary" onclick="addTaskToProduct('${productId}')">Add task</button>
-    </div>`;
+  document.getElementById('modal-body-content').innerHTML =
+    '<p style="font-size:13px;color:var(--text-mid);margin-bottom:16px;line-height:1.7;">Add a new task to this product.</p>' +
+    '<div class="form-row"><label class="form-label">Task name <span class="req">*</span></label>' +
+      '<input type="text" id="at-title" class="input-field" placeholder="e.g. Regulatory approval"/></div>' +
+    '<div class="form-row"><label class="form-label">Department</label>' +
+      '<select id="at-dept" class="select-field" style="width:100%;" onchange="updateAddTaskIndividuals()">' +
+        getDepts().map(d => '<option value="' + d + '">' + d + '</option>').join('') +
+      '</select></div>' +
+    '<div class="form-row"><label class="form-label">Individual owner</label>' +
+      '<select id="at-owner" class="select-field" style="width:100%;">' +
+        buildOwnerIndividualOptions(firstDept, '') +
+      '</select></div>' +
+    '<div class="form-row"><label class="form-label">Deadline <span class="req">*</span></label>' +
+      '<input type="date" id="at-deadline" class="input-field"/></div>' +
+    '<div class="form-actions">' +
+      '<button class="btn-outline" onclick="closeProductModal()">Cancel</button>' +
+      '<button class="btn-primary" onclick="addTaskToProduct(\'' + productId + '\')">Add task</button>' +
+    '</div>';
   document.getElementById('create-product-modal').style.display = 'flex';
+};
+
+window.updateAddTaskIndividuals = () => {
+  const dept = document.getElementById('at-dept')?.value || '';
+  const sel  = document.getElementById('at-owner');
+  if (sel) sel.innerHTML = buildOwnerIndividualOptions(dept, '');
 };
 
 window.addTaskToProduct = async (productId) => {
   const title    = document.getElementById('at-title')?.value.trim();
-  const owner    = document.getElementById('at-owner')?.value.trim() || '';
-  const startDate= document.getElementById('at-start')?.value || '';
+  const dept     = document.getElementById('at-dept')?.value || '';
+  const owner    = document.getElementById('at-owner')?.value.trim() || dept;
   const deadline = document.getElementById('at-deadline')?.value || '';
-  if (!title) { showToast('Task name required.', 'error'); return; }
+  if (!title)    { showToast('Task name required.', 'error'); return; }
+  if (!deadline) { showToast('Deadline is required.', 'error'); return; }
 
   const prod   = productListCache[productId];
   const tasks  = getProductTasks(prod);
   const taskId = generateTaskId();
   const task   = {
-    id: taskId, title, owner, startDate, deadline,
+    id: taskId, title, owner, ownerDept: dept, deadline,
     status: 'on-track', predecessors: [], locked: false,
     pillarId: null, order: tasks.length, kanbanCol: 'todo',
     createdAt: Date.now(), createdBy: currentUser.email,
@@ -1943,7 +2006,7 @@ window.addTaskToProduct = async (productId) => {
   productListCache[productId].tasks[taskId] = task;
 
   closeProductModal();
-  await logActivity(productId, 'task_added', `New task added: ${title}`, `Owner: ${owner || 'unassigned'}`);
+  await logActivity(productId, 'task_added', 'New task added: ' + title, 'Owner: ' + owner);
   showToast('Task added.', 'success');
   if (currentView === 'tracker') renderTrackerTable(productListCache[productId], null);
 };
@@ -6943,6 +7006,8 @@ window.__npd_init({
   cancelPreferredName:     window.cancelPreferredName,
   addCustomOnboardEmail:   window.addCustomOnboardEmail,
   removeCustomOnboardEmail: window.removeCustomOnboardEmail,
+  updateTaskOwnerDept:     window.updateTaskOwnerDept,
+  updateAddTaskIndividuals: window.updateAddTaskIndividuals,
   saveEmailSchedule:       window.saveEmailSchedule,
   sendMyTodoNow:           window.sendMyTodoNow,
   showAddDocFolder:        window.showAddDocFolder,
