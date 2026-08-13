@@ -927,54 +927,58 @@ function generateId() {
 
 /* ── DASHBOARD ── */
 function renderDashboard(el) {
-  const firstName = (currentUser?.displayName || 'there').split(' ')[0];
-  el.innerHTML =
-    '<div class="view-header">' +
-      '<div>' +
-        '<h1 class="view-title">Good ' + getGreeting() + ', ' + firstName + '.</h1>' +
-        '<p class="view-subtitle">' + (currentRole === 'admin' ? 'Team overview — all products' : 'My products — Commercial Strategy') + '</p>' +
-      '</div>' +
-      (currentRole === 'admin' ? '<button class="btn-primary" onclick="loadView(\'products\')">+ New product</button>' : '') +
-    '</div>' +
-    '<div class="stats-row">' +
-      '<div class="stat-card stat-card-link dash-stat-card" onclick="loadView(\'products\')" style="border-top:3px solid var(--red);">' +
-        '<div class="stat-label">Active Products</div>' +
-        '<div class="stat-value" id="stat-active">—</div>' +
-        '<div class="stat-nav-hint" id="stat-slip" style="color:var(--red);font-weight:500;min-height:16px;"></div>' +
-      '</div>' +
-      '<div class="stat-card stat-card-link dash-stat-card" onclick="dashNavToTracker(\'ontrack\')" style="border-top:3px solid var(--green);">' +
-        '<div class="stat-label">On Track</div>' +
-        '<div class="stat-value green" id="stat-ontrack">—</div>' +
-        '<div class="stat-nav-hint">View tracker →</div>' +
-      '</div>' +
-      '<div class="stat-card stat-card-link dash-stat-card" onclick="dashNavToTracker(\'overdue\')" style="border-top:3px solid var(--red);">' +
-        '<div class="stat-label">Overdue</div>' +
-        '<div class="stat-value red" id="stat-overdue">—</div>' +
-        '<div class="stat-nav-hint">View tracker →</div>' +
-      '</div>' +
-      '<div class="stat-card stat-card-link dash-stat-card" onclick="loadView(\'calendar\')" style="border-top:3px solid var(--amber);">' +
-        '<div class="stat-label">Due This Week</div>' +
-        '<div class="stat-value amber" id="stat-week">—</div>' +
-        '<div class="stat-nav-hint">View calendar →</div>' +
-      '</div>' +
-    '</div>' +
-    '<div class="two-col">' +
-      '<div class="panel">' +
-        '<div class="panel-header">' +
-          '<span class="panel-title">Products</span>' +
-          '<button class="btn-link-sm" onclick="loadView(\'products\')">View all →</button>' +
+  loadPreferredName().then(() => {
+    const name = currentPreferredName;
+    el.innerHTML =
+      '<div class="view-header">' +
+        '<div>' +
+          '<h1 class="view-title">Good ' + getGreeting() + ', <span id="dash-greeting-name" onclick="editPreferredName()" title="Click to personalise your name" style="cursor:pointer;border-bottom:1px dashed var(--border);padding-bottom:1px;">' + name + '</span>.' +
+            '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" stroke-width="2" style="margin-left:6px;vertical-align:middle;cursor:pointer;" onclick="editPreferredName()" title="Edit name"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>' +
+          '</h1>' +
+          '<p class="view-subtitle">' + (currentRole === 'admin' ? 'Team overview — all products' : 'My products — Commercial Strategy') + '</p>' +
         '</div>' +
-        '<div id="dash-recent"><div class="loading-row" style="padding:18px;">Loading...</div></div>' +
+        (currentRole === 'admin' ? '<button class="btn-primary" onclick="loadView(\'products\')">+ New product</button>' : '') +
       '</div>' +
-      '<div class="panel">' +
-        '<div class="panel-header">' +
-          '<span class="panel-title">Upcoming Deadlines</span>' +
-          '<button class="btn-link-sm" onclick="loadView(\'calendar\')">Calendar →</button>' +
+      '<div class="stats-row">' +
+        '<div class="stat-card stat-card-link dash-stat-card" onclick="loadView(\'products\')" style="border-top:3px solid var(--red);">' +
+          '<div class="stat-label">Active Products</div>' +
+          '<div class="stat-value" id="stat-active">—</div>' +
+          '<div class="stat-nav-hint" id="stat-slip" style="color:var(--red);font-weight:500;min-height:16px;"></div>' +
         '</div>' +
-        '<div id="dash-deadlines"><div class="loading-row" style="padding:18px;">Loading...</div></div>' +
+        '<div class="stat-card stat-card-link dash-stat-card" onclick="dashNavToTracker(\'ontrack\')" style="border-top:3px solid var(--green);">' +
+          '<div class="stat-label">On Track</div>' +
+          '<div class="stat-value green" id="stat-ontrack">—</div>' +
+          '<div class="stat-nav-hint">View tracker →</div>' +
+        '</div>' +
+        '<div class="stat-card stat-card-link dash-stat-card" onclick="dashNavToTracker(\'overdue\')" style="border-top:3px solid var(--red);">' +
+          '<div class="stat-label">Overdue</div>' +
+          '<div class="stat-value red" id="stat-overdue">—</div>' +
+          '<div class="stat-nav-hint">View tracker →</div>' +
+        '</div>' +
+        '<div class="stat-card stat-card-link dash-stat-card" onclick="loadView(\'calendar\')" style="border-top:3px solid var(--amber);">' +
+          '<div class="stat-label">Due This Week</div>' +
+          '<div class="stat-value amber" id="stat-week">—</div>' +
+          '<div class="stat-nav-hint">View calendar →</div>' +
+        '</div>' +
       '</div>' +
-    '</div>';
-  loadDashboardStats();
+      '<div class="two-col">' +
+        '<div class="panel">' +
+          '<div class="panel-header">' +
+            '<span class="panel-title">Products</span>' +
+            '<button class="btn-link-sm" onclick="loadView(\'products\')">View all →</button>' +
+          '</div>' +
+          '<div id="dash-recent"><div class="loading-row" style="padding:18px;">Loading...</div></div>' +
+        '</div>' +
+        '<div class="panel">' +
+          '<div class="panel-header">' +
+            '<span class="panel-title">Upcoming Deadlines</span>' +
+            '<button class="btn-link-sm" onclick="loadView(\'calendar\')">Calendar →</button>' +
+          '</div>' +
+          '<div id="dash-deadlines"><div class="loading-row" style="padding:18px;">Loading...</div></div>' +
+        '</div>' +
+      '</div>';
+    loadDashboardStats();
+  });
 }
 
 async function loadDashboardStats() {
@@ -1530,6 +1534,14 @@ function renderProductCard(p) {
       '</span>'
     : '';
 
+  // Live countdown chip — updates every second for last 3 days
+  const countdownId = 'cd-' + p.id;
+  let countdownChip = '';
+  if (daysToLaunch !== null && daysToLaunch >= 0 && daysToLaunch <= 3) {
+    countdownChip = '<span id="' + countdownId + '" style="font-size:10px;font-weight:700;color:#C0282D;background:#FEF2F2;padding:2px 8px;border-radius:10px;letter-spacing:.02em;"></span>';
+    setTimeout(() => startCountdown(countdownId, p.launchDate), 100);
+  }
+
   const healthCls = overduePl > 0 ? 'pcf-health-red'
                   : delayed > 0   ? 'pcf-health-amber'
                   : pct === 100   ? 'pcf-health-done'
@@ -1544,7 +1556,7 @@ function renderProductCard(p) {
         <div class="pcf-header-left">
           <div class="pcf-health-dot ${healthCls}" title="${healthTip}"></div>
           <div>
-            <div class="pcf-name-row"><span class="pcf-name">${p.name}</span>${slipHtml}${atRiskBadge}</div>
+            <div class="pcf-name-row"><span class="pcf-name">${p.name}</span>${slipHtml}${atRiskBadge}${countdownChip}</div>
             ${p.description ? `<div class="pcf-desc">${p.description.length > 110 ? p.description.slice(0,110)+'…' : p.description}</div>` : ''}
           </div>
         </div>
@@ -3097,7 +3109,7 @@ window.updatePillarNotes = async (productId, taskId, notes) => {
 
 
 /* ══ DOCUMENT CENTRE ═══════════════════════════════════════ */
-const DOC_FOLDERS = [
+let DOC_FOLDERS = [
   { id: 'f1',  name: '01 - Market Research & Survey',  pillarIds: ['p3'] },
   { id: 'f2',  name: '02 - Design & Development Docs', pillarIds: ['p4'] },
   { id: 'f3',  name: '03 - Financial Model',            pillarIds: ['p5','p10'] },
@@ -3118,13 +3130,66 @@ function renderDocuments(el) {
         <h1 class="view-title">Document Centre</h1>
         <p class="view-subtitle">Upload documents per SOP pillar — synced to Google Drive</p>
       </div>
-      <select id="docs-product-sel" class="select-field" onchange="docsSelectProduct()">
-        <option value="">Select a product...</option>
-      </select>
+      <div style="display:flex;gap:8px;align-items:center;">
+        ${currentRole === 'admin' ? '<button class="btn-outline" onclick="showAddDocFolder()" style="font-size:12px;">+ Add folder</button>' : ''}
+        <select id="docs-product-sel" class="select-field" onchange="docsSelectProduct()">
+          <option value="">Select a product...</option>
+        </select>
+      </div>
     </div>
+    <div id="add-folder-panel"></div>
     <div id="docs-body"><div class="loading-row" style="padding:24px;">Loading products...</div></div>`;
-  loadDocsProducts();
+  loadDocFolders().then(() => loadDocsProducts());
 }
+
+async function loadDocFolders() {
+  try {
+    const snap = await get(ref(db, 'config/docFolders'));
+    if (snap.exists()) {
+      const saved = snap.val();
+      const extra = Array.isArray(saved) ? saved : Object.values(saved);
+      // Merge: keep defaults, add any saved extras not in defaults
+      const defaultIds = DOC_FOLDERS.map(f => f.id);
+      extra.forEach(f => { if (!defaultIds.includes(f.id)) DOC_FOLDERS.push(f); });
+    }
+  } catch(e) { /* use defaults */ }
+}
+
+window.showAddDocFolder = () => {
+  const panel = document.getElementById('add-folder-panel');
+  if (!panel) return;
+  panel.innerHTML =
+    '<div class="panel" style="margin-bottom:16px;">' +
+      '<div class="panel-header"><span class="panel-title">Add new folder</span></div>' +
+      '<div class="panel-body" style="display:flex;gap:10px;align-items:flex-end;">' +
+        '<div style="flex:1;"><label class="form-label">Folder name</label>' +
+          '<input id="new-folder-name" class="input-field" placeholder="e.g. 09 - New Department Docs" style="width:100%;"/></div>' +
+        '<div style="flex:1;"><label class="form-label">Google Drive folder URL (optional)</label>' +
+          '<input id="new-folder-url" class="input-field" placeholder="https://drive.google.com/..." style="width:100%;"/></div>' +
+        '<div style="display:flex;gap:6px;">' +
+          '<button class="btn-primary" onclick="confirmAddDocFolder()">Add</button>' +
+          '<button class="btn-outline" onclick="document.getElementById(\'add-folder-panel\').innerHTML=\'\'">Cancel</button>' +
+        '</div>' +
+      '</div>' +
+    '</div>';
+};
+
+window.confirmAddDocFolder = async () => {
+  const name = (document.getElementById('new-folder-name')?.value || '').trim();
+  const url  = (document.getElementById('new-folder-url')?.value  || '').trim();
+  if (!name) { showToast('Folder name is required', 'error'); return; }
+  const newFolder = { id: 'f_' + Date.now(), name, pillarIds: [], driveUrl: url || null };
+  DOC_FOLDERS.push(newFolder);
+  // Save extras (non-default folders) to Firebase
+  const extras = DOC_FOLDERS.filter(f => !['f1','f2','f3','f4','f5','f6','f7','f8'].includes(f.id));
+  await set(ref(db, 'config/docFolders'), extras);
+  showToast('Folder added: ' + name, 'success');
+  document.getElementById('add-folder-panel').innerHTML = '';
+  // Re-render current product if selected
+  if (docsSelectedProduct && docsProductsCache[docsSelectedProduct]) {
+    renderDocsFolders(docsProductsCache[docsSelectedProduct]);
+  }
+};
 
 async function loadDocsProducts() {
   const snap = await get(ref(db, 'products'));
@@ -3375,6 +3440,39 @@ function renderReports(el) {
     </div>
 
     <div class="panel" style="margin-top:16px;">
+      <div class="panel-header"><span class="panel-title">Email schedule</span></div>
+      <div class="panel-body">
+        <p style="font-size:13px;color:var(--text-mid);line-height:1.7;margin-bottom:16px;">
+          Set the daily time for deadline alert emails and personal task digest emails. All times are WAT (West Africa Time). Changes take effect after redeploying the GAS trigger.
+        </p>
+        ${currentRole === 'admin' ? `
+        <div class="form-row" style="margin-bottom:12px;">
+          <label class="form-label">Deadline alert time (daily)</label>
+          <select id="alert-hour-sel" class="select-field" style="width:100%;">
+            ${Array.from({length:24},(_,i)=>'<option value="'+i+'">'+(i===0?'12:00 AM':i<12?i+':00 AM':i===12?'12:00 PM':(i-12)+':00 PM')+'</option>').join('')}
+          </select>
+        </div>
+        <div class="form-row" style="margin-bottom:12px;">
+          <label class="form-label">Daily task digest time</label>
+          <select id="todo-hour-sel" class="select-field" style="width:100%;">
+            ${Array.from({length:24},(_,i)=>'<option value="'+i+'">'+(i===0?'12:00 AM':i<12?i+':00 AM':i===12?'12:00 PM':(i-12)+':00 PM')+'</option>').join('')}
+          </select>
+        </div>
+        <div class="form-row" style="margin-bottom:16px;">
+          <label class="form-label">Weekly digest day</label>
+          <select id="todo-day-sel" class="select-field" style="width:100%;">
+            <option value="1">Monday</option><option value="2">Tuesday</option><option value="3">Wednesday</option>
+            <option value="4">Thursday</option><option value="5">Friday</option>
+          </select>
+        </div>
+        <button class="btn-primary" onclick="saveEmailSchedule()" style="width:100%;">Save schedule</button>
+        <button class="btn-outline" onclick="sendMyTodoNow()" style="width:100%;margin-top:8px;">Send me my task list now</button>
+        <div id="schedule-result" style="display:none;margin-top:10px;"></div>
+        ` : '<p style="font-size:12px;color:var(--text-muted);">Only admins can change the email schedule.</p>'}
+      </div>
+    </div>
+
+    <div class="panel" style="margin-top:16px;">
       <div class="panel-header">
         <span class="panel-title">GCCO read-only dashboard</span>
       </div>
@@ -3422,9 +3520,8 @@ function renderReports(el) {
     </div>`;
 
   if (currentRole === 'admin') setTimeout(loadReportProductList, 50);
-
   loadDeadlineStatus();
-  if (currentRole === 'admin') loadAlertProductList();
+  if (currentRole === 'admin') { loadAlertProductList(); loadEmailSchedule(); }
 }
 
 async function loadAlertProductList() {
@@ -3855,11 +3952,69 @@ window.removeFromAllowlist = async (key) => {
 };
 
 /* ─── UTILITIES ─── */
+// Preferred name — loaded from Firebase users record
+let currentPreferredName = '';
+
+async function loadPreferredName() {
+  if (!currentUser) return;
+  const key  = sanitiseEmail(currentUser.email);
+  const snap = await get(ref(db, 'users/' + key + '/preferredName'));
+  currentPreferredName = snap.exists() ? snap.val() : (currentUser.displayName || currentUser.email).split(' ')[0];
+}
+
+window.editPreferredName = () => {
+  const el = document.getElementById('dash-greeting-name');
+  if (!el) return;
+  const current = currentPreferredName;
+  el.outerHTML = '<input id="dash-greeting-name-input" value="' + current + '" ' +
+    'style="font-size:inherit;font-weight:inherit;font-family:Poppins,sans-serif;border:none;border-bottom:2px solid var(--red);outline:none;background:transparent;width:180px;color:var(--text);" ' +
+    'onblur="savePreferredName(this.value)" onkeydown="if(event.key===\'Enter\')this.blur();if(event.key===\'Escape\')cancelPreferredName();" autofocus/>';
+};
+
+window.savePreferredName = async (val) => {
+  const name = (val || '').trim() || currentPreferredName;
+  currentPreferredName = name;
+  const key = sanitiseEmail(currentUser.email);
+  await set(ref(db, 'users/' + key + '/preferredName'), name);
+  // Re-render the greeting span
+  const input = document.getElementById('dash-greeting-name-input');
+  if (input) input.outerHTML = '<span id="dash-greeting-name" onclick="editPreferredName()" title="Click to change your name" style="cursor:pointer;border-bottom:1px dashed var(--border);padding-bottom:1px;">' + name + '</span>';
+};
+
+window.cancelPreferredName = () => {
+  const input = document.getElementById('dash-greeting-name-input');
+  if (input) input.outerHTML = '<span id="dash-greeting-name" onclick="editPreferredName()" title="Click to change your name" style="cursor:pointer;border-bottom:1px dashed var(--border);padding-bottom:1px;">' + currentPreferredName + '</span>';
+};
+
 function getGreeting() {
   const h = new Date().getHours();
   if (h < 12) return 'morning';
   if (h < 17) return 'afternoon';
   return 'evening';
+}
+
+const _countdownTimers = {};
+function startCountdown(elId, launchDateStr) {
+  if (_countdownTimers[elId]) clearInterval(_countdownTimers[elId]);
+  const update = () => {
+    const el = document.getElementById(elId);
+    if (!el) { clearInterval(_countdownTimers[elId]); return; }
+    const now    = new Date();
+    const launch = new Date(launchDateStr);
+    launch.setHours(23, 59, 59, 0);
+    const diff   = launch - now;
+    if (diff <= 0) {
+      el.textContent = 'Launch day!';
+      clearInterval(_countdownTimers[elId]);
+      return;
+    }
+    const h = Math.floor(diff / 3600000);
+    const m = Math.floor((diff % 3600000) / 60000);
+    const s = Math.floor((diff % 60000) / 1000);
+    el.textContent = h + 'h ' + m + 'm ' + s + 's';
+  };
+  update();
+  _countdownTimers[elId] = setInterval(update, 1000);
 }
 
 window.showToast = (msg, type = 'info') => {
@@ -6532,6 +6687,44 @@ Tone: professional, direct, not accusatory. This is a coordination message, not 
 
 
 
+window.sendMyTodoNow = async () => {
+  showToast('Sending your task list...', 'info');
+  try {
+    const result = await callGAS('sendTodoDigest', { email: currentUser.email });
+    if (result.ok) showToast('Task digest sent to ' + currentUser.email, 'success');
+    else showToast('Failed: ' + (result.error || 'unknown'), 'error');
+  } catch(e) { showToast('Could not reach GAS backend', 'error'); }
+};
+
+window.saveEmailSchedule = async () => {
+  const alertHour = parseInt(document.getElementById('alert-hour-sel')?.value || '7');
+  const todoHour  = parseInt(document.getElementById('todo-hour-sel')?.value  || '8');
+  const todoDay   = parseInt(document.getElementById('todo-day-sel')?.value   || '1');
+  try {
+    await set(ref(db, 'config/emailSchedule'), { alertHour, todoHour, todoDay, updatedAt: Date.now(), updatedBy: currentUser.email });
+    const res = document.getElementById('schedule-result');
+    if (res) {
+      res.style.display = 'block';
+      res.innerHTML = '<div style="background:#F0FDF4;border:1px solid #BBF7D0;border-radius:8px;padding:10px 14px;font-size:12px;color:#16A34A;font-weight:500;">Schedule saved. Redeploy the GAS trigger to apply the new alert time.</div>';
+    }
+    showToast('Email schedule saved.', 'success');
+  } catch(e) { showToast('Save failed: ' + e.message, 'error'); }
+};
+
+async function loadEmailSchedule() {
+  try {
+    const snap = await get(ref(db, 'config/emailSchedule'));
+    if (!snap.exists()) return;
+    const s = snap.val();
+    const ah = document.getElementById('alert-hour-sel');
+    const th = document.getElementById('todo-hour-sel');
+    const td = document.getElementById('todo-day-sel');
+    if (ah) ah.value = s.alertHour ?? 7;
+    if (th) th.value = s.todoHour  ?? 8;
+    if (td) td.value = s.todoDay   ?? 1;
+  } catch(e) { /* settings not yet saved */ }
+}
+
 window.generateGCCOLink = async () => {
   const btn = document.getElementById('gcco-btn');
   const res = document.getElementById('gcco-result');
@@ -6675,6 +6868,13 @@ window.__npd_init({
   saSaveStakeholder:       window.saSaveStakeholder,
   saAddStakeholder:        window.saAddStakeholder,
   saConfirmAddStakeholder: window.saConfirmAddStakeholder,
+  editPreferredName:       window.editPreferredName,
+  savePreferredName:       window.savePreferredName,
+  cancelPreferredName:     window.cancelPreferredName,
+  saveEmailSchedule:       window.saveEmailSchedule,
+  sendMyTodoNow:           window.sendMyTodoNow,
+  showAddDocFolder:        window.showAddDocFolder,
+  confirmAddDocFolder:     window.confirmAddDocFolder,
 });
 
 </script>
