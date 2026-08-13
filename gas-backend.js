@@ -185,15 +185,54 @@ function dailyDeadlineCheck() {
       try {
         var thread = GmailApp.getThreadById(threadId);
         if (thread) {
-          var alertLines = prodAlerts.map(function(a) {
-            var prefix = a.alertType === 'overdue'
-              ? '[OVERDUE ' + a.daysOverdue + 'd]'
-              : a.alertType === 'due'
-              ? '[DUE TODAY]'
-              : '[DUE IN ' + a.daysUntil + 'D]';
-            return prefix + ' ' + a.pillarName + ' (' + a.ownerDept + ') — ' + a.deadline;
-          }).join('\n');
-          var bodyText = 'Daily NPD Hub deadline update for ' + (prod.name || productId) + ':\n\n' + alertLines + '\n\nPlease update task statuses on the NPD Hub.';
+          // Build tabular alert email for thread reply
+          var today2 = new Date();
+          var dateStr = Utilities.formatDate(today2, 'Africa/Lagos', 'EEEE, dd MMMM yyyy');
+          var tableRows = prodAlerts.map(function(a) {
+            var deadlineDisplay = a.deadline
+              ? new Date(a.deadline).toLocaleDateString('en-GB', { day:'numeric', month:'short', year:'numeric' })
+              : '—';
+            var daysStr = a.daysUntil === null ? '—'
+              : a.daysUntil < 0 ? Math.abs(a.daysUntil) + 'd overdue'
+              : a.daysUntil === 0 ? 'Due today' : a.daysUntil + 'd remaining';
+            var statusLabel = a.alertType === 'overdue' ? 'OVERDUE'
+              : a.alertType === 'delayed' ? 'DELAYED'
+              : a.alertType === 'due' ? 'DUE TODAY'
+              : 'DUE IN ' + a.daysUntil + 'D';
+            var statusColor = (a.alertType === 'overdue' || a.alertType === 'delayed') ? '#C0282D' : '#D97706';
+            return '<tr style="border-bottom:1px solid #f0f0ee;">' +
+              '<td style="padding:10px 14px;font-size:12px;color:#1a1a18;font-weight:500;">' + a.pillarName + '</td>' +
+              '<td style="padding:10px 14px;font-size:11px;color:#6b6b67;">' + (a.ownerDept || '—') + '</td>' +
+              '<td style="padding:10px 14px;font-size:12px;color:#1a1a18;">' + deadlineDisplay +
+                '<div style="font-size:10px;color:' + statusColor + ';">' + daysStr + '</div></td>' +
+              '<td style="padding:10px 14px;"><span style="background:' + statusColor + '18;color:' + statusColor + ';font-size:10px;font-weight:700;padding:2px 7px;border-radius:3px;text-transform:uppercase;">' + statusLabel + '</span></td>' +
+            '</tr>';
+          }).join('');
+
+          var htmlBody = '<!DOCTYPE html><html><body style="font-family:Arial,sans-serif;background:#f8f8f7;margin:0;padding:20px;">' +
+            '<div style="max-width:640px;margin:0 auto;background:#fff;border-radius:6px;overflow:hidden;border:1px solid #e5e4e0;">' +
+            '<div style="background:#C0282D;padding:16px 28px;">' +
+              '<div style="color:rgba(255,255,255,.75);font-size:10px;text-transform:uppercase;letter-spacing:.1em;margin-bottom:2px;">Mixta Africa — NPD Hub Deadline Alert</div>' +
+              '<div style="color:#fff;font-size:17px;font-weight:700;">' + (prod ? prod.name : productId) + '</div>' +
+            '</div>' +
+            '<div style="padding:20px 28px 0;">' +
+              '<table style="width:100%;border-collapse:collapse;border:1px solid #e5e4e0;">' +
+                '<thead><tr style="background:#1a1a18;">' +
+                  '<th style="padding:8px 14px;text-align:left;font-size:10px;color:#fff;text-transform:uppercase;letter-spacing:.06em;width:38%;">Task / Milestone</th>' +
+                  '<th style="padding:8px 14px;text-align:left;font-size:10px;color:#fff;text-transform:uppercase;letter-spacing:.06em;">Owner</th>' +
+                  '<th style="padding:8px 14px;text-align:left;font-size:10px;color:#fff;text-transform:uppercase;letter-spacing:.06em;">Deadline</th>' +
+                  '<th style="padding:8px 14px;text-align:left;font-size:10px;color:#fff;text-transform:uppercase;letter-spacing:.06em;">Status</th>' +
+                '</tr></thead>' +
+                '<tbody>' + tableRows + '</tbody>' +
+              '</table>' +
+            '</div>' +
+            '<div style="padding:16px 28px;">' +
+              '<p style="font-size:11px;color:#9a9a96;margin:0;">Kindly update task statuses on the NPD Hub. If any item is blocked, flag it immediately.</p>' +
+            '</div>' +
+            '<div style="background:#f8f8f7;padding:10px 28px;border-top:1px solid #e5e4e0;display:flex;justify-content:space-between;">' +
+              '<span style="font-size:11px;color:#9a9a96;">Mixta Africa NPD Hub · Automated Alert</span>' +
+              '<span style="font-size:11px;color:#9a9a96;">' + dateStr + '</span>' +
+            '</div></div></body></html>';
 
           var allRecips = [];
           prodAlerts.forEach(function(a) {
@@ -203,7 +242,7 @@ function dailyDeadlineCheck() {
           });
 
           var replyOpts = {
-            htmlBody: buildThreadReplyHTML(bodyText, prod.name || productId, null),
+            htmlBody: htmlBody,
             name:     SENDER_NAME,
           };
           if (allRecips.length > 0) replyOpts.to = allRecips.join(',');
@@ -339,36 +378,69 @@ function buildTodoEmail(email, data, digestType, today) {
   var totalCount = data.overdue.length + data.dueSoon.length + data.onTrack.length;
   var dateStr = Utilities.formatDate(today, 'Africa/Lagos', 'EEEE, dd MMMM yyyy');
 
-  var buildSection = function(items, label, color) {
+  var buildTableSection = function(items, sectionLabel, sectionColor) {
     if (!items.length) return '';
+    var rows = items.map(function(t) {
+      var deadlineDisplay = t.deadline
+        ? new Date(t.deadline).toLocaleDateString('en-GB', { day:'numeric', month:'short', year:'numeric' })
+        : '—';
+      var daysStr = t.daysUntil === null ? '—'
+        : t.daysUntil < 0 ? Math.abs(t.daysUntil) + 'd overdue'
+        : t.daysUntil === 0 ? 'Due today' : t.daysUntil + 'd left';
+      var statusLabel = t.status === 'delayed' ? 'DELAYED'
+        : t.daysUntil !== null && t.daysUntil < 0 ? 'OVERDUE'
+        : t.daysUntil === 0 ? 'DUE TODAY' : 'ON TRACK';
+      var statusColor = (statusLabel === 'OVERDUE' || statusLabel === 'DELAYED') ? '#C0282D'
+        : statusLabel === 'DUE TODAY' ? '#D97706' : '#16A34A';
+      return '<tr style="border-bottom:1px solid #f0f0ee;">' +
+        '<td style="padding:10px 14px;font-size:12px;color:#1a1a18;font-weight:500;">' + t.title + '</td>' +
+        '<td style="padding:10px 14px;font-size:11px;color:#6b6b67;">' + t.product + '</td>' +
+        '<td style="padding:10px 14px;font-size:12px;color:#1a1a18;">' + deadlineDisplay + '<div style="font-size:10px;color:' + sectionColor + ';">' + daysStr + '</div></td>' +
+        '<td style="padding:10px 14px;"><span style="background:' + statusColor + '18;color:' + statusColor + ';font-size:10px;font-weight:700;padding:2px 7px;border-radius:3px;text-transform:uppercase;letter-spacing:.04em;">' + statusLabel + '</span></td>' +
+      '</tr>';
+    }).join('');
+
     return '<div style="margin-bottom:20px;">' +
-      '<div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:' + color + ';margin-bottom:8px;">' + label + ' (' + items.length + ')</div>' +
-      items.map(function(t) {
-        var dueStr = t.deadline ? (t.daysUntil < 0 ? Math.abs(t.daysUntil) + 'd overdue' : t.daysUntil === 0 ? 'Due today' : 'Due in ' + t.daysUntil + 'd') : 'No date';
-        return '<div style="display:flex;align-items:flex-start;gap:10px;padding:10px 0;border-bottom:1px solid #F0F0EE;">' +
-          '<div style="width:8px;height:8px;border-radius:50%;background:' + color + ';margin-top:4px;flex-shrink:0;"></div>' +
-          '<div style="flex:1;">' +
-            '<div style="font-size:13px;font-weight:600;color:#1A1A18;">' + t.title + '</div>' +
-            '<div style="font-size:11px;color:#9A9A96;margin-top:2px;">' + t.product + ' · ' + dueStr + '</div>' +
-          '</div></div>';
-      }).join('') +
+      '<div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:' + sectionColor + ';margin-bottom:8px;display:flex;align-items:center;gap:6px;">' +
+        '<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:' + sectionColor + ';"></span>' +
+        sectionLabel + ' — ' + (sectionColor === '#16A34A' ? 'ON TRACK' : sectionColor === '#D97706' ? 'DUE SOON' : 'NEEDS ACTION') +
+      '</div>' +
+      '<table style="width:100%;border-collapse:collapse;border:1px solid #e5e4e0;">' +
+        '<thead><tr style="background:#1a1a18;">' +
+          '<th style="padding:8px 14px;text-align:left;font-size:10px;color:#fff;font-weight:600;text-transform:uppercase;letter-spacing:.06em;width:38%;">Task / Action Item</th>' +
+          '<th style="padding:8px 14px;text-align:left;font-size:10px;color:#fff;font-weight:600;text-transform:uppercase;letter-spacing:.06em;">Product</th>' +
+          '<th style="padding:8px 14px;text-align:left;font-size:10px;color:#fff;font-weight:600;text-transform:uppercase;letter-spacing:.06em;">Due Date</th>' +
+          '<th style="padding:8px 14px;text-align:left;font-size:10px;color:#fff;font-weight:600;text-transform:uppercase;letter-spacing:.06em;">Status</th>' +
+        '</tr></thead>' +
+        '<tbody>' + rows + '</tbody>' +
+      '</table>' +
     '</div>';
   };
 
-  return '<!DOCTYPE html><html><body style="font-family:Arial,sans-serif;background:#F8F8F7;margin:0;padding:24px;">' +
-    '<div style="max-width:600px;margin:0 auto;background:#fff;border-radius:8px;overflow:hidden;border:1px solid #E5E4E0;">' +
-    '<div style="background:#1A1A18;padding:20px 28px;">' +
-      '<div style="color:rgba(255,255,255,.6);font-size:11px;text-transform:uppercase;letter-spacing:.1em;margin-bottom:4px;">Mixta Africa NPD Hub · ' + digestType + ' Task Digest</div>' +
-      '<div style="color:white;font-size:20px;font-weight:700;">' + totalCount + ' task' + (totalCount !== 1 ? 's' : '') + ' on your list</div>' +
-      '<div style="color:rgba(255,255,255,.6);font-size:12px;margin-top:4px;">' + dateStr + '</div>' +
+  return '<!DOCTYPE html><html><body style="font-family:Arial,sans-serif;background:#f8f8f7;margin:0;padding:20px;">' +
+    '<div style="max-width:640px;margin:0 auto;background:#fff;border-radius:6px;overflow:hidden;border:1px solid #e5e4e0;">' +
+
+    '<div style="background:#1a1a18;padding:18px 28px;">' +
+      '<div style="color:rgba(255,255,255,.6);font-size:10px;text-transform:uppercase;letter-spacing:.12em;margin-bottom:3px;">Mixta Africa NPD Hub &nbsp;·&nbsp; ' + digestType + ' Task Digest</div>' +
+      '<div style="color:#fff;font-size:18px;font-weight:700;">' + totalCount + ' task' + (totalCount !== 1 ? 's' : '') + ' require your attention</div>' +
+      '<div style="color:rgba(255,255,255,.5);font-size:11px;margin-top:3px;">' + dateStr + '</div>' +
     '</div>' +
-    '<div style="padding:24px 28px;">' +
-      buildSection(data.overdue,  'Overdue',       '#C0282D') +
-      buildSection(data.dueSoon,  'Due this week', '#D97706') +
-      buildSection(data.onTrack,  'Coming up',     '#16A34A') +
-      (totalCount === 0 ? '<p style="font-size:14px;color:#16A34A;text-align:center;padding:20px 0;">You\'re all clear — no active tasks assigned to you.</p>' : '') +
-      '<p style="font-size:12px;color:#9A9A96;margin-top:20px;">Auto-generated by the Mixta Africa NPD Hub. Log in to update your task statuses.</p>' +
-    '</div></div></body></html>';
+
+    '<div style="padding:20px 28px;">' +
+      (totalCount === 0
+        ? '<p style="font-size:13px;color:#16A34A;text-align:center;padding:24px 0;font-weight:500;">You\'re all clear — no active tasks assigned to you.</p>'
+        : buildTableSection(data.overdue, 'Overdue', '#C0282D') +
+          buildTableSection(data.dueSoon, 'Due this week', '#D97706') +
+          buildTableSection(data.onTrack, 'Coming up', '#16A34A')) +
+      '<p style="font-size:11px;color:#9a9a96;margin-top:16px;line-height:1.6;">Kindly review your tasks and update statuses on the NPD Hub. If any item is blocked or requires escalation, flag it on the dashboard immediately.</p>' +
+    '</div>' +
+
+    '<div style="background:#f8f8f7;padding:12px 28px;border-top:1px solid #e5e4e0;display:flex;justify-content:space-between;">' +
+      '<span style="font-size:11px;color:#9a9a96;">Mixta Africa — NPD Hub</span>' +
+      '<span style="font-size:11px;color:#9a9a96;">' + dateStr + '</span>' +
+    '</div>' +
+
+    '</div></body></html>';
 }
 
 function generateRetrospective(prod, authParam) {
@@ -962,26 +1034,25 @@ function buildAlertSubject(alert) {
 }
 
 function buildAlertEmail(alert) {
-  var daysText = alert.daysUntil === null
-    ? 'Marked as delayed'
-    : alert.daysUntil < 0
-    ? Math.abs(alert.daysUntil) + ' day' + (Math.abs(alert.daysUntil) > 1 ? 's' : '') + ' overdue'
-    : alert.daysUntil === 0 ? 'Due today'
-    : 'Due in ' + alert.daysUntil + ' day' + (alert.daysUntil > 1 ? 's' : '');
-
   var headerBg = alert.alertType === 'overdue' || alert.alertType === 'delayed' ? '#C0282D'
-               : alert.alertType === 'due'     ? '#D97706'
-               : '#D97706';
+               : alert.alertType === 'due'     ? '#D97706' : '#D97706';
 
-  var urgencyMsg = alert.alertType === 'overdue'
-    ? 'This task is <strong>' + Math.abs(alert.daysUntil) + ' day' + (Math.abs(alert.daysUntil) > 1 ? 's' : '') + ' overdue</strong>. Immediate action is required — update the status or escalate.'
-    : alert.alertType === 'delayed'
-    ? 'This task has been <strong>marked as delayed</strong>. Please provide an updated timeline and communicate the impact to your team lead.'
-    : alert.alertType === 'due'
-    ? 'This task is <strong>due today</strong>. Please update the status on the NPD Hub.'
-    : 'This task deadline is <strong>' + alert.daysUntil + ' day' + (alert.daysUntil > 1 ? 's' : '') + ' away</strong>. Please review progress and ensure it is on track.';
+  var statusLabel = alert.alertType === 'overdue' ? 'OVERDUE'
+                  : alert.alertType === 'delayed' ? 'DELAYED'
+                  : alert.alertType === 'due'     ? 'DUE TODAY'
+                  : 'DUE IN ' + alert.daysUntil + 'D';
 
-  // Build acknowledge URLs using ScriptApp.getService().getUrl()
+  var statusColor = alert.alertType === 'overdue' || alert.alertType === 'delayed' ? '#C0282D' : '#D97706';
+
+  var deadlineDisplay = alert.deadline
+    ? new Date(alert.deadline).toLocaleDateString('en-GB', { day:'numeric', month:'short', year:'numeric' })
+    : 'No date set';
+
+  var daysStr = alert.daysUntil === null ? '—'
+    : alert.daysUntil < 0 ? Math.abs(alert.daysUntil) + 'd overdue'
+    : alert.daysUntil === 0 ? 'Due today'
+    : alert.daysUntil + 'd remaining';
+
   var baseUrl = ScriptApp.getService().getUrl();
   var ackUrl  = baseUrl + '?action=ack&p=' + encodeURIComponent(alert.productId || '') +
     '&t=' + encodeURIComponent(alert.taskId || '') +
@@ -990,35 +1061,47 @@ function buildAlertEmail(alert) {
     '&t=' + encodeURIComponent(alert.taskId || '') +
     '&type=needs_more_time&email=' + encodeURIComponent(alert.recipientEmail || '');
 
-  return '<!DOCTYPE html><html><body style="font-family:Arial,sans-serif;background:#f8f8f7;margin:0;padding:24px;">' +
-  '<div style="max-width:600px;margin:0 auto;background:#ffffff;border-radius:8px;overflow:hidden;border:1px solid #e5e4e0;">' +
+  return '<!DOCTYPE html><html><body style="font-family:Arial,sans-serif;background:#f8f8f7;margin:0;padding:20px;">' +
+  '<div style="max-width:640px;margin:0 auto;background:#fff;border-radius:6px;overflow:hidden;border:1px solid #e5e4e0;">' +
 
-  '<div style="background:' + headerBg + ';padding:20px 28px;">' +
-    '<div style="color:white;font-size:11px;letter-spacing:.1em;text-transform:uppercase;margin-bottom:4px;">Mixta Africa — NPD Hub Deadline Alert</div>' +
-    '<div style="color:white;font-size:20px;font-weight:700;">' + daysText + '</div>' +
+  // Header
+  '<div style="background:' + headerBg + ';padding:18px 28px;">' +
+    '<div style="color:rgba(255,255,255,.75);font-size:10px;letter-spacing:.12em;text-transform:uppercase;margin-bottom:3px;">Mixta Africa — NPD Hub Deadline Alert</div>' +
+    '<div style="color:#fff;font-size:18px;font-weight:700;">' + alert.productName + '</div>' +
   '</div>' +
 
-  '<div style="padding:24px 28px;">' +
-    '<div style="background:#f8f8f7;border-radius:8px;padding:16px 20px;margin-bottom:20px;">' +
-      '<div style="font-size:11px;color:#9a9a96;text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px;">Product</div>' +
-      '<div style="font-size:16px;font-weight:700;color:#1a1a18;margin-bottom:10px;">' + alert.productName + '</div>' +
-      '<div style="font-size:13px;color:#6b6b67;"><strong>Pillar:</strong> ' + alert.pillarName + '</div>' +
-      '<div style="font-size:13px;color:#6b6b67;margin-top:4px;"><strong>Owner:</strong> ' + alert.ownerDept + '</div>' +
-      '<div style="font-size:13px;color:#6b6b67;margin-top:4px;"><strong>Deadline:</strong> ' + alert.deadline + '</div>' +
-    '</div>' +
-
-    '<p style="font-size:14px;color:#1a1a18;line-height:1.7;margin:0 0 24px;">' + urgencyMsg + '</p>' +
-
-    '<div style="display:flex;gap:12px;margin-bottom:24px;">' +
-      '<a href="' + ackUrl + '" style="flex:1;display:inline-block;background:#16A34A;color:#ffffff;text-align:center;padding:12px 16px;border-radius:8px;font-size:13px;font-weight:700;text-decoration:none;">I have seen this</a>' +
-      '<a href="' + moreUrl + '" style="flex:1;display:inline-block;background:#F8F8F7;color:#1A1A18;text-align:center;padding:12px 16px;border-radius:8px;font-size:13px;font-weight:600;text-decoration:none;border:1px solid #E5E4E0;">I need more time</a>' +
-    '</div>' +
-
-    '<p style="font-size:12px;color:#9a9a96;line-height:1.6;margin:0;">This is an automated alert from the Mixta Africa NPD Hub deadline monitoring system. Only your department received this alert.</p>' +
+  // Task table
+  '<div style="padding:20px 28px 0;">' +
+    '<table style="width:100%;border-collapse:collapse;border:1px solid #e5e4e0;border-radius:4px;overflow:hidden;">' +
+      '<thead>' +
+        '<tr style="background:#1a1a18;">' +
+          '<th style="padding:9px 14px;text-align:left;font-size:11px;color:#fff;font-weight:600;text-transform:uppercase;letter-spacing:.06em;width:40%;">Task / Milestone</th>' +
+          '<th style="padding:9px 14px;text-align:left;font-size:11px;color:#fff;font-weight:600;text-transform:uppercase;letter-spacing:.06em;">Owner</th>' +
+          '<th style="padding:9px 14px;text-align:left;font-size:11px;color:#fff;font-weight:600;text-transform:uppercase;letter-spacing:.06em;">Deadline</th>' +
+          '<th style="padding:9px 14px;text-align:left;font-size:11px;color:#fff;font-weight:600;text-transform:uppercase;letter-spacing:.06em;">Status</th>' +
+        '</tr>' +
+      '</thead>' +
+      '<tbody>' +
+        '<tr style="background:#fff;">' +
+          '<td style="padding:12px 14px;font-size:13px;font-weight:600;color:#1a1a18;border-top:1px solid #f0f0ee;">' + alert.pillarName + '</td>' +
+          '<td style="padding:12px 14px;font-size:12px;color:#4a4a46;border-top:1px solid #f0f0ee;">' + (alert.ownerDept || '—') + '</td>' +
+          '<td style="padding:12px 14px;font-size:12px;color:#4a4a46;border-top:1px solid #f0f0ee;">' + deadlineDisplay + '<div style="font-size:11px;color:' + statusColor + ';margin-top:2px;">' + daysStr + '</div></td>' +
+          '<td style="padding:12px 14px;border-top:1px solid #f0f0ee;"><span style="background:' + statusColor + '18;color:' + statusColor + ';font-size:11px;font-weight:700;padding:3px 9px;border-radius:3px;text-transform:uppercase;letter-spacing:.04em;">' + statusLabel + '</span></td>' +
+        '</tr>' +
+      '</tbody>' +
+    '</table>' +
   '</div>' +
 
-  '<div style="background:#f8f8f7;padding:14px 28px;border-top:1px solid #e5e4e0;">' +
-    '<div style="font-size:11px;color:#9a9a96;">Mixta Africa NPD Hub &nbsp;·&nbsp; Automated Deadline Alert</div>' +
+  // Action buttons
+  '<div style="padding:18px 28px;display:flex;gap:10px;">' +
+    '<a href="' + ackUrl + '" style="display:inline-block;background:#16A34A;color:#fff;text-align:center;padding:10px 20px;border-radius:4px;font-size:12px;font-weight:700;text-decoration:none;">Acknowledge</a>' +
+    '<a href="' + moreUrl + '" style="display:inline-block;background:#fff;color:#1a1a18;text-align:center;padding:10px 20px;border-radius:4px;font-size:12px;font-weight:600;text-decoration:none;border:1px solid #e5e4e0;">Request more time</a>' +
+  '</div>' +
+
+  // Footer
+  '<div style="background:#f8f8f7;padding:12px 28px;border-top:1px solid #e5e4e0;display:flex;justify-content:space-between;align-items:center;">' +
+    '<span style="font-size:11px;color:#9a9a96;">Mixta Africa NPD Hub · Automated Alert</span>' +
+    '<span style="font-size:11px;color:#9a9a96;">' + new Date().toLocaleDateString('en-GB', {day:'numeric',month:'short',year:'numeric'}) + '</span>' +
   '</div>' +
 
   '</div></body></html>';
