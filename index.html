@@ -2069,6 +2069,27 @@ function buildStakeholderConfirm(product) {
       <span class="sc-count" id="sc-count">${STAKEHOLDERS.length} selected</span>
     </div>
     <div class="sc-dept-list">${deptRows}</div>
+    <div style="margin:12px 0;border-top:1px solid var(--border);padding-top:14px;">
+      <div style="font-size:12px;font-weight:600;color:var(--text);margin-bottom:8px;">Add a person not in the list</div>
+      <div style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap;">
+        <div style="flex:1;min-width:160px;">
+          <label class="form-label" style="font-size:10px;">Name</label>
+          <input id="ob-custom-name" class="input-field" placeholder="e.g. J. Smith" style="width:100%;"/>
+        </div>
+        <div style="flex:2;min-width:200px;">
+          <label class="form-label" style="font-size:10px;">Email</label>
+          <input id="ob-custom-email" class="input-field" placeholder="name@mixtafrica.com" style="width:100%;"/>
+        </div>
+        <div style="flex:1;min-width:130px;">
+          <label class="form-label" style="font-size:10px;">Department</label>
+          <select id="ob-custom-dept" class="select-field" style="width:100%;">
+            ${getDepts().map(d => '<option value="' + d + '">' + d + '</option>').join('')}
+          </select>
+        </div>
+        <button class="btn-outline" style="font-size:12px;padding:8px 14px;white-space:nowrap;" onclick="addCustomOnboardEmail()">+ Add</button>
+      </div>
+      <div id="ob-custom-list" style="margin-top:8px;display:flex;flex-wrap:wrap;gap:6px;"></div>
+    </div>
     <div class="form-row" style="margin-bottom:12px;">
       <label class="form-label">Send mode</label>
       <select id="onboard-send-mode" class="select-field" style="width:100%;">
@@ -2092,6 +2113,47 @@ window.toggleStakeholder = (email, checked) => {
   }
   const countEl = document.getElementById('sc-count');
   if (countEl) countEl.textContent = `${selectedStakeholders.length} selected`;
+};
+
+window.addCustomOnboardEmail = () => {
+  const name  = (document.getElementById('ob-custom-name')?.value || '').trim();
+  const email = (document.getElementById('ob-custom-email')?.value || '').trim().toLowerCase();
+  const dept  = document.getElementById('ob-custom-dept')?.value || '';
+  if (!email || !email.includes('@')) { showToast('Enter a valid email address', 'error'); return; }
+  if (selectedStakeholders.includes(email)) { showToast('Already in the list', 'info'); return; }
+
+  // Add to selection
+  selectedStakeholders.push(email);
+
+  // Also add to STAKEHOLDERS temporarily so it's included in the email batch
+  if (!STAKEHOLDERS.find(s => s.email === email)) {
+    STAKEHOLDERS.push({ id: 'custom_' + Date.now(), name: name || email.split('@')[0], email, dept, isDeptEmail: false, enabled: true });
+  }
+
+  // Show chip in the custom list
+  const listEl = document.getElementById('ob-custom-list');
+  if (listEl) {
+    const chip = document.createElement('span');
+    chip.style.cssText = 'background:#F0FDF4;border:1px solid #BBF7D0;color:#16A34A;font-size:11px;padding:3px 10px;border-radius:20px;display:inline-flex;align-items:center;gap:6px;';
+    chip.innerHTML = (name || email) + ' <span style="cursor:pointer;font-weight:700;" onclick="removeCustomOnboardEmail(this,\'' + email + '\')">×</span>';
+    listEl.appendChild(chip);
+  }
+
+  // Update count
+  const countEl = document.getElementById('sc-count');
+  if (countEl) countEl.textContent = selectedStakeholders.length + ' selected';
+
+  // Clear inputs
+  if (document.getElementById('ob-custom-name')) document.getElementById('ob-custom-name').value = '';
+  if (document.getElementById('ob-custom-email')) document.getElementById('ob-custom-email').value = '';
+  showToast((name || email) + ' added to onboarding list', 'success');
+};
+
+window.removeCustomOnboardEmail = (el, email) => {
+  selectedStakeholders = selectedStakeholders.filter(e => e !== email);
+  el.closest('span').remove();
+  const countEl = document.getElementById('sc-count');
+  if (countEl) countEl.textContent = selectedStakeholders.length + ' selected';
 };
 
 window.toggleAllStakeholders = (selectAll) => {
@@ -5346,7 +5408,7 @@ window.showReminderModal = async (productId, pillarId, pillarName, productName, 
 window.sendReminder = async (productId, pillarId, pillarName, productName, deadline) => {
   const msg      = document.getElementById('reminder-msg')?.value.trim() || '';
   const testMode = document.getElementById('reminder-send-mode')?.value === 'test';
-  const btn      = document.querySelector('#sa-modal .btn-primary');
+  const btn      = document.querySelector('#quick-update-modal .btn-primary');
   if (btn) { btn.disabled = true; btn.textContent = 'Sending...'; }
 
   try {
@@ -5362,7 +5424,7 @@ window.sendReminder = async (productId, pillarId, pillarName, productName, deadl
     });
 
     if (!result.ok) throw new Error(result.error || 'Send failed');
-    document.getElementById('sa-modal').style.display = 'none';
+    document.getElementById('email-composer-modal').style.display = 'none';
     showToast(`Reminder sent${testMode ? ' (test)' : ''} to ${testMode ? 'o.olasunkanmi@mixtafrica.com' : deptEmails.length + ' recipients'}.`, 'success');
   } catch(e) {
     showToast('Reminder failed: ' + e.message, 'error');
@@ -5934,7 +5996,7 @@ window.saEditTask = async (productId, taskId) => {
             <option value="complete"  ${task.status==='complete' ?'selected':''}>Complete</option>
           </select></div>
         <div class="form-actions">
-          <button class="btn-outline" onclick="document.getElementById('sa-modal').style.display='none'">Cancel</button>
+          <button class="btn-outline" onclick="document.getElementById('email-composer-modal').style.display='none'">Cancel</button>
           <button class="btn-primary" onclick="saeSaveTask('${productId}','${taskId}')">Save changes</button>
         </div>
       </div>
@@ -6087,10 +6149,10 @@ window.showQuickUpdate = async (productId) => {
       '<div style="margin-top:8px;">' + ontrack.map(buildTaskRow).join('') + '</div></details>'
     : '';
 
-  let modal = document.getElementById('sa-modal');
+  let modal = document.getElementById('quick-update-modal');
   if (!modal) {
     modal = document.createElement('div');
-    modal.id = 'sa-modal';
+    modal.id = 'quick-update-modal';
     modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.45);display:flex;align-items:flex-end;justify-content:center;z-index:2000;padding:0;';
     document.body.appendChild(modal);
   }
@@ -6103,7 +6165,7 @@ window.showQuickUpdate = async (productId) => {
       '<div style="background:#C0282D;padding:18px 22px 16px;flex-shrink:0;">' +
         '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">' +
           '<div style="color:rgba(255,255,255,.8);font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.08em;">Quick Update</div>' +
-          '<button onclick="document.getElementById(\'sa-modal\').style.display=\'none\'" ' +
+          '<button onclick="document.getElementById(\'quick-update-modal\').style.display=\'none\'" ' +
             'style="background:rgba(255,255,255,.2);border:none;color:white;border-radius:6px;padding:4px 10px;font-size:12px;cursor:pointer;font-family:Poppins,sans-serif;">Done</button>' +
         '</div>' +
         '<div style="color:white;font-size:18px;font-weight:700;margin-bottom:8px;">' + fresh.name + '</div>' +
@@ -6116,7 +6178,7 @@ window.showQuickUpdate = async (productId) => {
         attentionHtml + ontrackHtml +
       '</div>' +
       '<div style="padding:12px 18px;border-top:1px solid var(--border);flex-shrink:0;">' +
-        '<button class="btn-secondary-sm" style="width:100%;" onclick="document.getElementById(\'sa-modal\').style.display=\'none\';loadView(\'tracker\')">Open full tracker →</button>' +
+        '<button class="btn-secondary-sm" style="width:100%;" onclick="document.getElementById(\'quick-update-modal\').style.display=\'none\';loadView(\'tracker\')">Open full tracker →</button>' +
       '</div>' +
     '</div>';
   modal.style.display = 'flex';
@@ -6199,10 +6261,10 @@ async function openEmailComposer({
   const prod = productListCache[productId] || {};
 
   // Show the modal immediately with a loading state
-  let modal = document.getElementById('sa-modal');
+  let modal = document.getElementById('email-composer-modal');
   if (!modal) {
     modal = document.createElement('div');
-    modal.id = 'sa-modal';
+    modal.id = 'email-composer-modal';
     modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.5);display:flex;align-items:center;justify-content:center;z-index:2000;padding:16px;';
     document.body.appendChild(modal);
   }
@@ -6223,7 +6285,7 @@ async function openEmailComposer({
         </div>
         <div style="display:flex;align-items:center;gap:8px;">
           <span class="email-ai-badge">${ICON.bolt} AI Draft</span>
-          <button onclick="document.getElementById('sa-modal').style.display='none'"
+          <button onclick="document.getElementById('email-composer-modal').style.display='none'"
             style="background:rgba(255,255,255,.15);border:none;color:white;width:28px;height:28px;
                    border-radius:6px;cursor:pointer;font-size:14px;">✕</button>
         </div>
@@ -6277,7 +6339,7 @@ async function openEmailComposer({
           <option value="test">Test (${TEST_EMAIL})</option>
         </select>
         <div style="display:flex;gap:8px;">
-          <button class="btn-outline" onclick="document.getElementById('sa-modal').style.display='none'">Cancel</button>
+          <button class="btn-outline" onclick="document.getElementById('email-composer-modal').style.display='none'">Cancel</button>
           <button class="btn-primary" id="ec-send-btn" onclick="sendComposedEmail()" disabled>Send email</button>
         </div>
       </div>
@@ -6309,7 +6371,7 @@ async function openEmailComposer({
 }
 
 window.regenerateEmailDraft = async (type, productId) => {
-  const modal = document.getElementById('sa-modal');
+  const modal = document.getElementById('email-composer-modal');
   if (!modal?._emailContext) return;
   const bodyEl   = document.getElementById('ec-body');
   const statusEl = document.getElementById('ec-ai-status');
@@ -6328,7 +6390,7 @@ window.regenerateEmailDraft = async (type, productId) => {
 };
 
 window.sendComposedEmail = async () => {
-  const modal   = document.getElementById('sa-modal');
+  const modal   = document.getElementById('email-composer-modal');
   const context = modal?._emailContext;
   if (!context) return;
 
@@ -6879,6 +6941,8 @@ window.__npd_init({
   editPreferredName:       window.editPreferredName,
   savePreferredName:       window.savePreferredName,
   cancelPreferredName:     window.cancelPreferredName,
+  addCustomOnboardEmail:   window.addCustomOnboardEmail,
+  removeCustomOnboardEmail: window.removeCustomOnboardEmail,
   saveEmailSchedule:       window.saveEmailSchedule,
   sendMyTodoNow:           window.sendMyTodoNow,
   showAddDocFolder:        window.showAddDocFolder,
