@@ -543,20 +543,6 @@ function showApp() {
   // Load all app config, templates, and team members
   loadAppConfig().then(() => seedConfigToFirebase());
   loadTemplatesAndConfig();
-  const userKey = sanitiseEmail(currentUser.email);
-  get(ref(db, `users/${userKey}`)).then(snap => {
-    if (!snap.exists()) {
-      const detectedDept = detectDeptFromEmail(currentUser.email);
-      set(ref(db, `users/${userKey}`), {
-        name:      currentUser.displayName || currentUser.email.split('@')[0],
-        email:     currentUser.email,
-        role:      currentRole,
-        dept:      detectedDept,
-        createdAt: Date.now(),
-      });
-      setTimeout(() => showWelcomeModal(detectedDept), 800);
-    }
-  });
 }
 
 function showWelcomeModal(detectedDept) {
@@ -756,7 +742,7 @@ function getDepts() {
 
 function detectDeptFromEmail(email) {
   const match = STAKEHOLDERS.find(s => s.email === email);
-  return match ? match.dept : 'Commercial Strategy';
+  return match ? match.dept : null;
 }
 
 // Build a grouped <select> for task owner — dept groups + individual members
