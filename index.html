@@ -147,16 +147,58 @@ function teardownAllListeners() {
 /* ─── AUTH STATE LISTENER ─── */
 onAuthStateChanged(auth, async (user) => {
   if (user) {
-    const key  = sanitiseEmail(user.email);
-    const snap = await get(ref(db, `allowlist/${key}`));
+    const email = user.email || '';
+    const isMixta = email.toLowerCase().endsWith('@mixtafrica.com');
+
+    if (!isMixta) {
+      // Non-Mixta email: sign out and show access denied with request button
+      await signOut(auth);
+      showAccessDenied(email, false);
+      return;
+    }
+
+    // Mixta Africa email — always allowed in
+    currentUser = user;
+    const key   = sanitiseEmail(email);
+
+    // Read or create allowlist entry
+    const snap = await get(ref(db, 'allowlist/' + key));
     if (snap.exists()) {
-      currentUser = user;
-      currentRole = snap.val().role;
+      currentRole = snap.val().role || 'member';
+    } else {
+      // Auto-provision new Mixta staff as member
+      currentRole = 'member';
+      await set(ref(db, 'allowlist/' + key), {
+        role: 'member', name: user.displayName || email.split('@')[0],
+        email, addedAt: Date.now(), addedBy: 'auto',
+      });
+    }
+
+    // Read user record to check if dept is already set
+    const userSnap = await get(ref(db, 'users/' + key));
+    const userData  = userSnap.exists() ? userSnap.val() : null;
+
+    if (!userData || !userData.dept) {
+      // First login — detect dept from email or show selection screen
+      showApp();
+      const detectedDept = detectDeptFromEmail(email);
+      if (detectedDept && detectedDept !== 'Commercial Strategy') {
+        // Auto-detected from STAKEHOLDERS — set immediately and show welcome
+        await set(ref(db, 'users/' + key), {
+          name: user.displayName || email.split('@')[0],
+          email, role: currentRole, dept: detectedDept,
+          deptLocked: true, createdAt: Date.now(),
+        });
+        setTimeout(() => showWelcomeModal(detectedDept), 600);
+        loadView('dashboard');
+      } else {
+        // Unknown dept — show dept selection screen before entering the app
+        showDeptSelectionScreen(user, key);
+      }
+    } else {
+      // Returning user — enter app normally
       showApp();
       loadView('dashboard');
-    } else {
-      await signOut(auth);
-      showAccessDenied(user.email);
     }
   } else {
     currentUser = null;
@@ -376,11 +418,96 @@ function showLogin() {
   document.getElementById('screen-app').style.display      = 'none';
 }
 
-function showAccessDenied(email) {
+function showDeptSelectionScreen(user, userKey) {
+  // Show the app shell but block with a full-screen dept picker
+  showApp();
+  const overlay = document.createElement('div');
+  overlay.id = 'dept-select-overlay';
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(255,255,255,0.97);z-index:9999;display:flex;align-items:center;justify-content:center;padding:24px;';
+
+  const depts = getDepts();
+  const optionsHtml = depts.map(d =>
+    '<button class="dept-pick-btn" onclick="confirmDeptSelection(\'' + d.replace(/'/g, '') + '\',\'' + userKey + '\')" ' +
+      'style="text-align:left;padding:12px 18px;border:1px solid var(--border);border-radius:10px;background:#fff;cursor:pointer;font-family:Poppins,sans-serif;font-size:13px;font-weight:500;color:var(--text);transition:all .15s;width:100%;" ' +
+      'onmouseover="this.style.borderColor=\'#C0282D\';this.style.color=\'#C0282D\'" ' +
+      'onmouseout="this.style.borderColor=\'var(--border)\';this.style.color=\'var(--text)\'">' +
+      d +
+    '</button>'
+  ).join('');
+
+  overlay.innerHTML =
+    '<div style="background:#fff;border-radius:16px;border:1px solid var(--border);padding:36px;max-width:460px;width:100%;">' +
+      '<div style="text-align:center;margin-bottom:24px;">' +
+        '<div style="width:52px;height:52px;border-radius:12px;background:#FEF2F2;margin:0 auto 14px;display:flex;align-items:center;justify-content:center;">' +
+          '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#C0282D" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87"/><path d="M16 3.13a4 4 0 010 7.75"/></svg>' +
+        '</div>' +
+        '<div style="font-size:20px;font-weight:700;color:var(--text);margin-bottom:6px;">Welcome to the NPD Hub</div>' +
+        '<div style="font-size:13px;color:#6B7280;line-height:1.7;">Select your department to continue. This sets your default view and task assignments. This selection is permanent — contact a super admin to change it later.</div>' +
+      '</div>' +
+      '<div style="display:flex;flex-direction:column;gap:8px;max-height:320px;overflow-y:auto;">' +
+        optionsHtml +
+      '</div>' +
+    '</div>';
+  document.body.appendChild(overlay);
+}
+
+window.submitAccessRequest = async () => {
+  const email  = document.getElementById('denied-email')?.textContent || '';
+  const name   = document.getElementById('req-name')?.value.trim() || '';
+  const reason = document.getElementById('req-reason')?.value.trim() || '';
+  if (!name)   { showToast('Please enter your name', 'error'); return; }
+  if (!reason) { showToast('Please enter a reason', 'error'); return; }
+  const reqId  = 'req_' + Date.now();
+  try {
+    await set(ref(db, 'accessRequests/' + reqId), {
+      id: reqId, email, name, reason,
+      status: 'pending', requestedAt: Date.now(),
+    });
+    const res = document.getElementById('req-result');
+    if (res) { res.style.display = 'block'; res.textContent = 'Request submitted. An admin will review it and contact you.'; }
+    document.getElementById('req-name').value = '';
+    document.getElementById('req-reason').value = '';
+  } catch(e) {
+    showToast('Could not submit request. Please email an admin directly.', 'error');
+  }
+};
+
+window.confirmDeptSelection = async (dept, userKey) => {
+  const overlay = document.getElementById('dept-select-overlay');
+  if (overlay) {
+    // Update the button to show loading
+    const btns = overlay.querySelectorAll('.dept-pick-btn');
+    btns.forEach(b => { b.disabled = true; b.style.opacity = '0.5'; });
+  }
+  try {
+    await set(ref(db, 'users/' + userKey), {
+      name:       currentUser.displayName || currentUser.email.split('@')[0],
+      email:      currentUser.email,
+      role:       currentRole,
+      dept:       dept,
+      deptLocked: true,
+      createdAt:  Date.now(),
+    });
+    if (overlay) overlay.remove();
+    setTimeout(() => showWelcomeModal(dept), 300);
+    loadView('dashboard');
+  } catch(e) {
+    showToast('Could not save department. Please try again.', 'error');
+    const overlay2 = document.getElementById('dept-select-overlay');
+    if (overlay2) {
+      const btns = overlay2.querySelectorAll('.dept-pick-btn');
+      btns.forEach(b => { b.disabled = false; b.style.opacity = '1'; });
+    }
+  }
+};
+
+function showAccessDenied(email, isMixta) {
   document.getElementById('screen-login').style.display    = 'none';
   document.getElementById('screen-denied').style.display   = 'flex';
   document.getElementById('screen-app').style.display      = 'none';
   document.getElementById('denied-email').textContent      = email;
+  const reqSection = document.getElementById('denied-request-section');
+  if (reqSection) reqSection.style.display = 'block';
 }
 
 function showApp() {
@@ -612,9 +739,15 @@ let STAKEHOLDERS = [
 
 // ── Department lookup helpers ────────────────────────────────
 function getDepts() {
-  const seen = []; const order = [];
-  STAKEHOLDERS.forEach(s => { if (s.enabled !== false && !seen.includes(s.dept)) { seen.push(s.dept); order.push(s.dept); } });
-  return order;
+  // Primary source: DEPARTMENTS object (managed by super admin)
+  const deptNames = Object.values(DEPARTMENTS).map(d => d.name).filter(Boolean);
+  // Secondary: any additional depts from STAKEHOLDERS not already in DEPARTMENTS
+  STAKEHOLDERS.forEach(s => {
+    if (s.enabled !== false && s.dept && !deptNames.includes(s.dept)) {
+      deptNames.push(s.dept);
+    }
+  });
+  return deptNames;
 }
 
 function detectDeptFromEmail(email) {
@@ -1610,6 +1743,7 @@ function renderProductCard(p) {
         ${canEdit(p) ? `<button class="btn-secondary-sm" onclick="showWeeklyLog('${p.id}')">Log</button>` : ''}
         ${canEdit(p) && !p.onboardedAt ? `<button class="btn-secondary-sm" style="color:var(--amber);border-color:var(--amber);" onclick="reOnboardProduct('${p.id}')">${ICON.warn} Onboard</button>` : ''}
         ${editBtn}
+        ${canEdit(p) ? `<button class="btn-secondary-sm" onclick="convertItemType('${p.id}','${p.itemType||'product'}')" style="font-size:10px;" title="Switch between Product and Project">⇄ ${(p.itemType||'product')==='project'?'To Product':'To Project'}</button>` : ''}
         ${canEdit(p) ? `<button class="btn-secondary-sm" onclick="showShareModal('${p.id}')">Share</button>` : ''}
         ${getProductAccess(p) === 'owner' || currentRole === 'admin' ? `<button class="btn-secondary-sm" onclick="showHandoverModal('${p.id}')">Handover</button>` : ''}
         <button class="btn-secondary-sm" onclick="showProductActivity('${p.id}')">Activity</button>
@@ -1781,9 +1915,16 @@ function buildTaskRow(t, i) {
     .map(x => '<option value="' + x.id + '"' + ((t.predecessors||[]).includes(x.id) ? ' selected' : '') + '>' + (x.title||'Untitled') + '</option>')
     .join('');
 
-  // Parse existing owner into dept + individual
-  const existingDept = t.ownerDept || (getDepts().find(d => STAKEHOLDERS.some(s => s.dept === d && s.name === t.owner)) || getDepts()[0]);
-  const existingInd  = t.ownerIndividual || t.owner || '';
+  // Multi-department owner chips — stored in t.owners as [{ dept, individual }]
+  const owners = t.owners && t.owners.length > 0 ? t.owners : (t.owner ? [{ dept: t.ownerDept || '', individual: t.owner }] : []);
+  const ownerChips = owners.map((o, oi) =>
+    '<span style="display:inline-flex;align-items:center;gap:4px;background:#EFF6FF;color:#2563EB;border:1px solid #BFDBFE;border-radius:20px;padding:2px 8px;font-size:11px;font-weight:500;">' +
+      (o.individual || o.dept || 'Unknown') + (o.dept && o.individual !== o.dept ? ' (' + o.dept + ')' : '') +
+      '<button onclick="removeTaskOwner(\'' + t.id + '\',' + oi + ')" style="background:none;border:none;cursor:pointer;color:#2563EB;font-size:12px;line-height:1;padding:0 1px;">×</button>' +
+    '</span>'
+  ).join('');
+
+  const firstDept = getDepts()[0] || '';
 
   return '<div class="task-edit-row" id="terow-' + t.id + '">' +
     '<div class="task-edit-header">' +
@@ -1798,17 +1939,22 @@ function buildTaskRow(t, i) {
         '<input type="date" class="input-field" value="' + (t.deadline||'') + '"' +
           ' onchange="updateEditingTask(\'' + t.id + '\',\'deadline\',this.value)"/>' +
       '</div>' +
-      '<div class="task-edit-col">' +
-        '<label class="form-label">Department</label>' +
-        '<select class="select-field" onchange="updateTaskOwnerDept(\'' + t.id + '\',this.value)">' +
-          buildOwnerDeptOptions(existingDept) +
-        '</select>' +
-      '</div>' +
-      '<div class="task-edit-col" id="ind-col-' + t.id + '">' +
-        '<label class="form-label">Individual owner</label>' +
-        '<select class="select-field" onchange="updateEditingTask(\'' + t.id + '\',\'ownerIndividual\',this.value);updateEditingTask(\'' + t.id + '\',\'owner\',this.value)">' +
-          buildOwnerIndividualOptions(existingDept, existingInd) +
-        '</select>' +
+      '<div class="task-edit-col task-edit-col-wide" style="grid-column:span 2;">' +
+        '<label class="form-label">Owners <span class="form-hint">— can assign multiple departments/individuals</span></label>' +
+        '<div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:6px;" id="owner-chips-' + t.id + '">' +
+          (ownerChips || '<span style="font-size:11px;color:#9CA3AF;">No owners assigned</span>') +
+        '</div>' +
+        '<div style="display:flex;gap:6px;align-items:flex-end;">' +
+          '<select id="add-dept-' + t.id + '" class="select-field" style="flex:1;" onchange="updateAddIndividuals(\'' + t.id + '\')">' +
+            getDepts().map(d => '<option value="' + d + '">' + d + '</option>').join('') +
+          '</select>' +
+          '<select id="add-ind-' + t.id + '" class="select-field" style="flex:1;">' +
+            buildOwnerIndividualOptions(firstDept, '') +
+          '</select>' +
+          '<button class="btn-outline" style="font-size:11px;white-space:nowrap;padding:7px 10px;" onclick="addTaskOwner(\'' + t.id + '\')">' +
+            '+ Add' +
+          '</button>' +
+        '</div>' +
       '</div>' +
       '<div class="task-edit-col task-edit-col-wide">' +
         '<label class="form-label">Depends on <span class="form-hint">— hold Ctrl/Cmd for multiple</span></label>' +
@@ -1821,13 +1967,63 @@ function buildTaskRow(t, i) {
   '</div>';
 }
 
+window.updateAddIndividuals = (taskId) => {
+  const dept = document.getElementById('add-dept-' + taskId)?.value || '';
+  const sel  = document.getElementById('add-ind-' + taskId);
+  if (sel) sel.innerHTML = buildOwnerIndividualOptions(dept, '');
+};
+
+window.addTaskOwner = (taskId) => {
+  const t = _editingTasks.find(x => x.id === taskId);
+  if (!t) return;
+  const dept = document.getElementById('add-dept-' + taskId)?.value || '';
+  const ind  = document.getElementById('add-ind-' + taskId)?.value || dept;
+  if (!ind) return;
+  if (!t.owners) t.owners = [];
+  // Avoid duplicate
+  if (t.owners.some(o => o.individual === ind && o.dept === dept)) {
+    showToast('Already assigned', 'info'); return;
+  }
+  t.owners.push({ dept, individual: ind });
+  // Keep legacy owner field pointing to first owner
+  if (t.owners.length === 1) { t.owner = ind; t.ownerDept = dept; }
+  // Re-render just the chips
+  const chipsEl = document.getElementById('owner-chips-' + taskId);
+  if (chipsEl) {
+    chipsEl.innerHTML = t.owners.map((o, oi) =>
+      '<span style="display:inline-flex;align-items:center;gap:4px;background:#EFF6FF;color:#2563EB;border:1px solid #BFDBFE;border-radius:20px;padding:2px 8px;font-size:11px;font-weight:500;">' +
+        (o.individual || o.dept) + (o.dept && o.individual !== o.dept ? ' (' + o.dept + ')' : '') +
+        '<button onclick="removeTaskOwner(\'' + taskId + '\',' + oi + ')" style="background:none;border:none;cursor:pointer;color:#2563EB;font-size:12px;line-height:1;padding:0 1px;">×</button>' +
+      '</span>'
+    ).join('');
+  }
+};
+
+window.removeTaskOwner = (taskId, ownerIndex) => {
+  const t = _editingTasks.find(x => x.id === taskId);
+  if (!t || !t.owners) return;
+  t.owners.splice(ownerIndex, 1);
+  if (t.owners.length > 0) { t.owner = t.owners[0].individual; t.ownerDept = t.owners[0].dept; }
+  else { t.owner = ''; t.ownerDept = ''; }
+  const chipsEl = document.getElementById('owner-chips-' + taskId);
+  if (chipsEl) {
+    chipsEl.innerHTML = t.owners.length
+      ? t.owners.map((o, oi) =>
+          '<span style="display:inline-flex;align-items:center;gap:4px;background:#EFF6FF;color:#2563EB;border:1px solid #BFDBFE;border-radius:20px;padding:2px 8px;font-size:11px;font-weight:500;">' +
+            (o.individual || o.dept) + (o.dept && o.individual !== o.dept ? ' (' + o.dept + ')' : '') +
+            '<button onclick="removeTaskOwner(\'' + taskId + '\',' + oi + ')" style="background:none;border:none;cursor:pointer;color:#2563EB;font-size:12px;line-height:1;padding:0 1px;">×</button>' +
+          '</span>'
+        ).join('')
+      : '<span style="font-size:11px;color:#9CA3AF;">No owners assigned</span>';
+  }
+};
+
 window.updateTaskOwnerDept = (id, dept) => {
   const t = _editingTasks.find(x => x.id === id);
   if (!t) return;
   t.ownerDept = dept;
-  t.owner = dept; // default owner to dept until individual is chosen
+  t.owner = dept;
   t.ownerIndividual = '';
-  // Re-render just the individual select for this row
   const indCol = document.getElementById('ind-col-' + id);
   if (indCol) {
     const sel = indCol.querySelector('select');
@@ -1989,14 +2185,19 @@ window.showAddTaskToProduct = (productId) => {
     '<p style="font-size:13px;color:var(--text-mid);margin-bottom:16px;line-height:1.7;">Add a new task to this product.</p>' +
     '<div class="form-row"><label class="form-label">Task name <span class="req">*</span></label>' +
       '<input type="text" id="at-title" class="input-field" placeholder="e.g. Regulatory approval"/></div>' +
-    '<div class="form-row"><label class="form-label">Department</label>' +
-      '<select id="at-dept" class="select-field" style="width:100%;" onchange="updateAddTaskIndividuals()">' +
-        getDepts().map(d => '<option value="' + d + '">' + d + '</option>').join('') +
-      '</select></div>' +
-    '<div class="form-row"><label class="form-label">Individual owner</label>' +
-      '<select id="at-owner" class="select-field" style="width:100%;">' +
-        buildOwnerIndividualOptions(firstDept, '') +
-      '</select></div>' +
+    '<div class="form-row">' +
+      '<label class="form-label">Owners <span class="form-hint">— add multiple departments/individuals</span></label>' +
+      '<div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:6px;" id="at-owner-chips"><span style="font-size:11px;color:#9CA3AF;">No owners yet</span></div>' +
+      '<div style="display:flex;gap:6px;align-items:flex-end;">' +
+        '<select id="at-dept" class="select-field" style="flex:1;" onchange="updateAddTaskIndividuals()">' +
+          getDepts().map(d => '<option value="' + d + '">' + d + '</option>').join('') +
+        '</select>' +
+        '<select id="at-owner" class="select-field" style="flex:1;">' +
+          buildOwnerIndividualOptions(firstDept, '') +
+        '</select>' +
+        '<button class="btn-outline" style="font-size:11px;padding:7px 10px;white-space:nowrap;" onclick="addNewTaskOwnerChip()">+ Add</button>' +
+      '</div>' +
+    '</div>' +
     '<div class="form-row"><label class="form-label">Deadline <span class="req">*</span></label>' +
       '<input type="date" id="at-deadline" class="input-field"/></div>' +
     '<div class="form-actions">' +
@@ -2004,28 +2205,63 @@ window.showAddTaskToProduct = (productId) => {
       '<button class="btn-primary" onclick="addTaskToProduct(\'' + productId + '\')">Add task</button>' +
     '</div>';
   document.getElementById('create-product-modal').style.display = 'flex';
+  // track owners in closure
+  window._atOwners = [];
 };
 
-window.updateAddTaskIndividuals = () => {
+window.addNewTaskOwnerChip = () => {
   const dept = document.getElementById('at-dept')?.value || '';
-  const sel  = document.getElementById('at-owner');
-  if (sel) sel.innerHTML = buildOwnerIndividualOptions(dept, '');
+  const ind  = document.getElementById('at-owner')?.value || dept;
+  if (!ind) return;
+  if (!window._atOwners) window._atOwners = [];
+  if (window._atOwners.some(o => o.individual === ind && o.dept === dept)) {
+    showToast('Already added', 'info'); return;
+  }
+  window._atOwners.push({ dept, individual: ind });
+  const chips = document.getElementById('at-owner-chips');
+  if (chips) {
+    chips.innerHTML = window._atOwners.map((o, i) =>
+      '<span style="display:inline-flex;align-items:center;gap:4px;background:#EFF6FF;color:#2563EB;border:1px solid #BFDBFE;border-radius:20px;padding:2px 8px;font-size:11px;font-weight:500;">' +
+        (o.individual || o.dept) + (o.dept && o.individual !== o.dept ? ' (' + o.dept + ')' : '') +
+        '<button onclick="removeAtOwner(' + i + ')" style="background:none;border:none;cursor:pointer;color:#2563EB;font-size:12px;padding:0 1px;">×</button>' +
+      '</span>'
+    ).join('');
+  }
+};
+
+window.removeAtOwner = (i) => {
+  if (!window._atOwners) return;
+  window._atOwners.splice(i, 1);
+  const chips = document.getElementById('at-owner-chips');
+  if (chips) {
+    chips.innerHTML = window._atOwners.length
+      ? window._atOwners.map((o, idx) =>
+          '<span style="display:inline-flex;align-items:center;gap:4px;background:#EFF6FF;color:#2563EB;border:1px solid #BFDBFE;border-radius:20px;padding:2px 8px;font-size:11px;font-weight:500;">' +
+            (o.individual || o.dept) + (o.dept && o.individual !== o.dept ? ' (' + o.dept + ')' : '') +
+            '<button onclick="removeAtOwner(' + idx + ')" style="background:none;border:none;cursor:pointer;color:#2563EB;font-size:12px;padding:0 1px;">×</button>' +
+          '</span>'
+        ).join('')
+      : '<span style="font-size:11px;color:#9CA3AF;">No owners yet</span>';
+  }
 };
 
 window.addTaskToProduct = async (productId) => {
   const title    = document.getElementById('at-title')?.value.trim();
-  const dept     = document.getElementById('at-dept')?.value || '';
-  const owner    = document.getElementById('at-owner')?.value.trim() || dept;
   const deadline = document.getElementById('at-deadline')?.value || '';
   if (!title)    { showToast('Task name required.', 'error'); return; }
   if (!deadline) { showToast('Deadline is required.', 'error'); return; }
+
+  const owners = window._atOwners && window._atOwners.length > 0 ? window._atOwners : [];
+  const primaryOwner = owners.length > 0 ? owners[0].individual : '';
+  const primaryDept  = owners.length > 0 ? owners[0].dept : '';
 
   const prod   = productListCache[productId];
   const tasks  = getProductTasks(prod);
   const taskId = generateTaskId();
   const task   = {
-    id: taskId, title, owner, ownerDept: dept, deadline,
-    status: 'on-track', predecessors: [], locked: false,
+    id: taskId, title,
+    owner: primaryOwner, ownerDept: primaryDept, owners,
+    deadline, status: 'on-track', predecessors: [], locked: false,
     pillarId: null, order: tasks.length, kanbanCol: 'todo',
     createdAt: Date.now(), createdBy: currentUser.email,
   };
@@ -2033,9 +2269,11 @@ window.addTaskToProduct = async (productId) => {
   await set(ref(db, 'products/' + productId + '/tasks/' + taskId), task);
   if (!productListCache[productId].tasks) productListCache[productId].tasks = {};
   productListCache[productId].tasks[taskId] = task;
+  window._atOwners = [];
 
   closeProductModal();
-  await logActivity(productId, 'task_added', 'New task added: ' + title, 'Owner: ' + owner);
+  await logActivity(productId, 'task_added', 'New task added: ' + title,
+    'Owners: ' + (owners.map(o => o.individual || o.dept).join(', ') || 'Unassigned'));
   showToast('Task added.', 'success');
   if (currentView === 'tracker') renderTrackerTable(productListCache[productId], null);
 };
@@ -2516,7 +2754,12 @@ function buildPillarDetail(p) {
         '</div>'
       : '';
 
-    const owner = task.owner || task.dept || '';
+    const owners  = task.owners && task.owners.length > 0
+      ? task.owners
+      : (task.owner ? [{ dept: task.ownerDept || '', individual: task.owner }] : []);
+    const ownerDisplay = owners.length > 0
+      ? owners.map(o => '<span class="pillar-owner">' + (o.individual || o.dept || '') + '</span>').join('')
+      : '';
 
     const statusEl = isBlocked
       ? '<div class="task-status-badge" style="color:#D97706;border-color:#D9770620;background:#D9770610;cursor:default;">' +
@@ -2557,7 +2800,7 @@ function buildPillarDetail(p) {
       '<div class="pillar-detail-body">' +
         '<div class="pillar-detail-name">' + (task.title || task.name || 'Untitled task') + '</div>' +
         '<div class="pillar-detail-meta">' +
-          (owner ? '<span class="pillar-owner">' + owner + '</span>' : '') +
+          ownerDisplay +
           deadlineChip +
         '</div>' +
         blockedHint + spinLink +
@@ -2580,17 +2823,30 @@ function buildPillarDetail(p) {
 }
 
 /* ══ TASK REASSIGNMENT ══════════════════════════════════════ */
-window.showReassignTask = (productId, taskId) => {
+window.showReassignTask = async (productId, taskId) => {
   const prod = productListCache[productId];
   if (!prod) return;
   const tasks = getProductTasks(prod);
   const task  = tasks.find(t => t.id === taskId);
   if (!task) return;
+
+  // Re-fetch stakeholders and departments live so new additions appear immediately
+  try {
+    const [sSnap, dSnap] = await Promise.all([
+      get(ref(db, 'config/stakeholders')),
+      get(ref(db, 'config/departments')),
+    ]);
+    if (sSnap.exists()) {
+      const saved = sSnap.val();
+      STAKEHOLDERS = Array.isArray(saved) ? saved : Object.values(saved);
+    }
+    if (dSnap.exists()) DEPARTMENTS = { ...DEPARTMENTS, ...dSnap.val() };
+  } catch(e) { /* use cached */ }
+
   const panel = document.getElementById('modal-reassign-panel');
   if (!panel) return;
 
-  const firstDept = getDepts()[0] || '';
-  const curDept   = task.ownerDept || firstDept;
+  const curDept = task.ownerDept || getDepts()[0] || '';
 
   panel.innerHTML =
     '<div style="background:#F8F8F7;border-top:1px solid var(--border);padding:14px 16px;margin-top:8px;">' +
@@ -3970,8 +4226,63 @@ function renderReports(el) {
 
   if (currentRole === 'admin') setTimeout(loadReportProductList, 50);
   loadDeadlineStatus();
-  if (currentRole === 'admin') { loadAlertProductList(); loadEmailSchedule(); }
+  if (currentRole === 'admin') { loadAlertProductList(); loadEmailSchedule(); loadAccessRequests(); }
 }
+
+async function loadAccessRequests() {
+  const el = document.getElementById('access-requests-list');
+  if (!el) return;
+  try {
+    const snap = await get(ref(db, 'accessRequests'));
+    if (!snap.exists()) {
+      el.innerHTML = '<div style="font-size:12px;color:var(--text-muted);">No pending access requests.</div>';
+      return;
+    }
+    const requests = Object.values(snap.val()).filter(r => r.status === 'pending');
+    const badge = document.getElementById('req-count-badge');
+    if (badge) {
+      badge.style.display = requests.length > 0 ? 'inline' : 'none';
+      badge.textContent   = requests.length + ' pending';
+    }
+    if (requests.length === 0) {
+      el.innerHTML = '<div style="font-size:12px;color:var(--text-muted);">No pending access requests.</div>';
+      return;
+    }
+    el.innerHTML = requests.map(r =>
+      '<div style="display:flex;align-items:flex-start;gap:12px;padding:12px 0;border-bottom:1px solid var(--border);">' +
+        '<div style="flex:1;">' +
+          '<div style="font-size:12px;font-weight:600;color:var(--text);">' + (r.name || 'Unknown') + '</div>' +
+          '<div style="font-size:11px;color:var(--text-muted);">' + r.email + '</div>' +
+          '<div style="font-size:11px;color:var(--text);margin-top:3px;">' + (r.reason || '') + '</div>' +
+          '<div style="font-size:10px;color:var(--text-muted);margin-top:2px;">' + new Date(r.requestedAt).toLocaleDateString('en-GB', {day:'numeric',month:'short',year:'numeric'}) + '</div>' +
+        '</div>' +
+        '<div style="display:flex;gap:6px;flex-shrink:0;">' +
+          '<button class="btn-primary" style="font-size:11px;padding:6px 12px;" onclick="approveAccessRequest(\'' + r.id + '\',\'' + r.email + '\',\'' + (r.name||'').replace(/'/g,'') + '\')">Approve</button>' +
+          '<button class="btn-danger-xs" onclick="denyAccessRequest(\'' + r.id + '\')">Deny</button>' +
+        '</div>' +
+      '</div>'
+    ).join('');
+  } catch(e) {
+    el.innerHTML = '<div style="font-size:12px;color:var(--text-muted);">Could not load requests.</div>';
+  }
+}
+
+window.approveAccessRequest = async (reqId, email, name) => {
+  const key = sanitiseEmail(email);
+  try {
+    await set(ref(db, 'allowlist/' + key), { role: 'member', name, email, addedAt: Date.now(), addedBy: currentUser.email });
+    await set(ref(db, 'accessRequests/' + reqId + '/status'), 'approved');
+    showToast(name + ' approved.', 'success');
+    loadAccessRequests();
+  } catch(e) { showToast('Failed: ' + e.message, 'error'); }
+};
+
+window.denyAccessRequest = async (reqId) => {
+  if (!confirm('Deny this request?')) return;
+  await set(ref(db, 'accessRequests/' + reqId + '/status'), 'denied');
+  showToast('Request denied.', 'info');
+  loadAccessRequests();
+};
 
 async function loadAlertProductList() {
   const snap    = await get(ref(db, 'products'));
@@ -4317,6 +4628,18 @@ function renderSettings(el) {
         </div>
       </div>
     </div>
+
+    ${currentRole === 'admin' ? `
+    <div class="panel" style="margin-bottom:16px;" id="access-requests-panel">
+      <div class="panel-header">
+        <span class="panel-title">Access requests</span>
+        <span id="req-count-badge" style="font-size:10px;font-weight:700;background:#FEF2F2;color:#C0282D;padding:2px 8px;border-radius:10px;display:none;">0 pending</span>
+      </div>
+      <div id="access-requests-list" class="panel-body">
+        <div style="font-size:12px;color:var(--text-muted);">Loading...</div>
+      </div>
+    </div>
+    ` : ''}
 
     ${currentRole === 'admin' ? `
     <div class="panel" style="margin-bottom:16px;">
@@ -4810,6 +5133,17 @@ async function loadSATab(tab) {
 
 /* ── TAB: PEOPLE (Department Directory) ─────────────────── */
 async function renderSAPeople(el) {
+  // Always re-fetch departments so new ones added in Departments tab appear immediately
+  try {
+    const dSnap = await get(ref(db, 'config/departments'));
+    if (dSnap.exists()) DEPARTMENTS = { ...DEPARTMENTS, ...dSnap.val() };
+    const sSnap = await get(ref(db, 'config/stakeholders'));
+    if (sSnap.exists()) {
+      const saved = sSnap.val();
+      STAKEHOLDERS = Array.isArray(saved) ? saved : Object.values(saved);
+    }
+  } catch(e) { /* use cached */ }
+
   const depts = getDepts();
 
   let html = '<div style="margin-bottom:16px;display:flex;align-items:center;justify-content:space-between;">' +
@@ -4819,27 +5153,34 @@ async function renderSAPeople(el) {
 
   depts.forEach(dept => {
     const members = STAKEHOLDERS.filter(s => s.dept === dept);
+    const deptColor = (Object.values(DEPARTMENTS).find(d => d.name === dept) || {}).colour || '#6B7280';
     html += '<div class="panel" style="margin-bottom:12px;">' +
-      '<div class="panel-header">' +
+      '<div class="panel-header" style="border-left:3px solid ' + deptColor + ';">' +
         '<span class="panel-title">' + dept + '</span>' +
-        '<span style="font-size:11px;color:var(--text-muted);">' + members.length + ' member' + (members.length !== 1 ? 's' : '') + '</span>' +
+        '<div style="display:flex;align-items:center;gap:8px;">' +
+          '<span style="font-size:11px;color:var(--text-muted);">' + members.length + ' member' + (members.length !== 1 ? 's' : '') + '</span>' +
+          '<button onclick="saAddStakeholderInDept(\'' + dept.replace(/'/g, '') + '\')" style="background:none;border:1px solid var(--border);border-radius:6px;padding:3px 8px;font-size:10px;color:var(--text-muted);cursor:pointer;font-family:Poppins,sans-serif;">+ Add</button>' +
+        '</div>' +
       '</div>' +
       '<div style="padding:0;">' +
-        members.map(s => '<div style="display:flex;align-items:center;gap:12px;padding:10px 18px;border-bottom:1px solid var(--border);">' +
-          '<div style="width:32px;height:32px;border-radius:50%;background:#FEF2F2;color:#C0282D;font-size:12px;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0;">' +
-            (s.name[0] || '?').toUpperCase() +
-          '</div>' +
-          '<div style="flex:1;min-width:0;">' +
-            '<div style="font-size:12px;font-weight:600;color:var(--text);">' + s.name +
-              (s.isDeptEmail ? ' <span style="font-size:10px;font-weight:400;background:#EFF6FF;color:#2563EB;padding:1px 6px;border-radius:10px;">dept email</span>' : '') +
-            '</div>' +
-            '<div style="font-size:11px;color:var(--text-muted);">' + s.email + '</div>' +
-          '</div>' +
-          '<button onclick="saEditStakeholder(\'' + s.id + '\')" style="background:none;border:1px solid var(--border);border-radius:6px;padding:4px 10px;font-size:11px;color:var(--text-muted);cursor:pointer;font-family:Poppins,sans-serif;">Edit</button>' +
-          '<button onclick="saToggleStakeholder(\'' + s.id + '\')" style="background:none;border:1px solid var(--border);border-radius:6px;padding:4px 10px;font-size:11px;color:' + (s.enabled !== false ? 'var(--green)' : 'var(--red)') + ';cursor:pointer;font-family:Poppins,sans-serif;">' +
-            (s.enabled !== false ? 'Active' : 'Disabled') +
-          '</button>' +
-        '</div>').join('') +
+        (members.length === 0
+          ? '<div style="padding:12px 18px;font-size:12px;color:#9CA3AF;font-style:italic;">No members yet — click + Add to populate this department.</div>'
+          : members.map(s => '<div style="display:flex;align-items:center;gap:12px;padding:10px 18px;border-bottom:1px solid var(--border);">' +
+              '<div style="width:32px;height:32px;border-radius:50%;background:' + deptColor + '20;color:' + deptColor + ';font-size:12px;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0;">' +
+                (s.name[0] || '?').toUpperCase() +
+              '</div>' +
+              '<div style="flex:1;min-width:0;">' +
+                '<div style="font-size:12px;font-weight:600;color:var(--text);">' + s.name +
+                  (s.isDeptEmail ? ' <span style="font-size:10px;font-weight:400;background:#EFF6FF;color:#2563EB;padding:1px 6px;border-radius:10px;">dept email</span>' : '') +
+                '</div>' +
+                '<div style="font-size:11px;color:var(--text-muted);">' + s.email + '</div>' +
+              '</div>' +
+              '<button onclick="saEditStakeholder(\'' + s.id + '\')" style="background:none;border:1px solid var(--border);border-radius:6px;padding:4px 10px;font-size:11px;color:var(--text-muted);cursor:pointer;font-family:Poppins,sans-serif;">Edit</button>' +
+              '<button onclick="saToggleStakeholder(\'' + s.id + '\')" style="background:none;border:1px solid var(--border);border-radius:6px;padding:4px 10px;font-size:11px;color:' + (s.enabled !== false ? 'var(--green)' : 'var(--red)') + ';cursor:pointer;font-family:Poppins,sans-serif;">' +
+                (s.enabled !== false ? 'Active' : 'Disabled') +
+              '</button>' +
+            '</div>').join('')
+        ) +
       '</div>' +
     '</div>';
   });
@@ -4900,13 +5241,18 @@ window.saSaveStakeholder = async (id) => {
   loadSATab('people');
 };
 
-window.saAddStakeholder = () => {
+window.saAddStakeholderInDept = (dept) => {
+  saAddStakeholder(dept);
+};
+
+window.saAddStakeholder = (prefillDept) => {
   const el = document.getElementById('people-edit-panel');
   if (!el) return;
   const newId = 's_new_' + Date.now();
+  const depts = getDepts();
   el.innerHTML =
     '<div class="panel" style="margin-top:12px;">' +
-      '<div class="panel-header"><span class="panel-title">Add person</span></div>' +
+      '<div class="panel-header"><span class="panel-title">Add person' + (prefillDept ? ' — ' + prefillDept : '') + '</span></div>' +
       '<div class="panel-body">' +
         '<div class="form-row"><label class="form-label">Name <span class="req">*</span></label>' +
           '<input id="sep-name" class="input-field" placeholder="e.g. A. Surname"/></div>' +
@@ -4914,7 +5260,7 @@ window.saAddStakeholder = () => {
           '<input id="sep-email" class="input-field" placeholder="name@mixtafrica.com"/></div>' +
         '<div class="form-row"><label class="form-label">Department</label>' +
           '<select id="sep-dept" class="select-field" style="width:100%;">' +
-            getDepts().map(d => '<option value="' + d + '">' + d + '</option>').join('') +
+            depts.map(d => '<option value="' + d + '"' + (d === prefillDept ? ' selected' : '') + '>' + d + '</option>').join('') +
           '</select></div>' +
         '<div class="form-row"><label class="form-label">Type</label>' +
           '<select id="sep-type" class="select-field" style="width:100%;">' +
@@ -5503,20 +5849,46 @@ window.clearErrorLog = async () => {
 
 /* ── TAB 3: USER MANAGEMENT ──────────────────────────────── */
 async function renderSAUsers(el) {
-  const [allowSnap, userSnap, prodSnap] = await Promise.all([
+  const [allowSnap, userSnap, prodSnap, reqSnap] = await Promise.all([
     get(ref(db, 'allowlist')),
     get(ref(db, 'users')),
     get(ref(db, 'products')),
+    get(ref(db, 'accessRequests')),
   ]);
   const allowlist = allowSnap.val() || {};
   const users     = userSnap.val()  || {};
   const products  = prodSnap.val()  || {};
+  const allRequests = reqSnap.exists() ? Object.values(reqSnap.val()).filter(r => r.status === 'pending') : [];
+
+  const reqSection = allRequests.length > 0
+    ? '<div class="panel" style="margin-bottom:14px;">' +
+        '<div class="panel-header">' +
+          '<span class="panel-title">Pending access requests</span>' +
+          '<span style="font-size:10px;font-weight:700;background:#FEF2F2;color:#C0282D;padding:2px 8px;border-radius:10px;">' + allRequests.length + ' pending</span>' +
+        '</div>' +
+        '<div style="padding:0;">' +
+          allRequests.map(r =>
+            '<div style="display:flex;align-items:center;gap:12px;padding:11px 18px;border-bottom:1px solid var(--border);">' +
+              '<div style="flex:1;">' +
+                '<div style="font-size:12px;font-weight:600;">' + (r.name||'?') + ' <span style="font-size:11px;font-weight:400;color:var(--text-muted);">' + r.email + '</span></div>' +
+                '<div style="font-size:11px;color:var(--text-muted);">' + (r.reason||'') + '</div>' +
+              '</div>' +
+              '<div style="display:flex;gap:6px;">' +
+                '<button class="btn-primary" style="font-size:11px;padding:5px 10px;" onclick="approveAccessRequest(\'' + r.id + '\',\'' + r.email + '\',\'' + (r.name||'').replace(/'/g,'') + '\')">Approve</button>' +
+                '<button class="btn-danger-xs" onclick="denyAccessRequest(\'' + r.id + '\')">Deny</button>' +
+              '</div>' +
+            '</div>'
+          ).join('') +
+        '</div>' +
+      '</div>'
+    : '';
 
   const rows = Object.entries(allowlist).map(([key, al]) => {
     const u        = users[key] || {};
     const owned    = Object.values(products).filter(p => p.ownerId === key).length;
     const shared   = Object.values(products).filter(p => p.sharedWith?.[key]).length;
     const handover = Object.values(products).find(p => p.handover?.active && p.handover?.relieverId === key);
+    const deptLocked = u.deptLocked ? ' <span style="font-size:9px;color:#9CA3AF;">(locked)</span>' : '';
 
     return `<tr class="tracker-row">
       <td class="tracker-pillar">
@@ -5524,8 +5896,14 @@ async function renderSAUsers(el) {
         <div class="tracker-pillar-owner">${u.email || key.replace(/_/g,'.')}</div>
       </td>
       <td><span class="role-badge ${al.role === 'admin' ? 'role-admin' : 'role-viewer'}">${al.role}</span></td>
+      <td style="font-size:12px;">
+        ${u.dept || '<span style="color:#9CA3AF;">Not set</span>'}${deptLocked}
+        ${!u.deptLocked ? '<br><select style="font-size:10px;margin-top:4px;border:1px solid var(--border);border-radius:4px;padding:2px 4px;" onchange="saChangeDept(\''+key+'\',this.value)">' +
+          '<option value="">Change dept...</option>' +
+          getDepts().map(d => '<option value="'+d+'"'+(d===u.dept?' selected':'')+'>'+d+'</option>').join('') +
+        '</select>' : '<button class="btn-outline" style="font-size:10px;padding:2px 8px;margin-top:4px;" onclick="saUnlockDept(\''+key+'\')">Change</button>'}
+      </td>
       <td style="font-size:13px;">${owned} owned · ${shared} shared</td>
-      <td style="font-size:13px;">${handover ? `<span class="pill pill-amber">Covering ${handover.name}</span>` : '—'}</td>
       <td>
         <div style="display:flex;gap:4px;">
           <button class="btn-secondary-sm" style="font-size:10px;" onclick="saToggleRole('${key}','${al.role}')">
@@ -5537,17 +5915,32 @@ async function renderSAUsers(el) {
     </tr>`;
   }).join('');
 
-  el.innerHTML = `
+  el.innerHTML = reqSection + `
     <div class="panel" style="overflow:auto;">
       <table class="tracker-table">
         <thead><tr>
-          <th>User</th><th style="width:90px;">Role</th>
-          <th>Products</th><th>Handover</th><th style="width:70px;"></th>
+          <th>User</th><th style="width:80px;">Role</th>
+          <th>Department</th><th>Products</th><th style="width:100px;"></th>
         </tr></thead>
         <tbody>${rows || '<tr><td colspan="5" class="muted" style="padding:16px;">No users found.</td></tr>'}</tbody>
       </table>
     </div>`;
 }
+
+window.saChangeDept = async (userKey, dept) => {
+  if (!dept) return;
+  await set(ref(db, 'users/' + userKey + '/dept'), dept);
+  await set(ref(db, 'users/' + userKey + '/deptLocked'), true);
+  showToast('Department set to ' + dept, 'success');
+  loadSATab('users');
+};
+
+window.saUnlockDept = async (userKey) => {
+  if (!confirm('Allow this user to change their department? Their current selection will be unlocked.')) return;
+  await set(ref(db, 'users/' + userKey + '/deptLocked'), false);
+  showToast('Department unlocked.', 'success');
+  loadSATab('users');
+};
 
 window.saToggleRole = async (userKey, currentRole) => {
   const newRole = currentRole === 'admin' ? 'member' : 'admin';
@@ -6123,10 +6516,14 @@ async function renderSADepartments(el) {
     <div class="panel" style="margin-bottom:14px;">
       <div class="panel-header">
         <span class="panel-title">Departments & Teams</span>
-        <button class="btn-primary-sm" onclick="showAddDepartment()">+ Add dept</button>
+        <div style="display:flex;gap:8px;">
+          <button class="btn-outline" style="font-size:11px;" onclick="switchSATab('people',null)">Go to People →</button>
+          <button class="btn-primary-sm" onclick="showAddDepartment()">+ Add dept</button>
+        </div>
       </div>
       <div class="panel-body" style="padding:0;">${deptRows}</div>
     </div>
+    <div style="font-size:12px;color:var(--text-muted);padding:4px 0 16px;">Adding a department here automatically creates a section in the People tab where you can add members.</div>
     <div id="dept-edit-panel"></div>`;
 }
 
@@ -7324,6 +7721,18 @@ window.__npd_init({
   removeCustomOnboardEmail: window.removeCustomOnboardEmail,
   updateTaskOwnerDept:     window.updateTaskOwnerDept,
   updateAddTaskIndividuals: window.updateAddTaskIndividuals,
+  addNewTaskOwnerChip:     window.addNewTaskOwnerChip,
+  removeAtOwner:           window.removeAtOwner,
+  addTaskOwner:            window.addTaskOwner,
+  removeTaskOwner:         window.removeTaskOwner,
+  updateAddIndividuals:    window.updateAddIndividuals,
+  saAddStakeholderInDept:  window.saAddStakeholderInDept,
+  submitAccessRequest:     window.submitAccessRequest,
+  approveAccessRequest:    window.approveAccessRequest,
+  denyAccessRequest:       window.denyAccessRequest,
+  confirmDeptSelection:    window.confirmDeptSelection,
+  saChangeDept:            window.saChangeDept,
+  saUnlockDept:            window.saUnlockDept,
   setItemType:             window.setItemType,
   convertItemType:         window.convertItemType,
   spinOutTask:             window.spinOutTask,
@@ -8266,8 +8675,17 @@ textarea.input-field { resize: vertical; line-height: 1.6; }
   <div class="denied-card">
     <div class="denied-icon" style="color:var(--text-muted);"><svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg></div>
     <h2>Access not granted</h2>
-    <p>Your account (<span class="denied-email" id="denied-email"></span>) has not been added to the NPD Hub allowlist.<br/><br/>Contact a Commercial Strategy admin to request access.</p>
-    <button class="btn-outline" onclick="handleSignOut()">Sign in with a different account</button>
+    <p>Your account (<span class="denied-email" id="denied-email"></span>) does not have access to the Mixta Africa NPD Hub.<br/><br/>Only <strong>@mixtafrica.com</strong> accounts can sign in directly. For external access, submit a request below.</p>
+    <div id="denied-request-section" style="display:none;margin:16px 0;text-align:left;border-top:1px solid var(--border);padding-top:16px;">
+      <div style="font-size:12px;font-weight:600;color:var(--text);margin-bottom:10px;">Request access</div>
+      <div style="display:flex;flex-direction:column;gap:8px;">
+        <input type="text" id="req-name" class="input-field" placeholder="Your full name" style="width:100%;"/>
+        <input type="text" id="req-reason" class="input-field" placeholder="Reason for access (e.g. external consultant for Project X)" style="width:100%;"/>
+        <button class="btn-primary" style="width:100%;" onclick="submitAccessRequest()">Submit request</button>
+        <div id="req-result" style="display:none;font-size:12px;color:#16A34A;text-align:center;padding:8px;background:#F0FDF4;border-radius:6px;"></div>
+      </div>
+    </div>
+    <button class="btn-outline" onclick="handleSignOut()" style="margin-top:8px;">Sign in with a different account</button>
   </div>
 </div>
 
