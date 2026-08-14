@@ -146,59 +146,63 @@ function teardownAllListeners() {
 
 /* ─── AUTH STATE LISTENER ─── */
 onAuthStateChanged(auth, async (user) => {
+  // Always reset the sign-in button — it was set to loading on click
+  setBtnLoading(false);
+
   if (user) {
     const email = user.email || '';
     const isMixta = email.toLowerCase().endsWith('@mixtafrica.com');
 
     if (!isMixta) {
-      // Non-Mixta email: sign out and show access denied with request button
       await signOut(auth);
       showAccessDenied(email, false);
       return;
     }
 
-    // Mixta Africa email — always allowed in
     currentUser = user;
-    const key   = sanitiseEmail(email);
+    const key = sanitiseEmail(email);
 
-    // Read or create allowlist entry
-    const snap = await get(ref(db, 'allowlist/' + key));
-    if (snap.exists()) {
-      currentRole = snap.val().role || 'member';
-    } else {
-      // Auto-provision new Mixta staff as member
-      currentRole = 'member';
-      await set(ref(db, 'allowlist/' + key), {
-        role: 'member', name: user.displayName || email.split('@')[0],
-        email, addedAt: Date.now(), addedBy: 'auto',
-      });
-    }
-
-    // Read user record to check if dept is already set
-    const userSnap = await get(ref(db, 'users/' + key));
-    const userData  = userSnap.exists() ? userSnap.val() : null;
-
-    if (!userData || !userData.dept) {
-      // First login — detect dept from email or show selection screen
-      showApp();
-      const detectedDept = detectDeptFromEmail(email);
-      if (detectedDept && detectedDept !== 'Commercial Strategy') {
-        // Auto-detected from STAKEHOLDERS — set immediately and show welcome
-        await set(ref(db, 'users/' + key), {
-          name: user.displayName || email.split('@')[0],
-          email, role: currentRole, dept: detectedDept,
-          deptLocked: true, createdAt: Date.now(),
-        });
-        setTimeout(() => showWelcomeModal(detectedDept), 600);
-        loadView('dashboard');
+    try {
+      // Read or create allowlist entry
+      const snap = await get(ref(db, 'allowlist/' + key));
+      if (snap.exists()) {
+        currentRole = snap.val().role || 'member';
       } else {
-        // Unknown dept — show dept selection screen before entering the app
-        showDeptSelectionScreen(user, key);
+        currentRole = 'member';
+        await set(ref(db, 'allowlist/' + key), {
+          role: 'member', name: user.displayName || email.split('@')[0],
+          email, addedAt: Date.now(), addedBy: 'auto',
+        });
       }
-    } else {
-      // Returning user — enter app normally
-      showApp();
-      loadView('dashboard');
+
+      // Read user record to check if dept is already set
+      const userSnap = await get(ref(db, 'users/' + key));
+      const userData  = userSnap.exists() ? userSnap.val() : null;
+
+      if (!userData || !userData.dept) {
+        showApp();
+        const detectedDept = detectDeptFromEmail(email);
+        if (detectedDept && detectedDept !== 'Commercial Strategy') {
+          await set(ref(db, 'users/' + key), {
+            name: user.displayName || email.split('@')[0],
+            email, role: currentRole, dept: detectedDept,
+            deptLocked: true, createdAt: Date.now(),
+          });
+          setTimeout(() => showWelcomeModal(detectedDept), 600);
+          loadView('dashboard');
+        } else {
+          showDeptSelectionScreen(user, key);
+        }
+      } else {
+        showApp();
+        loadView('dashboard');
+      }
+    } catch(err) {
+      // Firebase error — show a clear message rather than spinning forever
+      console.error('Auth flow error:', err);
+      showLoginError('Sign-in failed: ' + (err.message || 'Could not connect to the database. Please try again.'));
+      await signOut(auth);
+      showLogin();
     }
   } else {
     currentUser = null;
