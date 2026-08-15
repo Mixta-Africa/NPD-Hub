@@ -2401,16 +2401,13 @@ window.saveProduct = async (existingId) => {
   const itemType = (document.getElementById('f-item-type')?.value || 'product');
 
   // Determine if this should go live or enter the approval queue
-  const newStatus = (isNew && currentRole !== 'admin' && !isSuperAdmin) ? 'pending-approval' : 'active';
-
-  // Determine if this should go live or enter the approval queue
-  const newStatus = (isNew && currentRole !== 'admin' && !isSuperAdmin) ? 'pending-approval' : 'active';
+  const initialProductStatus = (isNew && currentRole !== 'admin' && !isSuperAdmin) ? 'pending-approval' : 'active';
 
   const payload = {
     id, name, description: desc, launchDate,
     itemType: isNew ? itemType : (productListCache[existingId]?.itemType || 'product'),
     tasks,
-    status:     isNew ? newStatus : (productListCache[existingId]?.status || 'active'),
+    status:     isNew ? initialProductStatus : (productListCache[existingId]?.status || 'active'),
     taskSchema:          isNew ? (_editingTasks.length > 0 && _editingTasks[0].pillarId ? 'sop' : 'custom') : (productListCache[existingId]?.taskSchema || 'sop'),
     baselineLaunchDate:  isNew ? launchDate : (productListCache[existingId]?.baselineLaunchDate || launchDate),
     ownerId:      ownerKey,
