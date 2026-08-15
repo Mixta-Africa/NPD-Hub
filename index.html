@@ -1440,8 +1440,10 @@ async function loadWorkload() {
       const moreCount = data.tasks.length - 4;
 
       html +=
-        '<div style="background:#fff;border:1px solid #E5E5E3;border-left:3px solid ' + color + ';border-radius:10px;padding:14px 16px;display:flex;align-items:flex-start;gap:14px;cursor:pointer;" onclick="dashNavToTrackerForProduct(\'' + prod.id + '\')">' +
-          '<div style="flex:1;min-width:0;">' +
+        '<div style="background:#fff;border:1px solid #E5E5E3;border-radius:12px;overflow:hidden;">' +
+          // Header
+          '<div style="padding:14px 18px 12px;display:flex;align-items:center;gap:14px;">' +
+            '<div style="flex:1;min-width:0;">' +
           // Header
           '<div style="padding:14px 18px 12px;display:flex;align-items:center;gap:14px;">' +
             '<div style="flex:1;min-width:0;">' +
@@ -1600,7 +1602,7 @@ async function loadMyActions() {
       const bgCol  = sectionBg[priority];
 
       html +=
-        '<div style="background:#fff;border:1px solid #E5E5E3;border-left:3px solid ' + color + ';border-radius:10px;padding:14px 16px;display:flex;align-items:flex-start;gap:14px;cursor:pointer;" onclick="loadView(\'tracker\')">' +
+        '<div style="background:#fff;border:1px solid #E5E5E3;border-left:3px solid ' + color + ';border-radius:10px;padding:14px 16px;display:flex;align-items:flex-start;gap:14px;cursor:pointer;" onclick="dashNavToTrackerForProduct(\'' + prod.id + '\')">' +
           '<div style="flex:1;min-width:0;">' +
             '<div style="font-size:13px;font-weight:600;color:#1A1A1A;margin-bottom:3px;">' + (task.title || 'Untitled task') + '</div>' +
             '<div style="font-size:11px;color:#6B7280;margin-bottom:6px;">' + prod.name + '</div>' +
