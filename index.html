@@ -7293,9 +7293,12 @@ async function generateAIDraft(prompt) {
             role: 'system',
             content: `You are an expert real estate professional at Mixta Africa writing internal emails.
 Write concise, professional emails in a direct business tone.
-Do not use filler phrases. Do not add "I hope this finds you well."
-Write only the email body — no subject line, no salutation unless requested.
-Use specific product details provided. Be concrete about responsibilities and deadlines.`,
+CRITICAL RULES:
+1. ALWAYS start the email with "Dear [First Name]," (or "Dear Team," if addressing multiple people).
+2. Whenever you mention a person's name in the email body, use ONLY their first name (e.g., use "Andrea" instead of "Andrea Cameron Cole").
+3. Do not use filler phrases like "I hope this finds you well."
+4. Write only the email body — no subject lines.
+Use specific details provided. Be concrete about responsibilities and deadlines.`,
           },
           { role: 'user', content: prompt },
         ],
@@ -7674,12 +7677,9 @@ Delayed tasks: ${delayed}
 Overdue tasks: ${overdue}${overdueList ? ' — ' + overdueList : ''}
 At risk (due within 3 days): ${atRisk || 'none'}
 
-Write 3 short sections with bold headers:
-**Status Summary** — one sentence on overall health
-**Key Risks** — specific tasks or areas that need attention (be concrete)
-**Required Actions** — what stakeholders need to do before the next update
-
-Be direct. No filler. Flag risks clearly.`;
+Format the report strictly as a clean Markdown table with 3 columns: "Category", "Status/Details", and "Owner/Action". 
+Create 3 rows in the table for: Status Summary, Key Risks, and Required Actions. 
+Ensure you use ONLY first names for any people mentioned. Be direct and flag risks clearly.`;
 }
 
 function buildHandoverPrompt(prod, tasks, relieverName, returnDate, ownerNotes) {
