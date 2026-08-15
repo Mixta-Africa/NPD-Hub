@@ -1413,10 +1413,8 @@ async function loadWorkload() {
         const inWindow = dueDate && dueDate <= horizon;
         const needsAttention = eff === 'overdue' || eff === 'delayed' || isBlocked;
         if (!inWindow && !needsAttention) return;
-
-        const entry = { task, prod, eff, isBlocked };
-        // Map by task.owner (dept name stored there)
-        addToDept(task.owner || 'Unassigned', entry);
+        // Group by Department instead of Individual Name
+        addToDept(task.ownerDept || task.owner || 'Unassigned', { task, prod, eff, isBlocked });
       });
     });
 
