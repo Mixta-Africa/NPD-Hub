@@ -1440,7 +1440,8 @@ async function loadWorkload() {
       const moreCount = data.tasks.length - 4;
 
       html +=
-        '<div style="background:#fff;border:1px solid #E5E5E3;border-radius:12px;overflow:hidden;">' +
+        '<div style="background:#fff;border:1px solid #E5E5E3;border-left:3px solid ' + color + ';border-radius:10px;padding:14px 16px;display:flex;align-items:flex-start;gap:14px;cursor:pointer;" onclick="dashNavToTrackerForProduct(\'' + prod.id + '\')">' +
+          '<div style="flex:1;min-width:0;">' +
           // Header
           '<div style="padding:14px 18px 12px;display:flex;align-items:center;gap:14px;">' +
             '<div style="flex:1;min-width:0;">' +
@@ -3570,10 +3571,18 @@ async function loadTrackerProducts() {
   if (!sel) return;
   active.forEach(p => { const o=document.createElement('option'); o.value=p.id; o.textContent=p.name; sel.appendChild(o); });
   if (active.length > 0) {
-    sel.value = active[0].id;
-    trackerSelectedProduct = active[0].id;
-    subscribeToProduct(active[0].id);
-    window._trackerFilter = null;
+    // Check if we came from a specific product click
+    let targetId = active[0].id;
+    if (window._trackerTargetProduct && active.find(p => p.id === window._trackerTargetProduct)) {
+      targetId = window._trackerTargetProduct;
+    }
+    
+    sel.value = targetId;
+    trackerSelectedProduct = targetId;
+    subscribeToProduct(targetId);
+    
+    // Clear the target so it doesn't stick permanently
+    window._trackerTargetProduct = null;
   } else {
     document.getElementById('tracker-body').innerHTML =
       '<div class="panel"><div class="empty-state"><span class="empty-icon" style="color:var(--text-muted);"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 4h2a2 2 0 012 2v14a2 2 0 01-2 2H6a2 2 0 01-2-2V6a2 2 0 012-2h2"/><rect x="8" y="2" width="8" height="4" rx="1"/></svg></span><h3>No products yet</h3><p>Create a product first.</p></div></div>';
@@ -6217,6 +6226,12 @@ window.dashNavToTracker = (filter) => {
   loadView('tracker');
 };
 
+window.dashNavToTrackerForProduct = (productId, filter) => {
+  window._trackerTargetProduct = productId;
+  window._trackerFilter = filter || null;
+  loadView('tracker');
+};
+
 /* ── DASHBOARD: DEADLINE REMINDER MODAL ── */
 window.showReminderModal = async (productId, pillarId, pillarName, productName, deadline) => {
   const prod  = productListCache[productId] || {};
@@ -7034,7 +7049,7 @@ window.showQuickUpdate = async (productId) => {
         attentionHtml + ontrackHtml +
       '</div>' +
       '<div style="padding:12px 18px;border-top:1px solid var(--border);flex-shrink:0;">' +
-        '<button class="btn-secondary-sm" style="width:100%;" onclick="document.getElementById(\'quick-update-modal\').style.display=\'none\';loadView(\'tracker\')">Open full tracker →</button>' +
+        '<button class="btn-secondary-sm" style="width:100%;" onclick="document.getElementById(\'quick-update-modal\').style.display=\'none\';dashNavToTrackerForProduct(\'' + productId + '\')">Open full tracker →</button>' +
       '</div>' +
     '</div>';
   modal.style.display = 'flex';
@@ -7757,6 +7772,7 @@ window.__npd_init({
   saToggleDeptRole:        window.saToggleDeptRole,
   saToggleProductStatus:   window.saToggleProductStatus,
   dashNavToTracker:        window.dashNavToTracker,
+  dashNavToTrackerForProduct: window.dashNavToTrackerForProduct,
   showReminderModal:       window.showReminderModal,
   sendReminder:            window.sendReminder,
   setCalView:              window.setCalView,
