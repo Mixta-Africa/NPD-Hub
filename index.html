@@ -872,6 +872,7 @@ function pillarsToTasks(pillars) {
       startDate:   '',
       status:      pd.taskStatus || 'on-track',
       notes:       pd.notes || '',
+      acknowledgement: pd.acknowledgement || null,
       predecessors:[],
       locked:      false,
       pillarId:    pl.id,
@@ -2905,10 +2906,16 @@ function buildPillarDetail(p) {
               : '<span class="pill pill-green">' + formatDate(task.deadline) + '</span>';
 
     const blockedHint = isBlocked
-      ? '<div style="font-size:11px;color:#D97706;margin-top:4px;display:flex;align-items:center;gap:4px;">' +
-          '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 007.54.54l3-3a5 5 0 00-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 00-7.54-.54l-3 3a5 5 0 007.07 7.07l1.71-1.71"/></svg>' +
+      ? `<div style="font-size:11px;color:#D97706;margin-top:4px;display:flex;align-items:center;gap:4px;">` +
+          `<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 007.54.54l3-3a5 5 0 00-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 00-7.54-.54l-3 3a5 5 0 007.07 7.07l1.71-1.71"/></svg>` +
           'Waiting on: ' + blockedNames.join(', ') +
         '</div>'
+      : '';
+
+    const ackBadge = task.acknowledgement 
+      ? (task.acknowledgement.type === 'needs_more_time' 
+          ? `<div style="font-size:10px;font-weight:700;color:#C0282D;background:#FEF2F2;border:1px dashed #FECACA;padding:2px 6px;border-radius:4px;display:inline-block;margin-top:4px;cursor:pointer;" onclick="clearTaskAck('${p.id}', '${task.id}')" title="Click to dismiss">🚨 Requested more time ✕</div>` 
+          : `<div style="font-size:10px;font-weight:700;color:#16A34A;background:#F0FDF4;border:1px dashed #BBF7D0;padding:2px 6px;border-radius:4px;display:inline-block;margin-top:4px;cursor:pointer;" onclick="clearTaskAck('${p.id}', '${task.id}')" title="Click to dismiss">✅ Acknowledged ✕</div>`)
       : '';
 
     const owners  = task.owners && task.owners.length > 0
@@ -2960,7 +2967,7 @@ function buildPillarDetail(p) {
           ownerDisplay +
           deadlineChip +
         '</div>' +
-        blockedHint + spinLink +
+        blockedHint + spinLink + ackBadge +
       '</div>' +
       '<div style="display:flex;align-items:center;gap:4px;">' +
         statusEl + reassignBtn + spinOutBtn +
@@ -3840,6 +3847,12 @@ function renderTrackerTable(prod, filter) {
          </div>`
       : '';
 
+    const ackBadge = pl.acknowledgement 
+      ? (pl.acknowledgement.type === 'needs_more_time' 
+          ? `<div style="font-size:10px;font-weight:700;color:#C0282D;background:#FEF2F2;border:1px dashed #FECACA;padding:2px 6px;border-radius:4px;display:inline-block;margin-top:4px;cursor:pointer;" onclick="clearTaskAck('${prod.id}', '${pl.id}')" title="Click to dismiss">🚨 Requested more time ✕</div>` 
+          : `<div style="font-size:10px;font-weight:700;color:#16A34A;background:#F0FDF4;border:1px dashed #BBF7D0;padding:2px 6px;border-radius:4px;display:inline-block;margin-top:4px;cursor:pointer;" onclick="clearTaskAck('${prod.id}', '${pl.id}')" title="Click to dismiss">✅ Acknowledged ✕</div>`)
+      : '';
+
     const taskLocked = locked && !isSuperAdmin && currentRole !== 'admin';
 
     // Delayed days
@@ -3906,6 +3919,7 @@ function renderTrackerTable(prod, filter) {
         <div class="tracker-pillar-name">${taskLocked ? ICON.lock + ' ' : ''}${pl.title||pl.name||'Untitled'}</div>
         <div class="tracker-pillar-owner">${pl.owner||''}</div>
         ${blockedLabel}
+        ${ackBadge}
       </td>
       <td class="tracker-deadline">${deadlinePill}</td>
       <td class="tracker-status">${statusCtrl}</td>
@@ -3961,6 +3975,31 @@ function renderTrackerTable(prod, filter) {
     }, 80);
   }
 }
+
+window.clearTaskAck = async (productId, taskId) => {
+  try {
+    const prod = productListCache[productId] || trackerProductsCache[productId];
+    if (prod?.tasks?.[taskId]) {
+      await set(ref(db, `products/${productId}/tasks/${taskId}/acknowledgement`), null);
+      prod.tasks[taskId].acknowledgement = null;
+    } else {
+      await set(ref(db, `products/${productId}/pillars/${taskId}/acknowledgement`), null);
+      if (prod?.pillars?.[taskId]) prod.pillars[taskId].acknowledgement = null;
+    }
+    showToast('Alert cleared.', 'success');
+    refreshActiveView(productId);
+    
+    // Refresh modal if open
+    const modal = document.getElementById('create-product-modal');
+    const titleEl = document.getElementById('modal-title-text');
+    if (modal && modal.style.display !== 'none' && titleEl && titleEl.textContent === prod.name) {
+      const body = document.getElementById('product-detail-body');
+      if (body && body.querySelector('.pillar-detail-list')) {
+        body.innerHTML = buildPillarDetail(prod);
+      }
+    }
+  } catch(e) { showToast('Failed to clear alert: ' + e.message, 'error'); }
+};
 
 window.updatePillarStatus = async (productId, taskId, newStatus) => {
   try {
@@ -8000,6 +8039,7 @@ window.__npd_init({
   saeSaveTask:             window.saeSaveTask,
   saeDeleteTask:           window.saeDeleteTask,
   showProductActivity:     window.showProductActivity,
+  clearTaskAck:            window.clearTaskAck,
   showQuickUpdate:         window.showQuickUpdate,
   quickSetStatus:          window.quickSetStatus,
   dismissWelcome:          window.dismissWelcome,
