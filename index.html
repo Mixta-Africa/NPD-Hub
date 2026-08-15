@@ -2994,10 +2994,19 @@ window.showReassignTask = async (productId, taskId) => {
 
   const curDept = task.ownerDept || getDepts()[0] || '';
 
+  // Initialize the array from task.owners or fallback to task.owner
+  window._raOwners = task.owners && task.owners.length > 0 ? JSON.parse(JSON.stringify(task.owners)) : (task.owner ? [{dept: task.ownerDept || '', individual: task.owner}] : []);
+
   panel.innerHTML =
     '<div style="background:#F8F8F7;border-top:1px solid var(--border);padding:14px 16px;margin-top:8px;">' +
       '<div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:var(--text-muted);margin-bottom:10px;">Reassign: ' + (task.title || 'Task') + '</div>' +
-      '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end;">' +
+      
+      '<div style="margin-bottom:12px;">' +
+        '<label class="form-label" style="font-size:10px;">Assigned Owners <span style="font-weight:normal;color:var(--text-muted);">(First is Primary, others are Supporting)</span></label>' +
+        '<div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:6px;" id="ra-owner-chips">' + window.renderRaOwnerChips() + '</div>' +
+      '</div>' +
+
+      '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end;margin-bottom:12px;">' +
         '<div style="flex:1;min-width:130px;">' +
           '<label class="form-label" style="font-size:10px;">Department</label>' +
           '<select id="ra-dept" class="select-field" style="width:100%;" onchange="updateReassignIndividuals()">' +
@@ -3007,12 +3016,20 @@ window.showReassignTask = async (productId, taskId) => {
         '<div style="flex:1;min-width:140px;">' +
           '<label class="form-label" style="font-size:10px;">Individual</label>' +
           '<select id="ra-individual" class="select-field" style="width:100%;">' +
-            buildOwnerIndividualOptions(curDept, task.owner || '') +
+            buildOwnerIndividualOptions(curDept, '') +
           '</select>' +
         '</div>' +
+        '<button class="btn-outline" style="font-size:11px;padding:7px 10px;white-space:nowrap;" onclick="addNewRaOwnerChip()">+ Add Owner</button>' +
+      '</div>' +
+
+      '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end;">' +
         '<div style="flex:1;min-width:160px;">' +
           '<label class="form-label" style="font-size:10px;">Reason (optional)</label>' +
           '<input id="ra-reason" class="input-field" placeholder="e.g. Capacity change" style="width:100%;"/>' +
+        '</div>' +
+        '<div style="flex:1;min-width:180px;">' +
+          '<label class="form-label" style="font-size:10px;">CC Emails (comma separated)</label>' +
+          '<input id="ra-cc" class="input-field" placeholder="email1@mixtafrica.com..." style="width:100%;"/>' +
         '</div>' +
         '<button class="btn-primary" style="font-size:12px;padding:8px 14px;white-space:nowrap;" onclick="confirmReassign(\'' + productId + '\',\'' + taskId + '\')">' +
           'Confirm reassign' +
@@ -3023,6 +3040,36 @@ window.showReassignTask = async (productId, taskId) => {
   panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 };
 
+window.renderRaOwnerChips = () => {
+  if (!window._raOwners || window._raOwners.length === 0) return '<span style="font-size:11px;color:#9CA3AF;">No owners assigned</span>';
+  return window._raOwners.map((o, i) =>
+    '<span style="display:inline-flex;align-items:center;gap:4px;background:' + (i===0 ? '#FEF2F2' : '#EFF6FF') + ';color:' + (i===0 ? '#C0282D' : '#2563EB') + ';border:1px solid ' + (i===0 ? '#FECACA' : '#BFDBFE') + ';border-radius:20px;padding:2px 8px;font-size:11px;font-weight:500;">' +
+      (i===0 ? 'Primary: ' : 'Support: ') + (o.individual || o.dept) + (o.dept && o.individual !== o.dept ? ' (' + o.dept + ')' : '') +
+      '<button onclick="removeRaOwner(' + i + ')" style="background:none;border:none;cursor:pointer;color:inherit;font-size:12px;padding:0 1px;margin-left:2px;">×</button>' +
+    '</span>'
+  ).join('');
+};
+
+window.addNewRaOwnerChip = () => {
+  const dept = document.getElementById('ra-dept')?.value || '';
+  const ind  = document.getElementById('ra-individual')?.value || dept;
+  if (!ind) return;
+  if (!window._raOwners) window._raOwners = [];
+  if (window._raOwners.some(o => o.individual === ind && o.dept === dept)) {
+    showToast('Already added', 'info'); return;
+  }
+  window._raOwners.push({ dept, individual: ind });
+  const chips = document.getElementById('ra-owner-chips');
+  if (chips) chips.innerHTML = window.renderRaOwnerChips();
+};
+
+window.removeRaOwner = (i) => {
+  if (!window._raOwners) return;
+  window._raOwners.splice(i, 1);
+  const chips = document.getElementById('ra-owner-chips');
+  if (chips) chips.innerHTML = window.renderRaOwnerChips();
+};
+
 window.updateReassignIndividuals = () => {
   const dept = document.getElementById('ra-dept')?.value || '';
   const sel  = document.getElementById('ra-individual');
@@ -3030,10 +3077,17 @@ window.updateReassignIndividuals = () => {
 };
 
 window.confirmReassign = async (productId, taskId) => {
-  const dept       = document.getElementById('ra-dept')?.value || '';
-  const individual = document.getElementById('ra-individual')?.value || dept;
   const reason     = document.getElementById('ra-reason')?.value.trim() || '';
-  if (!individual) { showToast('Select an individual or department', 'error'); return; }
+  const ccRaw      = document.getElementById('ra-cc')?.value || '';
+  const ccEmails   = ccRaw.split(',').map(e => e.trim()).filter(Boolean);
+  
+  if (!window._raOwners || window._raOwners.length === 0) {
+    showToast('Add at least one owner', 'error'); return;
+  }
+
+  const primary = window._raOwners[0];
+  const individual = primary.individual;
+  const dept = primary.dept;
 
   const prod  = productListCache[productId];
   const tasks = getProductTasks(prod);
@@ -3046,13 +3100,15 @@ window.confirmReassign = async (productId, taskId) => {
     from:      prevOwner,
     to:        individual,
     dept:      dept,
+    owners:    window._raOwners,
     reason:    reason,
     by:        currentUser.displayName || currentUser.email,
     byEmail:   currentUser.email,
     at:        now,
   };
 
-  // Write new owner + append to assigneeHistory
+  // Write new owner array + legacy fallbacks for dashboards
+  await set(ref(db, 'products/' + productId + '/tasks/' + taskId + '/owners'), window._raOwners);
   await set(ref(db, 'products/' + productId + '/tasks/' + taskId + '/owner'), individual);
   await set(ref(db, 'products/' + productId + '/tasks/' + taskId + '/ownerDept'), dept);
   const histId = 'ra_' + now;
@@ -3060,7 +3116,8 @@ window.confirmReassign = async (productId, taskId) => {
 
   // Also log as a comment for visibility
   const commentId = 'c_ra_' + now;
-  const commentText = 'Task reassigned from ' + prevOwner + ' to ' + individual +
+  const supportingStr = window._raOwners.length > 1 ? ' (with supporting departments)' : '';
+  const commentText = 'Task reassigned from ' + prevOwner + ' to ' + individual + supportingStr +
     (dept ? ' (' + dept + ')' : '') + (reason ? ' — ' + reason : '') +
     '. By ' + (currentUser.displayName || currentUser.email) + '.';
   await set(ref(db, 'products/' + productId + '/comments/' + commentId), {
@@ -3072,17 +3129,49 @@ window.confirmReassign = async (productId, taskId) => {
 
   // Update local cache
   if (productListCache[productId]?.tasks?.[taskId]) {
+    productListCache[productId].tasks[taskId].owners = window._raOwners;
     productListCache[productId].tasks[taskId].owner = individual;
     productListCache[productId].tasks[taskId].ownerDept = dept;
   }
 
-  showToast('Task reassigned to ' + individual, 'success');
+  showToast('Task reassigned to ' + individual + (window._raOwners.length > 1 ? ' + support' : ''), 'success');
   document.getElementById('modal-reassign-panel').innerHTML = '';
+  
   // Refresh the tasks tab
   const body = document.getElementById('product-detail-body');
   if (body) body.innerHTML = buildPillarDetail(productListCache[productId]);
-};
 
+  // Automatically pop open the email composer to notify the new owner and CCs
+  const allOwnerEmails = [];
+  window._raOwners.forEach(o => {
+    const match = STAKEHOLDERS.find(s => s.name === o.individual || s.dept === o.individual);
+    if (match) allOwnerEmails.push(match.email);
+  });
+  
+  const toEmails = [...new Set(allOwnerEmails)];
+  const supportingText = window._raOwners.length > 1 
+    ? `\n\nSupporting Departments/Individuals: ${window._raOwners.slice(1).map(o => o.individual).join(', ')}`
+    : '';
+  
+  await openEmailComposer({
+    type: 'reassignment',
+    subject: `Task Reassigned: ${task.title || 'Task'} — ${prod.name}`,
+    toEmails: toEmails,
+    ccEmails: ccEmails,
+    productId: productId,
+    draftPrompt: `Write a brief, professional email to ${individual} (Primary Owner) notifying them that they have been reassigned ownership of the task "${task.title}" for the product "${prod.name}".${supportingText}\n\nReason provided: ${reason || 'Capacity/Workload balancing'}\n\nAsk them to review the task on the NPD Hub and update the status when possible.`,
+    onSend: async ({ subject, body, toEmails, ccEmails, testMode }) => {
+      const threadId = prod.gmailThreadId;
+      if (threadId) {
+        await callGAS('replyToThread', { threadId, emailBody: body, subject, toEmails, ccEmails, testMode, productName: prod.name });
+      } else {
+        await callGAS('sendComposedEmail', { subject, body, toEmails, ccEmails, testMode, productName: prod.name });
+      }
+      showToast('Reassignment notification sent to ' + individual, 'success');
+    }
+  });
+};
+  
 /* ══ TASK SPIN-OUT ══════════════════════════════════════════ */
 window.spinOutTask = (productId, taskId, taskTitle) => {
   const overlay = document.createElement('div');
@@ -6929,7 +7018,8 @@ window.saEditTask = async (productId, taskId) => {
             <option value="complete"  ${task.status==='complete' ?'selected':''}>Complete</option>
           </select></div>
         <div class="form-actions">
-          <button class="btn-outline" onclick="document.getElementById('email-composer-modal').style.display='none'">Cancel</button>
+          <button class="btn-danger-sm" style="margin-right:auto;" onclick="saeDeleteTask('${productId}','${taskId}')">Delete task</button>
+          <button class="btn-outline" onclick="document.getElementById('sa-modal').style.display='none'">Cancel</button>
           <button class="btn-primary" onclick="saeSaveTask('${productId}','${taskId}')">Save changes</button>
         </div>
       </div>
@@ -6955,6 +7045,21 @@ window.saeSaveTask = async (productId, taskId) => {
     showToast('Task updated by super admin.', 'success');
     loadSATab('tasks');
   } catch(e) { showToast('Save failed: ' + e.message, 'error'); }
+};
+
+window.saeDeleteTask = async (productId, taskId) => {
+  if (!confirm('Are you sure you want to permanently delete this task? This cannot be undone.')) return;
+  try {
+    const prod = trackerProductsCache[productId] || productListCache[productId];
+    if (prod?.tasks?.[taskId]) {
+      await set(ref(db, `products/${productId}/tasks/${taskId}`), null);
+    } else {
+      await set(ref(db, `products/${productId}/pillars/${taskId}`), null);
+    }
+    document.getElementById('sa-modal').style.display = 'none';
+    showToast('Task deleted.', 'success');
+    loadSATab('tasks');
+  } catch(e) { showToast('Delete failed: ' + e.message, 'error'); }
 };
 
 /* ══ ITEM 4: ACTIVITY FEED ══════════════════════════════════ */
@@ -7860,6 +7965,7 @@ window.__npd_init({
   deleteTemplate:          window.deleteTemplate,
   saEditTask:              window.saEditTask,
   saeSaveTask:             window.saeSaveTask,
+  saeDeleteTask:           window.saeDeleteTask,
   showProductActivity:     window.showProductActivity,
   showQuickUpdate:         window.showQuickUpdate,
   quickSetStatus:          window.quickSetStatus,
@@ -7882,6 +7988,8 @@ window.__npd_init({
   updateAddTaskIndividuals: window.updateAddTaskIndividuals,
   addNewTaskOwnerChip:     window.addNewTaskOwnerChip,
   removeAtOwner:           window.removeAtOwner,
+  addNewRaOwnerChip:       window.addNewRaOwnerChip,
+  removeRaOwner:           window.removeRaOwner,
   addTaskOwner:            window.addTaskOwner,
   removeTaskOwner:         window.removeTaskOwner,
   updateAddIndividuals:    window.updateAddIndividuals,
