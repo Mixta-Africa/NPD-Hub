@@ -3557,10 +3557,10 @@ window.setTrackerView = (mode) => {
   const body = document.getElementById('tracker-body');
   if (body) body.innerHTML = '<div class="loading-row" style="padding:16px;">Loading...</div>';
   setTimeout(() => {
-    if (mode === 'table')  renderTrackerTable(prod, null);
-    if (mode === 'kanban') renderKanban(prod);
-    if (mode === 'gantt')  renderTrackerGantt(prod);
-  }, 30);
+            if (mode === 'table')  renderTrackerTable(prod, window._trackerFilter);
+            if (mode === 'kanban') renderKanban(prod);
+            if (mode === 'gantt')  renderTrackerGantt(prod);
+          }, 30);
 };
 
 async function loadTrackerProducts() {
@@ -3597,11 +3597,11 @@ function subscribeToProduct(productId) {
     trackerProductsCache[productId] = prod;
     productListCache[productId]     = prod;
     // Only re-render if tracker is visible and this product is selected
-    if (currentView === 'tracker' && trackerSelectedProduct === productId) {
-      if (trackerViewMode === 'kanban') renderKanban(prod);
-      else if (trackerViewMode === 'gantt') renderTrackerGantt(prod);
-      else renderTrackerTable(prod, null);
-    }
+            if (currentView === 'tracker' && trackerSelectedProduct === productId) {
+              if (trackerViewMode === 'kanban') renderKanban(prod);
+              else if (trackerViewMode === 'gantt') renderTrackerGantt(prod);
+              else renderTrackerTable(prod, window._trackerFilter);
+            }
   }, { onlyOnce: false });
   registerListener('tracker_product', unsub);
 }
