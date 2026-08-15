@@ -7687,19 +7687,6 @@ CRITICAL FORMATTING INSTRUCTIONS:
 4. Do NOT repeat or summarize the contents of the table in paragraph form below the table.
 5. Use ONLY first names when mentioning people.`;
 }
-
-Product: ${prod.name}
-Launch date: ${prod.launchDate}
-Overall completion: ${pct}% (${complete}/${tasks.length} tasks)
-Delayed tasks: ${delayed}
-Overdue tasks: ${overdue}${overdueList ? ' — ' + overdueList : ''}
-At risk (due within 3 days): ${atRisk || 'none'}
-
-Format the report strictly as a clean Markdown table with 3 columns: "Category", "Status/Details", and "Owner/Action". 
-Create 3 rows in the table for: Status Summary, Key Risks, and Required Actions. 
-Ensure you use ONLY first names for any people mentioned. Be direct and flag risks clearly.`;
-}
-
 function buildHandoverPrompt(prod, tasks, relieverName, returnDate, ownerNotes) {
   const complete = tasks.filter(t => t.status === 'complete').length;
   const open     = tasks.filter(t => t.status !== 'complete');
