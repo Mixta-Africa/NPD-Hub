@@ -5913,6 +5913,9 @@ async function renderSAUsers(el) {
           <button class="btn-secondary-sm" style="font-size:10px;" onclick="saToggleRole('${key}','${al.role}')">
             ${al.role === 'admin' ? '↓ Member' : '↑ Admin'}
           </button>
+          <button class="btn-secondary-sm" style="font-size:10px;" onclick="saToggleDeptRole('${key}','${u.deptRole || 'member'}')">
+            ${u.deptRole === 'lead' ? '↓ Dept Member' : '↑ Dept Lead'}
+          </button>
           <button class="btn-danger-xs" onclick="saResetUser('${key}')">Reset</button>
         </div>
       </td>
@@ -5952,6 +5955,16 @@ window.saToggleRole = async (userKey, currentRole) => {
   try {
     await set(ref(db, `allowlist/${userKey}/role`), newRole);
     showToast(`Role updated to ${newRole}.`, 'success');
+    loadSATab('users');
+  } catch(e) { showToast('Failed: ' + e.message, 'error'); }
+};
+
+window.saToggleDeptRole = async (userKey, currentRole) => {
+  const newRole = currentRole === 'lead' ? 'member' : 'lead';
+  if (!confirm(`Change this user's department role to ${newRole}?`)) return;
+  try {
+    await set(ref(db, `users/${userKey}/deptRole`), newRole);
+    showToast(`Department role updated to ${newRole}.`, 'success');
     loadSATab('users');
   } catch(e) { showToast('Failed: ' + e.message, 'error'); }
 };
@@ -6544,6 +6557,8 @@ window.editDepartment = (id) => {
           <input id="de-name" class="input-field" value="${d.name}"/></div>
         <div class="form-row"><label class="form-label">Colour</label>
           <input id="de-colour" type="color" value="${d.colour||'#6B7280'}" style="width:60px;height:36px;padding:2px;border:1px solid var(--border-mid);border-radius:6px;cursor:pointer;"/></div>
+        <div class="form-row"><label class="form-label">Department Lead Email</label>
+          <input id="de-lead" class="input-field" placeholder="e.g. lead@mixtafrica.com" value="${d.leadEmail||''}"/></div>
         <div class="form-row"><label class="form-label">Emails <span class="form-hint">— one per line</span></label>
           <textarea id="de-emails" class="input-field" rows="4"></textarea></div>
         <div class="form-actions">
@@ -6563,10 +6578,11 @@ window.editDepartment = (id) => {
 window.saveDepartment = async (id) => {
   const name   = document.getElementById('de-name')?.value.trim();
   const colour = document.getElementById('de-colour')?.value || '#6B7280';
+  const leadEmail = document.getElementById('de-lead')?.value.trim() || '';
   const emailsRaw = document.getElementById('de-emails')?.value || '';
   const emails = emailsRaw.split(/\r?\n/).map(e => e.trim()).filter(Boolean);
   if (!name) { showToast('Name required.', 'error'); return; }
-  DEPARTMENTS[id] = { ...DEPARTMENTS[id], name, colour, emails };
+  DEPARTMENTS[id] = { ...DEPARTMENTS[id], name, colour, emails, leadEmail };
   try {
     await set(ref(db, 'config/departments/' + id), DEPARTMENTS[id]);
     showToast('Department saved.', 'success');
@@ -6597,7 +6613,9 @@ window.showAddDepartment = () => {
         <div class="form-row"><label class="form-label">Name <span class="req">*</span></label>
           <input id="de-name" class="input-field" placeholder="e.g. Legal"/></div>
         <div class="form-row"><label class="form-label">Colour</label>
-          <input id="de-colour" type="color" value="#6B7280" style="width:60px;height:36px;padding:2px;border:1px solid var(--border-mid);border-radius:6px;cursor:pointer;"/></div>
+          <input id="de-colour" type="color" value="${d.colour||'#6B7280'}" style="width:60px;height:36px;padding:2px;border:1px solid var(--border-mid);border-radius:6px;cursor:pointer;"/></div>
+        <div class="form-row"><label class="form-label">Department Lead Email</label>
+          <input id="de-lead" class="input-field" placeholder="e.g. lead@mixtafrica.com" value="${d.leadEmail||''}"/></div>
         <div class="form-row"><label class="form-label">Emails <span class="form-hint">— one per line</span></label>
           <textarea id="de-emails" class="input-field" rows="3" placeholder="team@mixtafrica.com"></textarea></div>
         <div class="form-actions">
@@ -6613,10 +6631,11 @@ window.addNewDepartment = async () => {
   const key    = (document.getElementById('de-key')?.value.trim() || '').replace(/\s+/g,'_').toLowerCase();
   const name   = document.getElementById('de-name')?.value.trim();
   const colour = document.getElementById('de-colour')?.value || '#6B7280';
+  const leadEmail = document.getElementById('de-lead')?.value.trim() || '';
   const emailsRaw = document.getElementById('de-emails')?.value || '';
   const emails = emailsRaw.split(/\r?\n/).map(e => e.trim()).filter(Boolean);
   if (!key || !name) { showToast('Key and name required.', 'error'); return; }
-  DEPARTMENTS[key] = { name, colour, emails };
+  DEPARTMENTS[key] = { name, colour, emails, leadEmail };
   try {
     await set(ref(db, 'config/departments/' + key), DEPARTMENTS[key]);
     showToast('Department added.', 'success');
@@ -7678,6 +7697,7 @@ window.__npd_init({
   exportAllData:           window.exportAllData,
   clearAuditLog:           window.clearAuditLog,
   saToggleRole:            window.saToggleRole,
+  saToggleDeptRole:        window.saToggleDeptRole,
   saToggleProductStatus:   window.saToggleProductStatus,
   dashNavToTracker:        window.dashNavToTracker,
   showReminderModal:       window.showReminderModal,
