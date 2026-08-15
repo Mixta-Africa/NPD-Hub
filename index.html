@@ -1779,14 +1779,13 @@ function renderProductCard(p) {
       '</span>'
     : '';
 
-  // Live countdown chip — updates every second for last 3 days
-  const countdownId = 'cd-' + p.id;
+  // Static countdown to launch in days
   let countdownChip = '';
-  if (daysToLaunch !== null && daysToLaunch >= 0 && daysToLaunch <= 3) {
-    countdownChip = '<span id="' + countdownId + '" style="font-size:10px;font-weight:700;color:#C0282D;background:#FEF2F2;padding:2px 8px;border-radius:10px;letter-spacing:.02em;"></span>';
-    setTimeout(() => startCountdown(countdownId, p.launchDate), 100);
+  if (daysToLaunch !== null && daysToLaunch > 0) {
+    countdownChip = '<span style="font-size:10px;font-weight:700;color:#D97706;background:#FFFBEB;padding:2px 8px;border-radius:10px;letter-spacing:.02em;margin-left:8px;vertical-align:middle;">Launch in ' + daysToLaunch + ' day' + (daysToLaunch !== 1 ? 's' : '') + '</span>';
+  } else if (daysToLaunch === 0) {
+    countdownChip = '<span style="font-size:10px;font-weight:700;color:#C0282D;background:#FEF2F2;padding:2px 8px;border-radius:10px;letter-spacing:.02em;margin-left:8px;vertical-align:middle;">Launch Day!</span>';
   }
-
   const healthCls = overduePl > 0 ? 'pcf-health-red'
                   : delayed > 0   ? 'pcf-health-amber'
                   : pct === 100   ? 'pcf-health-done'
@@ -1800,9 +1799,20 @@ function renderProductCard(p) {
       <div class="pcf-header">
         <div class="pcf-header-left">
           <div class="pcf-health-dot ${healthCls}" title="${healthTip}"></div>
-          <div>
+          <div style="flex:1;min-width:0;">
             <div class="pcf-name-row"><span class="pcf-name">${p.name}</span>${typeBadge}${slipHtml}${atRiskBadge}${countdownChip}</div>
             ${p.description ? `<div class="pcf-desc">${p.description.length > 110 ? p.description.slice(0,110)+'…' : p.description}</div>` : ''}
+            ${itemType === 'project' && (p.budget || p.spend) ? `
+              <div style="margin-top:12px;padding-top:12px;border-top:1px dashed var(--border);">
+                <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--text-muted);margin-bottom:4px;">
+                  <span><strong>Budget:</strong> ₦${Number(p.budget || 0).toLocaleString()}</span>
+                  <span><strong>Spend:</strong> ₦${Number(p.spend || 0).toLocaleString()}</span>
+                </div>
+                ${p.budget && Number(p.budget) > 0 ? `
+                <div style="height:4px;background:#F0F0EE;border-radius:2px;overflow:hidden;">
+                  <div style="height:100%;width:${Math.min(100, (Number(p.spend || 0) / Number(p.budget)) * 100)}%;background:${(Number(p.spend || 0) > Number(p.budget)) ? 'var(--red)' : 'var(--blue)'};"></div>
+                </div>` : ''}
+              </div>` : ''}
           </div>
         </div>
         <div class="pcf-header-right">
@@ -1973,6 +1983,18 @@ function buildTaskEditorForm() {
     <div class="form-row">
       <label class="form-label">Target launch date <span class="req">*</span></label>
       <input type="date" id="f-launch" class="input-field"/>
+    </div>
+    <div class="form-row project-only-field" style="display:none;">
+      <div style="display:flex;gap:10px;">
+        <div style="flex:1;">
+          <label class="form-label">Total Budget (Optional)</label>
+          <input type="number" id="f-budget" class="input-field" placeholder="e.g. 5000000"/>
+        </div>
+        <div style="flex:1;">
+          <label class="form-label">Spend Till Date (Optional)</label>
+          <input type="number" id="f-spend" class="input-field" placeholder="e.g. 1500000"/>
+        </div>
+      </div>
     </div>
     ${buildOwnerField(null)}
 
@@ -2222,6 +2244,18 @@ function buildEditProductForm(p) {
       <textarea id="f-desc" class="input-field" rows="2">${p.description||''}</textarea></div>
     <div class="form-row"><label class="form-label">Target launch date <span class="req">*</span></label>
       <input type="date" id="f-launch" class="input-field" value="${p.launchDate||''}"/></div>
+    <div class="form-row project-only-field" style="display:${itemType === 'project' ? 'block' : 'none'};">
+      <div style="display:flex;gap:10px;">
+        <div style="flex:1;">
+          <label class="form-label">Total Budget (Optional)</label>
+          <input type="number" id="f-budget" class="input-field" value="${p.budget || ''}"/>
+        </div>
+        <div style="flex:1;">
+          <label class="form-label">Spend Till Date (Optional)</label>
+          <input type="number" id="f-spend" class="input-field" value="${p.spend || ''}"/>
+        </div>
+      </div>
+    </div>
     ${buildOwnerField(p)}
     <div class="form-section-label" style="margin-top:20px;display:flex;align-items:center;justify-content:space-between;">
       <span>Tasks ${locked ? '<span class="pill pill-red" style="font-size:10px;">Locked</span>' : ''}</span>
@@ -2401,6 +2435,11 @@ window.setItemType = (type) => {
   const nameLabel = document.querySelector('label[for="f-name"], .form-label');
   const launchLabel = document.querySelector('#f-launch')?.closest('.form-row')?.querySelector('.form-label');
   if (launchLabel) launchLabel.textContent = type === 'project' ? 'Target completion date *' : 'Target launch date *';
+  
+  // Show/Hide project-specific fields
+  document.querySelectorAll('.project-only-field').forEach(el => {
+    el.style.display = type === 'project' ? 'block' : 'none';
+  });
 };
 
 window.saveProduct = async (existingId) => {
@@ -2441,6 +2480,8 @@ window.saveProduct = async (existingId) => {
   }
 
   const itemType = (document.getElementById('f-item-type')?.value || 'product');
+  const budget   = document.getElementById('f-budget')?.value || '';
+  const spend    = document.getElementById('f-spend')?.value || '';
 
   // Determine if this should go live or enter the approval queue
   const initialProductStatus = (isNew && currentRole !== 'admin' && !isSuperAdmin) ? 'pending-approval' : 'active';
@@ -2448,6 +2489,8 @@ window.saveProduct = async (existingId) => {
   const payload = {
     id, name, description: desc, launchDate,
     itemType: isNew ? itemType : (productListCache[existingId]?.itemType || 'product'),
+    budget: budget,
+    spend: spend,
     tasks,
     status:     isNew ? initialProductStatus : (productListCache[existingId]?.status || 'active'),
     taskSchema:          isNew ? (_editingTasks.length > 0 && _editingTasks[0].pillarId ? 'sop' : 'custom') : (productListCache[existingId]?.taskSchema || 'sop'),
@@ -4876,29 +4919,7 @@ function getGreeting() {
   return 'evening';
 }
 
-const _countdownTimers = {};
-function startCountdown(elId, launchDateStr) {
-  if (_countdownTimers[elId]) clearInterval(_countdownTimers[elId]);
-  const update = () => {
-    const el = document.getElementById(elId);
-    if (!el) { clearInterval(_countdownTimers[elId]); return; }
-    const now    = new Date();
-    const launch = new Date(launchDateStr);
-    launch.setHours(23, 59, 59, 0);
-    const diff   = launch - now;
-    if (diff <= 0) {
-      el.textContent = 'Launch day!';
-      clearInterval(_countdownTimers[elId]);
-      return;
-    }
-    const h = Math.floor(diff / 3600000);
-    const m = Math.floor((diff % 3600000) / 60000);
-    const s = Math.floor((diff % 60000) / 1000);
-    el.textContent = h + 'h ' + m + 'm ' + s + 's';
-  };
-  update();
-  _countdownTimers[elId] = setInterval(update, 1000);
-}
+// Countdown timers removed in favor of daily tracking
 
 window.showToast = (msg, type = 'info') => {
   let t = document.getElementById('toast');
