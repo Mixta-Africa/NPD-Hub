@@ -643,6 +643,18 @@ window.loadView = (view) => {
   };
   document.getElementById('page-title').textContent = titles[view] || view;
 
+  // Inject minor refresh button globally next to page title
+  const titleEl = document.getElementById('page-title');
+  if (titleEl && !document.getElementById('global-refresh-btn')) {
+    const btn = document.createElement('button');
+    btn.id = 'global-refresh-btn';
+    btn.className = 'btn-outline';
+    btn.style.cssText = 'font-size:11px; padding:4px 10px; margin-left:14px; vertical-align:middle; cursor:pointer; background:#fff;';
+    btn.innerHTML = '↻ Refresh view';
+    btn.onclick = () => { loadView(currentView); showToast('View refreshed.', 'success'); };
+    titleEl.parentNode.insertBefore(btn, titleEl.nextSibling);
+  }
+
   // Render the view
   const content = document.getElementById('main-content');
   content.innerHTML = '';
@@ -1524,7 +1536,7 @@ async function loadMyActions() {
   const el = document.getElementById('my-actions-body');
   if (!el) return;
   try {
-    const snap = await get(ref(db, 'products'));
+    const unsub = onValue(ref(db, 'products'), snap => {
     const products = snap.val() || {};
     const userKey  = sanitiseEmail(currentUser.email);
     const today    = new Date(); today.setHours(0,0,0,0);
@@ -1638,8 +1650,10 @@ async function loadMyActions() {
         '</div>';
     });
 
-    html += '</div>';
-    el.innerHTML = html;
+   html += '</div>';
+      el.innerHTML = html;
+    });
+    registerListener('myactions', unsub);
   } catch(e) {
     el.innerHTML = '<div class="loading-row muted" style="padding:24px;">Could not load your tasks. Try refreshing.</div>';
     console.warn('loadMyActions error:', e);
@@ -1684,11 +1698,11 @@ async function loadProductList(filterType = 'product') {
   const area = document.getElementById('product-list-area');
   if (!area) return;
   try {
-    const snap     = await get(ref(db, 'products'));
-    const products = snap.val() || {};
-    productListCache = products;
-    const userKey  = sanitiseEmail(currentUser.email);
-    const list     = Object.values(products)
+    const unsub = onValue(ref(db, 'products'), snap => {
+      const products = snap.val() || {};
+      productListCache = products;
+      const userKey  = sanitiseEmail(currentUser.email);
+      const list     = Object.values(products)
       .filter(p => {
         if (p.status === 'archived') return false;
         
@@ -1714,6 +1728,8 @@ async function loadProductList(filterType = 'product') {
     }
 
     area.innerHTML = '<div class="product-grid">' + list.map(p => renderProductCard(p)).join('') + '</div>';
+    });
+    registerListener('products', unsub);
   } catch(e) {
     area.innerHTML = '<div class="panel"><div class="empty-state-sm"><p>Failed to load products.</p></div></div>';
   }
@@ -3122,11 +3138,17 @@ window.confirmReassign = async (productId, taskId) => {
     type: 'reassignment', createdAt: now,
   });
 
-  // Update local cache
-  if (productListCache[productId]?.tasks?.[taskId]) {
-    productListCache[productId].tasks[taskId].owners = window._raOwners;
-    productListCache[productId].tasks[taskId].owner = individual;
-    productListCache[productId].tasks[taskId].ownerDept = dept;
+  // Update local cache for both new tasks and legacy pillars
+  if (productListCache[productId]) {
+    if (productListCache[productId].tasks && productListCache[productId].tasks[taskId]) {
+      productListCache[productId].tasks[taskId].owners = window._raOwners;
+      productListCache[productId].tasks[taskId].owner = individual;
+      productListCache[productId].tasks[taskId].ownerDept = dept;
+    } else if (productListCache[productId].pillars && productListCache[productId].pillars[taskId]) {
+      productListCache[productId].pillars[taskId].owners = window._raOwners;
+      productListCache[productId].pillars[taskId].owner = individual;
+      productListCache[productId].pillars[taskId].ownerDept = dept;
+    }
   }
 
   showToast('Task reassigned to ' + individual + (window._raOwners.length > 1 ? ' + support' : ''), 'success');
@@ -3976,6 +3998,17 @@ window.updatePillarStatus = async (productId, taskId, newStatus) => {
 
     // Re-render whichever view is currently active
     refreshActiveView(productId);
+    
+    // INSTANT MODAL REFRESH: If the product detail modal is open, rebuild it live
+    const modal = document.getElementById('create-product-modal');
+    const titleEl = document.getElementById('modal-title-text');
+    if (modal && modal.style.display !== 'none' && titleEl && titleEl.textContent === prod.name) {
+      const body = document.getElementById('product-detail-body');
+      if (body && body.querySelector('.pillar-detail-list')) {
+        body.innerHTML = buildPillarDetail(prod);
+      }
+    }
+
     // Log to activity feed
     const taskObj  = tasks.find(t => t.id === taskId);
     const taskName = taskObj?.title || taskObj?.name || taskId;
