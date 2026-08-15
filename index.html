@@ -1430,7 +1430,7 @@ async function loadWorkload() {
     const sorted = Object.entries(depts).sort((a, b) => b[1].total - a[1].total);
     const maxTotal = sorted[0][1].total || 1;
 
-    let html = '<div style="display:flex;flex-direction:column;gap:12px;">';
+    let html = '<div style="display:grid;grid-template-columns:repeat(auto-fill, minmax(360px, 1fr));gap:16px;">';
 
     sorted.forEach(([deptName, data]) => {
       const pctOverdue  = Math.round((data.overdue  / data.total) * 100);
@@ -1461,12 +1461,9 @@ async function loadWorkload() {
       const moreCount = data.tasks.length - 4;
 
       html +=
-        '<div style="background:#fff;border:1px solid #E5E5E3;border-radius:12px;overflow:hidden;">' +
+        '<div style="background:#fff;border:1px solid #E5E5E3;border-radius:12px;overflow:hidden;display:flex;flex-direction:column;">' +
           // Header
-          '<div style="padding:14px 18px 12px;display:flex;align-items:center;gap:14px;">' +
-            '<div style="flex:1;min-width:0;">' +
-          // Header
-          '<div style="padding:14px 18px 12px;display:flex;align-items:center;gap:14px;">' +
+          '<div style="padding:14px 18px 12px;display:flex;align-items:center;gap:14px;background:#FAFAF9;border-bottom:1px solid #F0F0EE;">' +
             '<div style="flex:1;min-width:0;">' +
               '<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">' +
                 '<span style="font-size:13px;font-weight:700;color:#1A1A1A;">' + deptName + '</span>' +
