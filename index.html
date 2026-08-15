@@ -178,6 +178,8 @@ onAuthStateChanged(auth, async (user) => {
       // Read user record to check if dept is already set
       const userSnap = await get(ref(db, 'users/' + key));
       const userData  = userSnap.exists() ? userSnap.val() : null;
+      window.currentDeptRole = userData?.deptRole || 'member';
+      window.currentUserDept = userData?.dept || '';
 
       if (!userData || !userData.dept) {
         showApp();
@@ -1091,6 +1093,7 @@ function renderDashboard(el) {
           '<div class="stat-nav-hint">View calendar →</div>' +
         '</div>' +
       '</div>' +
+      '<div id="dash-approvals-wrap" style="display:none; margin-bottom:16px;"></div>' +
       '<div class="two-col">' +
         '<div class="panel">' +
           '<div class="panel-header">' +
@@ -1117,13 +1120,14 @@ async function loadDashboardStats() {
     const userKey  = sanitiseEmail(currentUser.email);
     const unsub = onValue(ref(db, 'products'), snap => {
       const products = snap.val() || {};
-      const list     = Object.values(products)
-      .filter(p => {
+      const list     = Object.values(products).filter(p => {
         if (p.status === 'archived') return false;
-        // Hide pending approvals from general view unless the user owns them or is an Admin/Lead
-        if (p.status === 'pending-approval' && currentRole !== 'admin' && p.ownerId !== userKey) return false;
+        
+        // Hide pending approvals from general view unless the user owns them, is Admin, or is a Dept Lead
+        if (p.status === 'pending-approval' && currentRole !== 'admin' && p.ownerId !== userKey && window.currentDeptRole !== 'lead') return false;
         
         if (currentRole === 'admin') return true;
+        if (window.currentDeptRole === 'lead') return true; // Leads can oversee the pipeline
         if (p.ownerId === userKey) return true;
         if (p.sharedWith?.[userKey]) return true;
         return false;
@@ -1204,15 +1208,50 @@ function _updateDashboardUI(list) {
     document.getElementById('stat-overdue').textContent = overdue || '0';
     document.getElementById('stat-week').textContent    = thisWeek || '0';
 
-    // Recent products panel
+    // Approval Queue panel
+    const pendingList = list.filter(p => p.status === 'pending-approval');
+    const approvalsWrap = document.getElementById('dash-approvals-wrap');
+    if (approvalsWrap) {
+      if (pendingList.length > 0 && (currentRole === 'admin' || window.currentDeptRole === 'lead')) {
+        approvalsWrap.style.display = 'block';
+        approvalsWrap.innerHTML = '<div class="panel" style="border:1px solid var(--amber); box-shadow:0 4px 12px rgba(217,119,6,0.08);">' +
+          '<div class="panel-header" style="background:var(--amber-light); border-bottom:1px solid rgba(217,119,6,0.2); border-radius:12px 12px 0 0;">' +
+            '<span class="panel-title" style="color:var(--amber); display:flex; align-items:center; gap:6px;">' +
+              '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22c5.523 0 10-4.477 10-10S17.523 2 12 2 2 6.477 2 12s4.477 10 10 10z"/><polyline points="12 6 12 12 16 14"/></svg>' +
+              'Approval Queue (' + pendingList.length + ')' +
+            '</span>' +
+          '</div>' +
+          '<div class="panel-body" style="padding:0;">' +
+            pendingList.map(p => 
+              '<div style="display:flex; align-items:center; justify-content:space-between; padding:12px 16px; border-bottom:1px solid var(--border);">' +
+                '<div>' +
+                  '<div style="font-size:13px; font-weight:600; color:var(--text);">' + p.name + '</div>' +
+                  '<div style="font-size:11px; color:var(--text-muted); margin-top:2px;">Created by: ' + (p.createdBy || 'Unknown') + ' · Target Launch: ' + (p.launchDate || 'TBD') + '</div>' +
+                '</div>' +
+                '<div style="display:flex; gap:8px;">' +
+                  '<button class="btn-primary-sm" style="background:var(--green); border-color:var(--green);" onclick="approveProduct(\'' + p.id + '\')">Approve</button>' +
+                  '<button class="btn-danger-xs" onclick="rejectProduct(\'' + p.id + '\')">Reject</button>' +
+                '</div>' +
+              '</div>'
+            ).join('') +
+          '</div>' +
+        '</div>';
+      } else {
+        approvalsWrap.style.display = 'none';
+        approvalsWrap.innerHTML = '';
+      }
+    }
+
+    // Recent products panel (Exclude pending items from the general list)
+    const activeRecentList = list.filter(p => p.status !== 'pending-approval');
     const recentEl = document.getElementById('dash-recent');
-    if (list.length === 0) {
+    if (activeRecentList.length === 0) {
       recentEl.innerHTML = '<div class="empty-state-sm">' +
         '<span class="empty-icon" style="color:var(--text-muted);">' + ICON.clipboard + '</span>' +
-        '<p>No products yet.' + (currentRole === 'admin' ? ' <button class="btn-primary-sm" onclick="loadView(\'products\')">Create one</button>' : '') + '</p>' +
+        '<p>No active products yet.' + (currentRole === 'admin' ? ' <button class="btn-primary-sm" onclick="loadView(\'products\')">Create one</button>' : '') + '</p>' +
         '</div>';
     } else {
-      const sorted = list.sort((a,b) => b.createdAt - a.createdAt).slice(0, 4);
+      const sorted = activeRecentList.sort((a,b) => b.createdAt - a.createdAt).slice(0, 4);
       recentEl.innerHTML = sorted.map(p => {
         const tasks    = getProductTasks(p);
         const total    = tasks.length;
@@ -1277,6 +1316,27 @@ function _updateDashboardUI(list) {
     console.warn('Dashboard UI update failed:', e);
   }
 }
+
+window.approveProduct = async (productId) => {
+  if (!confirm('Approve this product and push it live to the team?')) return;
+  try {
+    await set(ref(db, `products/${productId}/status`), 'active');
+    showToast('Product approved and active.', 'success');
+    await logActivity(productId, 'status', 'Product approved and launched', `By ${currentUser.displayName || currentUser.email}`);
+  } catch(e) {
+    showToast('Approval failed: ' + e.message, 'error');
+  }
+};
+
+window.rejectProduct = async (productId) => {
+  if (!confirm('Reject and permanently delete this proposed product?')) return;
+  try {
+    await set(ref(db, `products/${productId}`), null);
+    showToast('Product rejected and removed.', 'info');
+  } catch(e) {
+    showToast('Rejection failed: ' + e.message, 'error');
+  }
+};
 
 /* ── DEPARTMENT WORKLOAD VIEW ── */
 function renderWorkload(el) {
@@ -7769,6 +7829,8 @@ window.__npd_init({
   sendMyTodoNow:           window.sendMyTodoNow,
   showAddDocFolder:        window.showAddDocFolder,
   confirmAddDocFolder:     window.confirmAddDocFolder,
+  approveProduct:          window.approveProduct,
+  rejectProduct:           window.rejectProduct,
 });
 
 </script>
