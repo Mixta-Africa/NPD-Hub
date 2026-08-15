@@ -1447,10 +1447,10 @@ async function loadWorkload() {
         .map(({ task, prod, eff, isBlocked }) => {
           const color = isBlocked ? '#D97706' : eff === 'overdue' || eff === 'delayed' ? '#C0282D' : eff === 'due-soon' ? '#D97706' : '#16A34A';
           const label = isBlocked ? 'Blocked' : eff === 'overdue' ? 'Overdue' : eff === 'delayed' ? 'Delayed' : eff === 'due-soon' ? 'Due soon' : 'On track';
-          return '<div style="display:flex;align-items:center;gap:10px;padding:7px 0;border-bottom:1px solid #F3F3F2;">' +
+          return '<div style="display:flex;align-items:center;gap:10px;padding:7px 0;border-bottom:1px solid #F3F3F2;cursor:pointer;" onclick="dashNavToTrackerForProduct(\'' + prod.id + '\')">' +
             '<div style="flex:1;min-width:0;">' +
               '<div style="font-size:11px;font-weight:500;color:#1A1A1A;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + (task.title || 'Untitled') + '</div>' +
-              '<div style="font-size:10px;color:#9CA3AF;">' + prod.name + (task.deadline ? ' · ' + formatDate(task.deadline) : '') + '</div>' +
+              '<div style="font-size:10px;color:#9CA3AF;">' + (task.owner || 'Unassigned') + ' · ' + prod.name + (task.deadline ? ' · ' + formatDate(task.deadline) : '') + '</div>' +
             '</div>' +
             '<span style="font-size:10px;font-weight:600;color:' + color + ';background:' + color + '15;padding:2px 7px;border-radius:10px;flex-shrink:0;">' + label + '</span>' +
           '</div>';
