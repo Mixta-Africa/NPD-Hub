@@ -50,7 +50,7 @@
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js';
 import { getAuth, signInWithPopup, GoogleAuthProvider, signOut, onAuthStateChanged }
   from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js';
-import { getDatabase, ref, get, set, onValue }
+import { getDatabase, ref, get, set, update, onValue }
   from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-database.js';
 
 /* ─────────────────────────────────────────────
@@ -5200,6 +5200,19 @@ function renderSettings(el) {
       </div>
     </div>
 
+    <div class="panel" style="margin-bottom:16px;">
+      <div class="panel-header"><span class="panel-title">Task privacy</span></div>
+      <div class="panel-body">
+        <p class="settings-hint">
+          ${ICON.lock} New tasks default to Public visibility within the products they belong to. Use this to bulk-lock
+          ${currentRole === 'admin' || isSuperAdmin ? 'every existing task across the entire hub' : 'every existing task in products/projects you own'}
+          to <strong>Private</strong> (visible only to the product owner and each task's own owners) in one shot.
+          You can still reopen any individual task afterward and switch it to Public or Restricted from its visibility control.
+        </p>
+        <button class="btn-danger-sm" id="lock-all-tasks-btn" onclick="lockAllTasksToPrivate()">🔒 Set all my tasks to Private</button>
+      </div>
+    </div>
+
     ${currentRole === 'admin' ? `
     <div class="panel" style="margin-bottom:16px;" id="access-requests-panel">
       <div class="panel-header">
@@ -5292,6 +5305,84 @@ window.removeFromAllowlist = async (key) => {
   await set(ref(db, `allowlist/${key}`), null);
   showToast('User removed.', 'success');
   loadAllowlist();
+};
+
+/* ── ONE-TIME MIGRATION: bulk-lock existing tasks to Private ──
+   Runs inside the app so `db` / `currentUser` are already in scope
+   (a DevTools console script can't reach the module-scoped db).
+   Non-admins only ever touch products they own; admins/super-admins
+   can sweep every product/project in the hub. ──────────────────── */
+window.lockAllTasksToPrivate = async () => {
+  if (!currentUser) return;
+  const isAdminSweep = currentRole === 'admin' || isSuperAdmin;
+  const scopeLabel = isAdminSweep
+    ? 'EVERY product/project across the whole hub'
+    : 'every product/project you own';
+
+  if (!confirm(
+    `This sets every task in ${scopeLabel} to Private — visible only to the product owner and each task's own owners.\n\n` +
+    `Tasks already set to Public or Restricted will be switched to Private too. You can re-open any task afterward ` +
+    `and change it back individually.\n\nContinue?`
+  )) return;
+
+  const btn = document.getElementById('lock-all-tasks-btn');
+  if (btn) { btn.disabled = true; btn.textContent = 'Locking tasks…'; }
+
+  try {
+    const snap = await get(ref(db, 'products'));
+    const products = snap.val() || {};
+    const userKey = sanitiseEmail(currentUser.email);
+
+    const updates = {};
+    let taskCount = 0, productCount = 0;
+
+    Object.entries(products).forEach(([prodId, prod]) => {
+      const isOwner = prod.ownerId === userKey;
+      if (!isAdminSweep && !isOwner) return; // non-admins: owned products only
+
+      const tasks = prod.tasks || {};
+      const taskIds = Object.keys(tasks);
+      if (taskIds.length === 0) return;
+
+      taskIds.forEach(taskId => {
+        updates[`products/${prodId}/tasks/${taskId}/visibility`] = 'private';
+      });
+      taskCount    += taskIds.length;
+      productCount += 1;
+    });
+
+    if (taskCount === 0) {
+      showToast('No existing tasks found to lock.', 'info');
+    } else {
+      await update(ref(db), updates);
+
+      // Keep every in-memory cache consistent without a page refresh
+      [productListCache, trackerProductsCache, calProductsCache].forEach(cache => {
+        if (!cache) return;
+        Object.entries(cache).forEach(([prodId, p]) => {
+          if (!p || !p.tasks) return;
+          Object.keys(p.tasks).forEach(tid => {
+            if (updates.hasOwnProperty(`products/${prodId}/tasks/${tid}/visibility`)) {
+              p.tasks[tid].visibility = 'private';
+            }
+          });
+        });
+      });
+
+      showToast(`Locked ${taskCount} task${taskCount === 1 ? '' : 's'} across ${productCount} product${productCount === 1 ? '' : 's'} to Private.`, 'success');
+    }
+
+    // Re-render whatever's on screen so the change is visible immediately
+    if (['dashboard','myactions','tracker','calendar','workload','products','projects','settings'].includes(currentView)) {
+      loadView(currentView);
+    }
+  } catch (e) {
+    console.error('lockAllTasksToPrivate failed:', e);
+    showToast('Failed to lock tasks — check the browser console.', 'error');
+  } finally {
+    const btnAfter = document.getElementById('lock-all-tasks-btn');
+    if (btnAfter) { btnAfter.disabled = false; btnAfter.textContent = '🔒 Set all my tasks to Private'; }
+  }
 };
 
 /* ─── UTILITIES ─── */
