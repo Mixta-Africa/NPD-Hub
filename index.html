@@ -2097,6 +2097,34 @@ function buildTaskRow(t, i) {
           predOptions +
         '</select>' +
       '</div>' +
+      /* ── TASK VISIBILITY (access control) ─────────────────────────────────
+         Controls who can see this task on the Launch Calendar and My Actions.
+         'public'     = everyone who can see this product  (default)
+         'private'    = only the task's assigned owners + the product owner
+         'restricted' = owners + product owner + explicit email allowlist
+      ── */
+      '<div class="task-edit-col task-edit-col-wide" style="grid-column:span 3;">' +
+        '<label class="form-label">' +
+          '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:middle;margin-right:4px;"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg>' +
+          'Task visibility' +
+          '<span class="form-hint"> — who can see this task on the calendar and actions views</span>' +
+        '</label>' +
+        '<div style="display:flex;gap:8px;margin-top:4px;align-items:flex-start;flex-wrap:wrap;">' +
+          '<select class="select-field" style="flex:0 0 auto;" ' +
+            'onchange="updateEditingTask(\'' + t.id + '\',\'visibility\',this.value);toggleVisibleToField(\'' + t.id + '\',this.value)">' +
+            '<option value="public"'      + ((!t.visibility || t.visibility==='public')      ? ' selected' : '') + '>🌐 Public — everyone on this product</option>' +
+            '<option value="private"'     + (t.visibility==='private'                        ? ' selected' : '') + '>🔒 Private — owners only</option>' +
+            '<option value="restricted"'  + (t.visibility==='restricted'                     ? ' selected' : '') + '>👥 Restricted — owners + specific people</option>' +
+          '</select>' +
+          '<div id="visible-to-' + t.id + '" style="flex:1;min-width:200px;' + (t.visibility==='restricted' ? '' : 'display:none;') + '">' +
+            '<input class="input-field" style="width:100%;" placeholder="email1@mixtafrica.com, email2@mixtafrica.com"' +
+              ' value="' + (Array.isArray(t.visibleTo) ? t.visibleTo.join(', ') : '') + '"' +
+              ' onblur="updateEditingTaskVisibleTo(\'' + t.id + '\',this.value)"/>' +
+            '<div style="font-size:10px;color:var(--text-muted);margin-top:3px;">Comma-separated emails of people who can view this task in addition to owners.</div>' +
+          '</div>' +
+        '</div>' +
+      '</div>' +
+      /* ────────────────────────────────────────────────────────────────────── */
     '</div>' +
   '</div>';
 }
@@ -2151,6 +2179,19 @@ window.removeTaskOwner = (taskId, ownerIndex) => {
       : '<span style="font-size:11px;color:#9CA3AF;">No owners assigned</span>';
   }
 };
+
+/* ── Task visibility UI helpers ────────────────────────────── */
+window.toggleVisibleToField = (taskId, visibility) => {
+  const el = document.getElementById('visible-to-' + taskId);
+  if (el) el.style.display = visibility === 'restricted' ? '' : 'none';
+};
+
+window.updateEditingTaskVisibleTo = (taskId, raw) => {
+  const t = _editingTasks.find(x => x.id === taskId);
+  if (!t) return;
+  t.visibleTo = raw.split(',').map(e => e.trim().toLowerCase()).filter(Boolean);
+};
+/* ─────────────────────────────────────────────────────────── */
 
 window.updateTaskOwnerDept = (id, dept) => {
   const t = _editingTasks.find(x => x.id === id);
@@ -2959,6 +3000,35 @@ function buildPillarDetail(p) {
       ? '<div style="font-size:10px;color:var(--blue);margin-top:4px;">→ Spun out: ' + (task.spunOutName || task.spunOutTo) + '</div>'
       : '';
 
+    // ── TASK VISIBILITY BADGE + CONTROL ────────────────────────────────────
+    // Only the product owner and admins can change task visibility.
+    const userKey2   = sanitiseEmail(currentUser.email);
+    const canSetVis  = currentRole === 'admin' || isSuperAdmin || p.ownerId === userKey2;
+    const visVal     = task.visibility || 'public';
+    const visLabel   = visVal === 'private' ? '🔒 Private' : visVal === 'restricted' ? '👥 Restricted' : null;
+    // Only show the badge when visibility is non-default (don't clutter every row)
+    const visBadge = visLabel && !canSetVis
+      ? '<div style="font-size:10px;color:#6B7280;background:#F3F3F2;border:1px solid var(--border);border-radius:4px;padding:1px 6px;display:inline-block;margin-top:3px;">' + visLabel + '</div>'
+      : '';
+    const visControl = canSetVis
+      ? '<div style="margin-top:6px;display:flex;align-items:center;gap:6px;">' +
+          '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color:#9CA3AF;flex-shrink:0;"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg>' +
+          '<select style="font-size:10px;border:1px solid var(--border);border-radius:4px;padding:2px 4px;background:#fff;font-family:Poppins,sans-serif;color:var(--text-mid);" ' +
+            'onchange="saveTaskVisibility(\'' + p.id + '\',\'' + task.id + '\',this.value)">' +
+            '<option value="public"'     + (visVal==='public'     ? ' selected' : '') + '>🌐 Public</option>' +
+            '<option value="private"'    + (visVal==='private'    ? ' selected' : '') + '>🔒 Private</option>' +
+            '<option value="restricted"' + (visVal==='restricted' ? ' selected' : '') + '>👥 Restricted</option>' +
+          '</select>' +
+          (visVal === 'restricted'
+            ? '<input style="font-size:10px;border:1px solid var(--border);border-radius:4px;padding:2px 5px;flex:1;font-family:Poppins,sans-serif;" ' +
+                'placeholder="allowed emails, comma-separated" ' +
+                'value="' + (Array.isArray(task.visibleTo) ? task.visibleTo.join(', ') : '') + '" ' +
+                'onblur="saveTaskVisibleTo(\'' + p.id + '\',\'' + task.id + '\',this.value)"/>'
+            : '') +
+        '</div>'
+      : visBadge;
+    // ────────────────────────────────────────────────────────────────────────
+
     return '<div class="pillar-detail-row' + (isBlocked ? ' pillar-row-blocked' : '') + '">' +
       '<div class="pillar-detail-num">' + (i + 1) + '</div>' +
       '<div class="pillar-detail-body">' +
@@ -2968,6 +3038,7 @@ function buildPillarDetail(p) {
           deadlineChip +
         '</div>' +
         blockedHint + spinLink + ackBadge +
+        visControl +
       '</div>' +
       '<div style="display:flex;align-items:center;gap:4px;">' +
         statusEl + reassignBtn + spinOutBtn +
@@ -2985,6 +3056,33 @@ function buildPillarDetail(p) {
     '<div id="modal-reassign-panel" style="padding:0;"></div>' +
     '<div class="form-actions">' + addTaskBtn + editBtn + '<button class="btn-outline" onclick="closeProductModal()">Close</button></div>';
 }
+
+/* ══ TASK VISIBILITY — LIVE SAVE ════════════════════════════ */
+window.saveTaskVisibility = async (productId, taskId, visibility) => {
+  try {
+    await set(ref(db, 'products/' + productId + '/tasks/' + taskId + '/visibility'), visibility);
+    // Update local caches
+    [productListCache, trackerProductsCache, calProductsCache].forEach(cache => {
+      if (cache[productId]?.tasks?.[taskId]) cache[productId].tasks[taskId].visibility = visibility;
+    });
+    showToast('Task visibility set to ' + visibility + '.', 'success');
+    // Refresh the task detail panel so the restricted-email input appears/disappears
+    const body = document.getElementById('product-detail-body');
+    if (body) body.innerHTML = buildPillarDetail(productListCache[productId]);
+  } catch(e) { showToast('Failed: ' + e.message, 'error'); }
+};
+
+window.saveTaskVisibleTo = async (productId, taskId, raw) => {
+  const emails = raw.split(',').map(e => e.trim().toLowerCase()).filter(Boolean);
+  try {
+    await set(ref(db, 'products/' + productId + '/tasks/' + taskId + '/visibleTo'), emails);
+    [productListCache, trackerProductsCache, calProductsCache].forEach(cache => {
+      if (cache[productId]?.tasks?.[taskId]) cache[productId].tasks[taskId].visibleTo = emails;
+    });
+    showToast('Allowed viewers updated.', 'success');
+  } catch(e) { showToast('Failed: ' + e.message, 'error'); }
+};
+/* ────────────────────────────────────────────────────────── */
 
 /* ══ TASK REASSIGNMENT ══════════════════════════════════════ */
 window.showReassignTask = async (productId, taskId) => {
@@ -3602,6 +3700,24 @@ window.calDayClick = (day) => {
 async function loadCalendarData() {
   const snap = await get(ref(db, 'products'));
   calProductsCache = snap.val() || {};
+
+  // ── ACCESS FILTER ──────────────────────────────────────────────────────────
+  // Apply the same ownership/sharing rules used by every other view.
+  // Without this, every signed-in user sees every other user's tasks on the
+  // calendar regardless of department or sharing settings.
+  const userKey = sanitiseEmail(currentUser.email);
+  const calAccessible = {};
+  Object.entries(calProductsCache).forEach(([id, p]) => {
+    if (p.status === 'archived') return;
+    if (currentRole === 'admin') { calAccessible[id] = p; return; }
+    if (p.ownerId === userKey)           { calAccessible[id] = p; return; }
+    if (p.sharedWith?.[userKey])         { calAccessible[id] = p; return; }
+    // dept-lead visibility (mirrors loadDashboardStats)
+    if (window.currentDeptRole === 'lead') { calAccessible[id] = p; return; }
+  });
+  calProductsCache = calAccessible;
+  // ───────────────────────────────────────────────────────────────────────────
+
   const active = Object.values(calProductsCache).filter(p => p.status !== 'archived');
   const sel = document.getElementById('cal-product-filter');
   if (sel) active.forEach(p => { const o=document.createElement('option'); o.value=p.id; o.textContent=p.name; sel.appendChild(o); });
@@ -3611,12 +3727,40 @@ async function loadCalendarData() {
 function getCalMilestones() {
   const prods = Object.values(calProductsCache).filter(p => p.status !== 'archived');
   const filtered = calSelectedProduct === 'all' ? prods : prods.filter(p => p.id === calSelectedProduct);
+  const userKey  = sanitiseEmail(currentUser.email);
   const out = [];
   filtered.forEach(prod => {
     // Use unified task system — handles new tasks{} and legacy pillars{}
     const tasks = getProductTasks(prod);
     tasks.forEach(task => {
       if (!task.deadline) return;
+
+      // ── TASK-LEVEL VISIBILITY GATE ──────────────────────────────────────────
+      // Each task can carry a `visibility` field:
+      //   'public'  (default) — visible to everyone who can see this product
+      //   'private' — visible only to the task's assigned owners and the product owner
+      //   'restricted' — visible only to emails listed in task.visibleTo[]
+      //
+      // Admins and super-admins bypass all task-level restrictions.
+      if (task.visibility && task.visibility !== 'public') {
+        if (currentRole !== 'admin' && !isSuperAdmin) {
+          const isProductOwner = prod.ownerId === userKey;
+          const isTaskOwner    = task.owners
+            ? task.owners.some(o => sanitiseEmail(o.individual || '') === userKey || sanitiseEmail(o.email || '') === userKey)
+            : (sanitiseEmail(task.owner || '') === userKey ||
+               sanitiseEmail(task.ownerEmail || '') === userKey);
+          const isInAllowlist  = Array.isArray(task.visibleTo) &&
+            task.visibleTo.some(e => sanitiseEmail(e) === userKey);
+
+          if (task.visibility === 'private') {
+            if (!isProductOwner && !isTaskOwner) return; // skip
+          } else if (task.visibility === 'restricted') {
+            if (!isProductOwner && !isTaskOwner && !isInAllowlist) return; // skip
+          }
+        }
+      }
+      // ────────────────────────────────────────────────────────────────────────
+
       const effective = resolveTaskStatus(task);
       out.push({
         date:           task.deadline,
