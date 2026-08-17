@@ -115,7 +115,9 @@ const ICON = {
   handshake: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;vertical-align:middle;"><path d="M11 17l2 2a1 1 0 001.41 0l2.83-2.83"/><path d="M13 12l2 2a1 1 0 001.41 0l2.83-2.83a2 2 0 000-2.83l-2.83-2.83"/><path d="M8 8l-2.83 2.83a2 2 0 000 2.83L8 16.5"/></svg>`,
   paperclip: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;vertical-align:middle;"><path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48"/></svg>`,
   rocket: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;vertical-align:middle;"><path d="M4.5 16.5c-1.5 1.26-2 5-2 5s3.74-.5 5-2c.71-.84.7-2.13-.09-2.91a2.18 2.18 0 00-2.91-.09z"/><path d="M12 15l-3-3a22 22 0 012-3.95A12.88 12.88 0 0122 2c0 2.72-.78 7.5-6 11a22.35 22.35 0 01-4 2z"/></svg>`,
-  check_circle: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;vertical-align:middle;"><path d="M22 11.08V12a10 10 0 11-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>`
+  check_circle: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;vertical-align:middle;"><path d="M22 11.08V12a10 10 0 11-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>`,
+  globe: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;vertical-align:middle;"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 014 10 15.3 15.3 0 01-4 10 15.3 15.3 0 01-4-10 15.3 15.3 0 014-10z"/></svg>`,
+  users: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;vertical-align:middle;"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87"/><path d="M16 3.13a4 4 0 010 7.75"/></svg>`
 };
 
 /* ─── STATE ─── */
@@ -1866,6 +1868,26 @@ function renderProductCard(p) {
                   : delayed > 0   ? `${delayed} delayed`
                   : pct === 100   ? 'Complete' : 'On track';
 
+  // Task-visibility summary badge — at a glance, are this product's tasks Public, Private, Restricted, or a mix?
+  const visCounts = { public: 0, private: 0, restricted: 0 };
+  allTasks.forEach(t => { const v = t.visibility || 'public'; visCounts[v] = (visCounts[v] || 0) + 1; });
+  const visKindsPresent = ['public','private','restricted'].filter(k => visCounts[k] > 0);
+  let visBadge = '';
+  if (visKindsPresent.length === 1) {
+    const visMeta = {
+      public:     { icon: ICON.globe, label: 'All tasks Public — visible to everyone with product access', bg: '#F4F4F2', fg: 'var(--text-muted)', bd: 'var(--border)' },
+      private:    { icon: ICON.lock,  label: 'All tasks Private — only the product owner + task owners can see them', bg: '#FEF2F2', fg: 'var(--red)', bd: '#FCA5A5' },
+      restricted: { icon: ICON.users, label: 'All tasks Restricted — owner + task owners + allowlisted people only', bg: '#FFFBEB', fg: '#B45309', bd: '#FDE68A' },
+    }[visKindsPresent[0]];
+    visBadge = `<span title="${visMeta.label}" style="display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;border-radius:999px;background:${visMeta.bg};color:${visMeta.fg};border:1px solid ${visMeta.bd};flex-shrink:0;">${visMeta.icon}</span>`;
+  } else if (visKindsPresent.length > 1) {
+    const parts = [];
+    if (visCounts.public)     parts.push(visCounts.public + ' public');
+    if (visCounts.restricted) parts.push(visCounts.restricted + ' restricted');
+    if (visCounts.private)    parts.push(visCounts.private + ' private');
+    visBadge = `<span title="Mixed task visibility — ${parts.join(', ')}" style="display:inline-flex;align-items:center;gap:3px;font-size:10px;font-weight:700;color:#7C3AED;background:#F5F3FF;border:1px solid #DDD6FE;padding:2px 8px;border-radius:10px;letter-spacing:.02em;flex-shrink:0;">${ICON.lock}Mixed</span>`;
+  }
+
   return `
     <div class="product-card-full">
       <div class="pcf-header">
@@ -1888,6 +1910,7 @@ function renderProductCard(p) {
           </div>
         </div>
         <div class="pcf-header-right">
+          ${visBadge}
           ${launchBadge}
           <span class="status-chip status-${statusCls}">${statusLbl}</span>
         </div>
