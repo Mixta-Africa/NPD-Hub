@@ -1064,6 +1064,56 @@ function resolveTaskStatus(task) {
   return getTaskEffectiveStatus(task);
 }
 
+/* ── TASK VISIBILITY GATE ─────────────────────────────────────
+   Central, single-source-of-truth check used by every view.
+   Returns true  → current user is allowed to see this task.
+   Returns false → task must be hidden from this user entirely.
+
+   Rules:
+     public     : everyone who can see the parent product
+     private    : ONLY the product owner + the task's own owners
+     restricted : product owner + task owners + explicit visibleTo list
+
+   Admins and super-admins bypass all restrictions.
+────────────────────────────────────────────────────────────── */
+function canViewTask(task, prod) {
+  // Admins / super-admins see everything
+  if (currentRole === 'admin' || isSuperAdmin) return true;
+
+  const vis = task.visibility || 'public';
+  if (vis === 'public') return true;   // most common path — fast exit
+
+  const userKey        = sanitiseEmail(currentUser.email);
+  const isProductOwner = prod.ownerId === userKey;
+
+  // Resolve whether the viewer is one of the task's assigned owners
+  let isTaskOwner = false;
+  if (task.owners && task.owners.length > 0) {
+    isTaskOwner = task.owners.some(o => {
+      const ownerKey = sanitiseEmail(o.individual || o.email || o.dept || '');
+      return ownerKey === userKey;
+    });
+  } else {
+    // Legacy single-owner fields
+    isTaskOwner = sanitiseEmail(task.owner      || '') === userKey ||
+                  sanitiseEmail(task.ownerEmail || '') === userKey;
+  }
+
+  if (vis === 'private') {
+    // Private — ONLY product owner + task owners. No one else.
+    return isProductOwner || isTaskOwner;
+  }
+
+  if (vis === 'restricted') {
+    // Restricted — product owner + task owners + explicit allowlist
+    const inAllowlist = Array.isArray(task.visibleTo) &&
+      task.visibleTo.some(e => sanitiseEmail(e) === userKey);
+    return isProductOwner || isTaskOwner || inAllowlist;
+  }
+
+  return false; // unknown visibility value → deny
+}
+
 // Colour + label lookup — used by every status pill/dot on the dashboard
 const STATUS_META = {
   'complete':  { label: 'Complete',  color: 'var(--blue)',  cls: 'st-complete'  },
@@ -1184,6 +1234,8 @@ function _updateDashboardUI(list) {
     list.forEach(prod => {
       const tasks = getProductTasks(prod);
       tasks.forEach(task => {
+        // Honour task-level confidentiality on the dashboard
+        if (!canViewTask(task, prod)) return;
         if (task.status === 'complete' || task.taskStatus === 'complete') return;
         activeTaskCount++;
         const eff = resolveTaskStatus(task);
@@ -1414,6 +1466,8 @@ async function loadWorkload() {
       tasks.forEach(t => { taskMap[t.id] = t; });
 
       tasks.forEach(task => {
+        // Honour task-level confidentiality in the workload view
+        if (!canViewTask(task, prod)) return;
         if (task.status === 'complete') return;
         const eff      = resolveTaskStatus(task);
         const isBlocked = (task.predecessors || []).some(pid => {
@@ -1556,6 +1610,12 @@ async function loadMyActions() {
       tasks.forEach(t => { allTasksMap[t.id] = t; });
 
       tasks.forEach(task => {
+        // ── CONFIDENTIALITY GATE ──────────────────────────────
+        // Private/restricted tasks are hidden from anyone not
+        // explicitly permitted, even in their own My Actions view.
+        if (!canViewTask(task, prod)) return;
+        // ─────────────────────────────────────────────────────
+
         // Is this task assigned to the current user?
         const ownerEmail = (task.owner || '').toLowerCase().trim();
         const myEmail    = (currentUser.email || '').toLowerCase().trim();
@@ -2022,7 +2082,7 @@ function buildTaskEditorForm() {
       <div style="display:flex;gap:10px;justify-content:flex-end;">
         <button class="btn-outline" onclick="showCreateProduct()">← Back</button>
         <button class="btn-outline" onclick="saveAsTemplatePrompt()">Save as template</button>
-        <button class="btn-primary" onclick="saveProduct('')">Create product</button>
+        <button class="btn-primary" id="create-item-btn" onclick="saveProduct('')">Create ${window._pendingCreateType === 'project' ? 'project' : 'product'}</button>
       </div>
     </div>`;
 }
@@ -2112,9 +2172,9 @@ function buildTaskRow(t, i) {
         '<div style="display:flex;gap:8px;margin-top:4px;align-items:flex-start;flex-wrap:wrap;">' +
           '<select class="select-field" style="flex:0 0 auto;" ' +
             'onchange="updateEditingTask(\'' + t.id + '\',\'visibility\',this.value);toggleVisibleToField(\'' + t.id + '\',this.value)">' +
-            '<option value="public"'      + ((!t.visibility || t.visibility==='public')      ? ' selected' : '') + '>🌐 Public — everyone on this product</option>' +
-            '<option value="private"'     + (t.visibility==='private'                        ? ' selected' : '') + '>🔒 Private — owners only</option>' +
-            '<option value="restricted"'  + (t.visibility==='restricted'                     ? ' selected' : '') + '>👥 Restricted — owners + specific people</option>' +
+            '<option value="public"'      + ((!t.visibility || t.visibility==='public')      ? ' selected' : '') + '>[ Public ] Everyone on this product</option>' +
+            '<option value="private"'     + (t.visibility==='private'                        ? ' selected' : '') + '>[ Private ] Owners only</option>' +
+            '<option value="restricted"'  + (t.visibility==='restricted'                     ? ' selected' : '') + '>[ Restricted ] Owners + specific people</option>' +
           '</select>' +
           '<div id="visible-to-' + t.id + '" style="flex:1;min-width:200px;' + (t.visibility==='restricted' ? '' : 'display:none;') + '">' +
             '<input class="input-field" style="width:100%;" placeholder="email1@mixtafrica.com, email2@mixtafrica.com"' +
@@ -2493,6 +2553,10 @@ window.setItemType = (type) => {
   document.querySelectorAll('.project-only-field').forEach(el => {
     el.style.display = type === 'project' ? 'block' : 'none';
   });
+  // Keep the create button label in sync with the chosen type
+  window._pendingCreateType = type;
+  const createBtn = document.getElementById('create-item-btn');
+  if (createBtn) createBtn.textContent = type === 'project' ? 'Create project' : 'Create product';
 };
 
 window.saveProduct = async (existingId) => {
@@ -3005,19 +3069,23 @@ function buildPillarDetail(p) {
     const userKey2   = sanitiseEmail(currentUser.email);
     const canSetVis  = currentRole === 'admin' || isSuperAdmin || p.ownerId === userKey2;
     const visVal     = task.visibility || 'public';
-    const visLabel   = visVal === 'private' ? '🔒 Private' : visVal === 'restricted' ? '👥 Restricted' : null;
+    const visLabel   = visVal === 'private' ? '[ Private ]' : visVal === 'restricted' ? '[ Restricted ]' : null;
     // Only show the badge when visibility is non-default (don't clutter every row)
+    // Use 2D line-art SVG icons — no emoji
+    const visIconSvg = visVal === 'private'
+      ? '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:middle;margin-right:3px;"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg>'
+      : '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:middle;margin-right:3px;"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87"/><path d="M16 3.13a4 4 0 010 7.75"/></svg>';
     const visBadge = visLabel && !canSetVis
-      ? '<div style="font-size:10px;color:#6B7280;background:#F3F3F2;border:1px solid var(--border);border-radius:4px;padding:1px 6px;display:inline-block;margin-top:3px;">' + visLabel + '</div>'
+      ? '<div style="font-size:10px;color:#6B7280;background:#F3F3F2;border:1px solid var(--border);border-radius:4px;padding:1px 6px;display:inline-flex;align-items:center;margin-top:3px;">' + visIconSvg + visLabel + '</div>'
       : '';
     const visControl = canSetVis
       ? '<div style="margin-top:6px;display:flex;align-items:center;gap:6px;">' +
-          '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color:#9CA3AF;flex-shrink:0;"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg>' +
+          '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="#9CA3AF" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg>' +
           '<select style="font-size:10px;border:1px solid var(--border);border-radius:4px;padding:2px 4px;background:#fff;font-family:Poppins,sans-serif;color:var(--text-mid);" ' +
             'onchange="saveTaskVisibility(\'' + p.id + '\',\'' + task.id + '\',this.value)">' +
-            '<option value="public"'     + (visVal==='public'     ? ' selected' : '') + '>🌐 Public</option>' +
-            '<option value="private"'    + (visVal==='private'    ? ' selected' : '') + '>🔒 Private</option>' +
-            '<option value="restricted"' + (visVal==='restricted' ? ' selected' : '') + '>👥 Restricted</option>' +
+            '<option value="public"'     + (visVal==='public'     ? ' selected' : '') + '>[ Public ]</option>' +
+            '<option value="private"'    + (visVal==='private'    ? ' selected' : '') + '>[ Private ]</option>' +
+            '<option value="restricted"' + (visVal==='restricted' ? ' selected' : '') + '>[ Restricted ]</option>' +
           '</select>' +
           (visVal === 'restricted'
             ? '<input style="font-size:10px;border:1px solid var(--border);border-radius:4px;padding:2px 5px;flex:1;font-family:Poppins,sans-serif;" ' +
@@ -3057,18 +3125,53 @@ function buildPillarDetail(p) {
     '<div class="form-actions">' + addTaskBtn + editBtn + '<button class="btn-outline" onclick="closeProductModal()">Close</button></div>';
 }
 
-/* ══ TASK VISIBILITY — LIVE SAVE ════════════════════════════ */
+/* ══ TASK VISIBILITY — LIVE SAVE ════════════════════════════
+   Critical confidentiality feature.
+   When a task is set to 'private' or 'restricted', it must be
+   immediately and completely expunged from every other user's
+   view — calendar, tracker, My Actions, dashboard, workload.
+   We achieve this by:
+     1. Persisting the new visibility to Firebase immediately.
+     2. Updating all in-memory caches atomically.
+     3. Force-refreshing the active view so it re-runs the
+        canViewTask() gate and hides the task without a reload.
+════════════════════════════════════════════════════════════ */
 window.saveTaskVisibility = async (productId, taskId, visibility) => {
   try {
+    // 1. Persist to Firebase — source of truth for all other sessions
     await set(ref(db, 'products/' + productId + '/tasks/' + taskId + '/visibility'), visibility);
-    // Update local caches
+
+    // 2. Update ALL in-memory caches so the change takes effect
+    //    in this session immediately without waiting for a reload
     [productListCache, trackerProductsCache, calProductsCache].forEach(cache => {
-      if (cache[productId]?.tasks?.[taskId]) cache[productId].tasks[taskId].visibility = visibility;
+      if (cache[productId]?.tasks?.[taskId]) {
+        cache[productId].tasks[taskId].visibility = visibility;
+      }
     });
-    showToast('Task visibility set to ' + visibility + '.', 'success');
-    // Refresh the task detail panel so the restricted-email input appears/disappears
+
+    // 3. Refresh the task detail panel (restricted-email input show/hide)
     const body = document.getElementById('product-detail-body');
-    if (body) body.innerHTML = buildPillarDetail(productListCache[productId]);
+    if (body && productListCache[productId]) {
+      body.innerHTML = buildPillarDetail(productListCache[productId]);
+    }
+
+    // 4. Force-refresh calendar and tracker caches so private tasks
+    //    vanish from the Gantt/month view in the current session.
+    //    (Other users' sessions are protected at read time via canViewTask.)
+    if (visibility === 'private' || visibility === 'restricted') {
+      // Invalidate calendar cache for this product so next draw re-filters
+      if (calProductsCache[productId]?.tasks?.[taskId]) {
+        calProductsCache[productId].tasks[taskId].visibility = visibility;
+      }
+      // If calendar is the active view, redraw immediately
+      if (currentView === 'calendar') {
+        if (calViewMode === 'gantt') drawGantt();
+        else { drawCalendar(); drawMilestoneList(); }
+      }
+    }
+
+    const visLabels = { public: 'Public', private: 'Private', restricted: 'Restricted' };
+    showToast('Task visibility set to ' + (visLabels[visibility] || visibility) + '.', 'success');
   } catch(e) { showToast('Failed: ' + e.message, 'error'); }
 };
 
@@ -3076,6 +3179,7 @@ window.saveTaskVisibleTo = async (productId, taskId, raw) => {
   const emails = raw.split(',').map(e => e.trim().toLowerCase()).filter(Boolean);
   try {
     await set(ref(db, 'products/' + productId + '/tasks/' + taskId + '/visibleTo'), emails);
+    // Update all in-memory caches atomically
     [productListCache, trackerProductsCache, calProductsCache].forEach(cache => {
       if (cache[productId]?.tasks?.[taskId]) cache[productId].tasks[taskId].visibleTo = emails;
     });
@@ -3906,7 +4010,20 @@ window.setTrackerView = (mode) => {
 
 async function loadTrackerProducts() {
   const snap = await get(ref(db, 'products'));
-  trackerProductsCache = snap.val() || {};
+  const all = snap.val() || {};
+
+  // Apply the same product-level access filter used by every other view.
+  // Non-admin users only see products they own or have been explicitly shared on.
+  const userKey = sanitiseEmail(currentUser.email);
+  trackerProductsCache = {};
+  Object.entries(all).forEach(([id, p]) => {
+    if (p.status === 'archived') return;
+    if (currentRole === 'admin') { trackerProductsCache[id] = p; return; }
+    if (p.ownerId === userKey)           { trackerProductsCache[id] = p; return; }
+    if (p.sharedWith?.[userKey])         { trackerProductsCache[id] = p; return; }
+    if (window.currentDeptRole === 'lead') { trackerProductsCache[id] = p; return; }
+  });
+
   const active = Object.values(trackerProductsCache).filter(p => p.status !== 'archived');
   const sel = document.getElementById('tracker-product-sel');
   if (!sel) return;
@@ -3969,7 +4086,7 @@ function renderTrackerTable(prod, filter) {
   }).length;
   const locked    = isProductLocked(prod);
 
-  const rows = allTasks.map((pl, i) => {
+  const rows = allTasks.filter(pl => canViewTask(pl, prod)).map((pl, i) => {
     // pl is a task object from getProductTasks()
     const pd       = pl;
     const rawSt    = pl.status || 'on-track';
@@ -6680,7 +6797,7 @@ function renderKanban(prod) {
   }
 
   const columns = cols.map(col => {
-    const colTasks = tasks.filter(t => taskToCol(t) === col.id);
+    const colTasks = tasks.filter(t => canViewTask(t, prod) && taskToCol(t) === col.id);
     const cards    = colTasks.map(t => {
       const today    = new Date(); today.setHours(0,0,0,0);
       const isLocked = locked && !isSuperAdmin && currentRole !== 'admin';
