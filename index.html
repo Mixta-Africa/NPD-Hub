@@ -2479,6 +2479,12 @@ window.showAddTaskToProduct = (productId) => {
   window._atOwners = [];
 };
 
+window.updateAddTaskIndividuals = () => {
+  const dept = document.getElementById('at-dept')?.value || '';
+  const sel  = document.getElementById('at-owner');
+  if (sel) sel.innerHTML = buildOwnerIndividualOptions(dept, '');
+};
+
 window.addNewTaskOwnerChip = () => {
   const dept = document.getElementById('at-dept')?.value || '';
   const ind  = document.getElementById('at-owner')?.value || dept;
