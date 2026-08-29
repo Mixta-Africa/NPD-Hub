@@ -1,9 +1,17 @@
 name: Daily Deadline Check
 
+# ─────────────────────────────────────────────────────────────
+# DISABLED SCHEDULE — the authoritative daily cron runs inside GAS
+# (dailyDeadlineCheck). This workflow builds its OWN alerts array and
+# therefore bypasses two things the GAS path enforces:
+#   1. Task-level privacy — it would name private tasks in shared emails
+#   2. resolveTaskRecipients() — it would route to product owners, not
+#      the reassigned task owners
+# Left as a manual-only fallback for when GAS is unavailable. Do NOT
+# re-enable the schedule without porting both of those rules across.
+# ─────────────────────────────────────────────────────────────
 on:
-  schedule:
-    - cron: '0 6 * * *'   # 6:00 UTC = 7:00 WAT, every day
-  workflow_dispatch:        # allow manual trigger from GitHub Actions UI
+  workflow_dispatch:        # manual trigger only — see note above
 
 jobs:
   check-deadlines:
