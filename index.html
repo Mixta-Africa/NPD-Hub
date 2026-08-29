@@ -16,6 +16,9 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="default"/>
 <meta name="apple-mobile-web-app-title" content="NPD Hub"/>
 
+<!-- SheetJS — Excel/CSV parsing for the task importer -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+
 <!-- Safe global stubs — ensures onclick handlers work before module loads -->
 <script>
 (function() {
@@ -50,7 +53,7 @@
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js';
 import { getAuth, signInWithPopup, GoogleAuthProvider, signOut, onAuthStateChanged }
   from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js';
-import { getDatabase, ref, get, set, update, onValue }
+import { getDatabase, ref, get, set, onValue }
   from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-database.js';
 
 /* ─────────────────────────────────────────────
@@ -72,7 +75,9 @@ const firebaseConfig = {
 
 // GAS endpoint — injected at deploy time
 const GAS_ENDPOINT = '__GAS_ENDPOINT__';
-const GROQ_API_KEY = '__GROQ_API_KEY__';
+const GROQ_API_KEY      = '__GROQ_API_KEY__';
+const CEREBRAS_API_KEY  = '__CEREBRAS_API_KEY__';
+const SAMBANOVA_API_KEY = '__SAMBANOVA_API_KEY__';
 const GROQ_MODEL   = 'llama-3.3-70b-versatile';
 const TEST_EMAIL   = 'o.olasunkanmi@mixtafrica.com';
 
@@ -115,14 +120,13 @@ const ICON = {
   handshake: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;vertical-align:middle;"><path d="M11 17l2 2a1 1 0 001.41 0l2.83-2.83"/><path d="M13 12l2 2a1 1 0 001.41 0l2.83-2.83a2 2 0 000-2.83l-2.83-2.83"/><path d="M8 8l-2.83 2.83a2 2 0 000 2.83L8 16.5"/></svg>`,
   paperclip: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;vertical-align:middle;"><path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48"/></svg>`,
   rocket: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;vertical-align:middle;"><path d="M4.5 16.5c-1.5 1.26-2 5-2 5s3.74-.5 5-2c.71-.84.7-2.13-.09-2.91a2.18 2.18 0 00-2.91-.09z"/><path d="M12 15l-3-3a22 22 0 012-3.95A12.88 12.88 0 0122 2c0 2.72-.78 7.5-6 11a22.35 22.35 0 01-4 2z"/></svg>`,
-  check_circle: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;vertical-align:middle;"><path d="M22 11.08V12a10 10 0 11-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>`,
-  globe: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;vertical-align:middle;"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 014 10 15.3 15.3 0 01-4 10 15.3 15.3 0 01-4-10 15.3 15.3 0 014-10z"/></svg>`,
-  users: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;vertical-align:middle;"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87"/><path d="M16 3.13a4 4 0 010 7.75"/></svg>`
+  check_circle: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;vertical-align:middle;"><path d="M22 11.08V12a10 10 0 11-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>`
 };
 
 /* ─── STATE ─── */
 let currentUser      = null;
 let currentRole      = null;      // 'admin' | 'member' | null
+let currentUserDept  = '';        // set at login from /users/{key}/dept — drives dept scoping
 let currentView      = 'dashboard';
 let isSuperAdmin     = false;     // true after password challenge passed
 let saSessionStart   = null;      // timestamp of super admin session start
@@ -180,8 +184,6 @@ onAuthStateChanged(auth, async (user) => {
       // Read user record to check if dept is already set
       const userSnap = await get(ref(db, 'users/' + key));
       const userData  = userSnap.exists() ? userSnap.val() : null;
-      window.currentDeptRole = userData?.deptRole || 'member';
-      window.currentUserDept = userData?.dept || '';
 
       if (!userData || !userData.dept) {
         showApp();
@@ -192,12 +194,14 @@ onAuthStateChanged(auth, async (user) => {
             email, role: currentRole, dept: detectedDept,
             deptLocked: true, createdAt: Date.now(),
           });
+          currentUserDept = detectedDept;
           setTimeout(() => showWelcomeModal(detectedDept), 600);
           loadView('dashboard');
         } else {
           showDeptSelectionScreen(user, key);
         }
       } else {
+        currentUserDept = userData.dept || '';
         showApp();
         loadView('dashboard');
       }
@@ -211,6 +215,7 @@ onAuthStateChanged(auth, async (user) => {
   } else {
     currentUser = null;
     currentRole = null;
+    currentUserDept = '';
     isSuperAdmin = false;
     saSessionStart = null;
     showLogin();
@@ -488,31 +493,15 @@ window.confirmDeptSelection = async (dept, userKey) => {
     btns.forEach(b => { b.disabled = true; b.style.opacity = '0.5'; });
   }
   try {
-    // AUTO-POPULATE STAKEHOLDER DIRECTORY
-    const emailLower = currentUser.email.toLowerCase();
-    if (!STAKEHOLDERS.find(s => s.email.toLowerCase() === emailLower)) {
-      const newId = 's_auto_' + Date.now();
-      STAKEHOLDERS.push({
-        id: newId,
-        name: currentUser.displayName || emailLower.split('@')[0],
-        email: emailLower,
-        dept: dept,
-        isDeptEmail: false,
-        enabled: true
-      });
-      // Push immediately to the super admin config
-      await set(ref(db, 'config/stakeholders'), STAKEHOLDERS);
-    }
-
     await set(ref(db, 'users/' + userKey), {
       name:       currentUser.displayName || currentUser.email.split('@')[0],
       email:      currentUser.email,
       role:       currentRole,
       dept:       dept,
-      deptRole:   'member', // Assigns a standard member tier by default
       deptLocked: true,
       createdAt:  Date.now(),
     });
+    currentUserDept = dept;
     if (overlay) overlay.remove();
     setTimeout(() => showWelcomeModal(dept), 300);
     loadView('dashboard');
@@ -564,6 +553,20 @@ function showApp() {
   // Load all app config, templates, and team members
   loadAppConfig().then(() => seedConfigToFirebase());
   loadTemplatesAndConfig();
+  const userKey = sanitiseEmail(currentUser.email);
+  get(ref(db, `users/${userKey}`)).then(snap => {
+    if (!snap.exists()) {
+      const detectedDept = detectDeptFromEmail(currentUser.email);
+      set(ref(db, `users/${userKey}`), {
+        name:      currentUser.displayName || currentUser.email.split('@')[0],
+        email:     currentUser.email,
+        role:      currentRole,
+        dept:      detectedDept,
+        createdAt: Date.now(),
+      });
+      setTimeout(() => showWelcomeModal(detectedDept), 800);
+    }
+  });
 }
 
 function showWelcomeModal(detectedDept) {
@@ -634,8 +637,8 @@ window.loadView = (view) => {
   const titles = {
     dashboard:  'Dashboard',
     myactions:  'My Actions',
+    ask:        'Ask',
     products:   'Products',
-    projects:   'Projects',
     calendar:   'Launch Calendar',
     tracker:    'Task Tracker',
     workload:   'Department Workload',
@@ -645,18 +648,6 @@ window.loadView = (view) => {
   };
   document.getElementById('page-title').textContent = titles[view] || view;
 
-  // Inject minor refresh button globally next to page title
-  const titleEl = document.getElementById('page-title');
-  if (titleEl && !document.getElementById('global-refresh-btn')) {
-    const btn = document.createElement('button');
-    btn.id = 'global-refresh-btn';
-    btn.className = 'btn-outline';
-    btn.style.cssText = 'font-size:11px; padding:4px 10px; margin-left:14px; vertical-align:middle; cursor:pointer; background:#fff;';
-    btn.innerHTML = '↻ Refresh view';
-    btn.onclick = () => { loadView(currentView); showToast('View refreshed.', 'success'); };
-    titleEl.parentNode.insertBefore(btn, titleEl.nextSibling);
-  }
-
   // Render the view
   const content = document.getElementById('main-content');
   content.innerHTML = '';
@@ -665,8 +656,8 @@ window.loadView = (view) => {
   switch(view) {
     case 'dashboard':  renderDashboard(content); break;
     case 'myactions':  renderMyActions(content);  break;
-    case 'products':   renderProducts(content, 'product');  break;
-    case 'projects':   renderProducts(content, 'project');  break;
+    case 'ask':        renderAsk(content);        break;
+    case 'products':   renderProducts(content);  break;
     case 'calendar':   renderCalendar(content);  break;
     case 'tracker':    renderTracker(content);   break;
     case 'workload':   renderWorkload(content);  break;
@@ -777,7 +768,7 @@ function getDepts() {
 
 function detectDeptFromEmail(email) {
   const match = STAKEHOLDERS.find(s => s.email === email);
-  return match ? match.dept : null;
+  return match ? match.dept : 'Commercial Strategy';
 }
 
 // Build a grouped <select> for task owner — dept groups + individual members
@@ -874,7 +865,6 @@ function pillarsToTasks(pillars) {
       startDate:   '',
       status:      pd.taskStatus || 'on-track',
       notes:       pd.notes || '',
-      acknowledgement: pd.acknowledgement || null,
       predecessors:[],
       locked:      false,
       pillarId:    pl.id,
@@ -1066,56 +1056,6 @@ function resolveTaskStatus(task) {
   return getTaskEffectiveStatus(task);
 }
 
-/* ── TASK VISIBILITY GATE ─────────────────────────────────────
-   Central, single-source-of-truth check used by every view.
-   Returns true  → current user is allowed to see this task.
-   Returns false → task must be hidden from this user entirely.
-
-   Rules:
-     public     : everyone who can see the parent product
-     private    : ONLY the product owner + the task's own owners
-     restricted : product owner + task owners + explicit visibleTo list
-
-   Admins and super-admins bypass all restrictions.
-────────────────────────────────────────────────────────────── */
-function canViewTask(task, prod) {
-  // Admins / super-admins see everything
-  if (currentRole === 'admin' || isSuperAdmin) return true;
-
-  const vis = task.visibility || 'public';
-  if (vis === 'public') return true;   // most common path — fast exit
-
-  const userKey        = sanitiseEmail(currentUser.email);
-  const isProductOwner = prod.ownerId === userKey;
-
-  // Resolve whether the viewer is one of the task's assigned owners
-  let isTaskOwner = false;
-  if (task.owners && task.owners.length > 0) {
-    isTaskOwner = task.owners.some(o => {
-      const ownerKey = sanitiseEmail(o.individual || o.email || o.dept || '');
-      return ownerKey === userKey;
-    });
-  } else {
-    // Legacy single-owner fields
-    isTaskOwner = sanitiseEmail(task.owner      || '') === userKey ||
-                  sanitiseEmail(task.ownerEmail || '') === userKey;
-  }
-
-  if (vis === 'private') {
-    // Private — ONLY product owner + task owners. No one else.
-    return isProductOwner || isTaskOwner;
-  }
-
-  if (vis === 'restricted') {
-    // Restricted — product owner + task owners + explicit allowlist
-    const inAllowlist = Array.isArray(task.visibleTo) &&
-      task.visibleTo.some(e => sanitiseEmail(e) === userKey);
-    return isProductOwner || isTaskOwner || inAllowlist;
-  }
-
-  return false; // unknown visibility value → deny
-}
-
 // Colour + label lookup — used by every status pill/dot on the dashboard
 const STATUS_META = {
   'complete':  { label: 'Complete',  color: 'var(--blue)',  cls: 'st-complete'  },
@@ -1150,12 +1090,9 @@ function renderDashboard(el) {
           '<h1 class="view-title">Good ' + getGreeting() + ', <span id="dash-greeting-name" onclick="editPreferredName()" title="Click to personalise your name" style="cursor:pointer;border-bottom:1px dashed var(--border);padding-bottom:1px;">' + name + '</span>.' +
             '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" stroke-width="2" style="margin-left:6px;vertical-align:middle;cursor:pointer;" onclick="editPreferredName()" title="Edit name"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>' +
           '</h1>' +
-          '<p class="view-subtitle">' + (currentRole === 'admin' ? 'Team overview — all products & projects' : 'My workload — ' + (window.currentUserDept || 'Commercial Strategy')) + '</p>' +
+          '<p class="view-subtitle">' + (currentRole === 'admin' ? 'Team overview — all products' : 'My products — Commercial Strategy') + '</p>' +
         '</div>' +
-        '<div style="display:flex;gap:8px;">' +
-          '<button class="btn-primary" onclick="showCreateProduct(\'product\')">+ New Product</button>' +
-          '<button class="btn-primary" style="background:var(--blue);border-color:var(--blue);" onclick="showCreateProduct(\'project\')">+ New Project</button>' +
-        '</div>' +
+        (currentRole === 'admin' ? '<button class="btn-primary" onclick="loadView(\'products\')">+ New product</button>' : '') +
       '</div>' +
       '<div class="stats-row">' +
         '<div class="stat-card stat-card-link dash-stat-card" onclick="loadView(\'products\')" style="border-top:3px solid var(--red);">' +
@@ -1179,7 +1116,6 @@ function renderDashboard(el) {
           '<div class="stat-nav-hint">View calendar →</div>' +
         '</div>' +
       '</div>' +
-      '<div id="dash-approvals-wrap" style="display:none; margin-bottom:16px;"></div>' +
       '<div class="two-col">' +
         '<div class="panel">' +
           '<div class="panel-header">' +
@@ -1195,8 +1131,16 @@ function renderDashboard(el) {
           '</div>' +
           '<div id="dash-deadlines"><div class="loading-row" style="padding:18px;">Loading...</div></div>' +
         '</div>' +
+      '</div>' +
+      '<div class="panel">' +
+        '<div class="panel-header">' +
+          '<span class="panel-title">Recent emails sent</span>' +
+          '<span style="font-size:11px;color:var(--text-muted);">Automated and manual sends across your items</span>' +
+        '</div>' +
+        '<div id="dash-emaillog"><div class="loading-row" style="padding:18px;">Loading...</div></div>' +
       '</div>';
     loadDashboardStats();
+    loadDashboardEmailLog();
   });
 }
 
@@ -1208,12 +1152,7 @@ async function loadDashboardStats() {
       const products = snap.val() || {};
       const list     = Object.values(products).filter(p => {
         if (p.status === 'archived') return false;
-        
-        // Hide pending approvals from general view unless the user owns them, is Admin, or is a Dept Lead
-        if (p.status === 'pending-approval' && currentRole !== 'admin' && p.ownerId !== userKey && window.currentDeptRole !== 'lead') return false;
-        
         if (currentRole === 'admin') return true;
-        if (window.currentDeptRole === 'lead') return true; // Leads can oversee the pipeline
         if (p.ownerId === userKey) return true;
         if (p.sharedWith?.[userKey]) return true;
         return false;
@@ -1234,10 +1173,8 @@ function _updateDashboardUI(list) {
     const upcomingDeadlines = [];
 
     list.forEach(prod => {
-      const tasks = getProductTasks(prod);
+      const tasks = getProductTasks(prod).filter(t => canViewTask(t, prod));
       tasks.forEach(task => {
-        // Honour task-level confidentiality on the dashboard
-        if (!canViewTask(task, prod)) return;
         if (task.status === 'complete' || task.taskStatus === 'complete') return;
         activeTaskCount++;
         const eff = resolveTaskStatus(task);
@@ -1296,50 +1233,15 @@ function _updateDashboardUI(list) {
     document.getElementById('stat-overdue').textContent = overdue || '0';
     document.getElementById('stat-week').textContent    = thisWeek || '0';
 
-    // Approval Queue panel
-    const pendingList = list.filter(p => p.status === 'pending-approval');
-    const approvalsWrap = document.getElementById('dash-approvals-wrap');
-    if (approvalsWrap) {
-      if (pendingList.length > 0 && (currentRole === 'admin' || window.currentDeptRole === 'lead')) {
-        approvalsWrap.style.display = 'block';
-        approvalsWrap.innerHTML = '<div class="panel" style="border:1px solid var(--amber); box-shadow:0 4px 12px rgba(217,119,6,0.08);">' +
-          '<div class="panel-header" style="background:var(--amber-light); border-bottom:1px solid rgba(217,119,6,0.2); border-radius:12px 12px 0 0;">' +
-            '<span class="panel-title" style="color:var(--amber); display:flex; align-items:center; gap:6px;">' +
-              '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22c5.523 0 10-4.477 10-10S17.523 2 12 2 2 6.477 2 12s4.477 10 10 10z"/><polyline points="12 6 12 12 16 14"/></svg>' +
-              'Approval Queue (' + pendingList.length + ')' +
-            '</span>' +
-          '</div>' +
-          '<div class="panel-body" style="padding:0;">' +
-            pendingList.map(p => 
-              '<div style="display:flex; align-items:center; justify-content:space-between; padding:12px 16px; border-bottom:1px solid var(--border);">' +
-                '<div>' +
-                  '<div style="font-size:13px; font-weight:600; color:var(--text);">' + p.name + '</div>' +
-                  '<div style="font-size:11px; color:var(--text-muted); margin-top:2px;">Created by: ' + (p.createdBy || 'Unknown') + ' · Target Launch: ' + (p.launchDate || 'TBD') + '</div>' +
-                '</div>' +
-                '<div style="display:flex; gap:8px;">' +
-                  '<button class="btn-primary-sm" style="background:var(--green); border-color:var(--green);" onclick="approveProduct(\'' + p.id + '\')">Approve</button>' +
-                  '<button class="btn-danger-xs" onclick="rejectProduct(\'' + p.id + '\')">Reject</button>' +
-                '</div>' +
-              '</div>'
-            ).join('') +
-          '</div>' +
-        '</div>';
-      } else {
-        approvalsWrap.style.display = 'none';
-        approvalsWrap.innerHTML = '';
-      }
-    }
-
-    // Recent products panel (Exclude pending items from the general list)
-    const activeRecentList = list.filter(p => p.status !== 'pending-approval');
+    // Recent products panel
     const recentEl = document.getElementById('dash-recent');
-    if (activeRecentList.length === 0) {
+    if (list.length === 0) {
       recentEl.innerHTML = '<div class="empty-state-sm">' +
         '<span class="empty-icon" style="color:var(--text-muted);">' + ICON.clipboard + '</span>' +
-        '<p>No active products yet.' + (currentRole === 'admin' ? ' <button class="btn-primary-sm" onclick="loadView(\'products\')">Create one</button>' : '') + '</p>' +
+        '<p>No products yet.' + (currentRole === 'admin' ? ' <button class="btn-primary-sm" onclick="loadView(\'products\')">Create one</button>' : '') + '</p>' +
         '</div>';
     } else {
-      const sorted = activeRecentList.sort((a,b) => b.createdAt - a.createdAt).slice(0, 4);
+      const sorted = list.sort((a,b) => b.createdAt - a.createdAt).slice(0, 4);
       recentEl.innerHTML = sorted.map(p => {
         const tasks    = getProductTasks(p);
         const total    = tasks.length;
@@ -1405,27 +1307,6 @@ function _updateDashboardUI(list) {
   }
 }
 
-window.approveProduct = async (productId) => {
-  if (!confirm('Approve this product and push it live to the team?')) return;
-  try {
-    await set(ref(db, `products/${productId}/status`), 'active');
-    showToast('Product approved and active.', 'success');
-    await logActivity(productId, 'status', 'Product approved and launched', `By ${currentUser.displayName || currentUser.email}`);
-  } catch(e) {
-    showToast('Approval failed: ' + e.message, 'error');
-  }
-};
-
-window.rejectProduct = async (productId) => {
-  if (!confirm('Reject and permanently delete this proposed product?')) return;
-  try {
-    await set(ref(db, `products/${productId}`), null);
-    showToast('Product rejected and removed.', 'info');
-  } catch(e) {
-    showToast('Rejection failed: ' + e.message, 'error');
-  }
-};
-
 /* ── DEPARTMENT WORKLOAD VIEW ── */
 function renderWorkload(el) {
   el.innerHTML =
@@ -1463,13 +1344,11 @@ async function loadWorkload() {
     };
 
     products.forEach(prod => {
-      const tasks    = getProductTasks(prod);
+      const tasks    = getProductTasks(prod).filter(t => canViewTask(t, prod));
       const taskMap  = {};
       tasks.forEach(t => { taskMap[t.id] = t; });
 
       tasks.forEach(task => {
-        // Honour task-level confidentiality in the workload view
-        if (!canViewTask(task, prod)) return;
         if (task.status === 'complete') return;
         const eff      = resolveTaskStatus(task);
         const isBlocked = (task.predecessors || []).some(pid => {
@@ -1482,8 +1361,21 @@ async function loadWorkload() {
         const inWindow = dueDate && dueDate <= horizon;
         const needsAttention = eff === 'overdue' || eff === 'delayed' || isBlocked;
         if (!inWindow && !needsAttention) return;
-        // Group by Department instead of Individual Name
-        addToDept(task.ownerDept || task.owner || 'Unassigned', { task, prod, eff, isBlocked });
+
+        const entry = { task, prod, eff, isBlocked };
+        // Map by task.owner (dept name stored there)
+        // Multi-owner: a cross-functional task appears under every assigned dept
+        if (task.owners && task.owners.length > 0) {
+          const seen = [];
+          task.owners.forEach(o => {
+            const bucket = o.dept || ownerLabel(o) || 'Unassigned';
+            if (seen.includes(bucket)) return;
+            seen.push(bucket);
+            addToDept(bucket, entry);
+          });
+        } else {
+          addToDept(task.ownerDept || task.owner || 'Unassigned', entry);
+        }
       });
     });
 
@@ -1497,7 +1389,7 @@ async function loadWorkload() {
     const sorted = Object.entries(depts).sort((a, b) => b[1].total - a[1].total);
     const maxTotal = sorted[0][1].total || 1;
 
-    let html = '<div style="display:grid;grid-template-columns:repeat(auto-fill, minmax(360px, 1fr));gap:16px;">';
+    let html = '<div style="display:flex;flex-direction:column;gap:12px;">';
 
     sorted.forEach(([deptName, data]) => {
       const pctOverdue  = Math.round((data.overdue  / data.total) * 100);
@@ -1516,10 +1408,10 @@ async function loadWorkload() {
         .map(({ task, prod, eff, isBlocked }) => {
           const color = isBlocked ? '#D97706' : eff === 'overdue' || eff === 'delayed' ? '#C0282D' : eff === 'due-soon' ? '#D97706' : '#16A34A';
           const label = isBlocked ? 'Blocked' : eff === 'overdue' ? 'Overdue' : eff === 'delayed' ? 'Delayed' : eff === 'due-soon' ? 'Due soon' : 'On track';
-          return '<div style="display:flex;align-items:center;gap:10px;padding:7px 0;border-bottom:1px solid #F3F3F2;cursor:pointer;" onclick="dashNavToTrackerForProduct(\'' + prod.id + '\')">' +
+          return '<div style="display:flex;align-items:center;gap:10px;padding:7px 0;border-bottom:1px solid #F3F3F2;">' +
             '<div style="flex:1;min-width:0;">' +
               '<div style="font-size:11px;font-weight:500;color:#1A1A1A;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + (task.title || 'Untitled') + '</div>' +
-              '<div style="font-size:10px;color:#9CA3AF;">' + (task.owner || 'Unassigned') + ' · ' + prod.name + (task.deadline ? ' · ' + formatDate(task.deadline) : '') + '</div>' +
+              '<div style="font-size:10px;color:#9CA3AF;">' + prod.name + (task.deadline ? ' · ' + formatDate(task.deadline) : '') + '</div>' +
             '</div>' +
             '<span style="font-size:10px;font-weight:600;color:' + color + ';background:' + color + '15;padding:2px 7px;border-radius:10px;flex-shrink:0;">' + label + '</span>' +
           '</div>';
@@ -1528,9 +1420,9 @@ async function loadWorkload() {
       const moreCount = data.tasks.length - 4;
 
       html +=
-        '<div style="background:#fff;border:1px solid #E5E5E3;border-radius:12px;overflow:hidden;display:flex;flex-direction:column;">' +
+        '<div style="background:#fff;border:1px solid #E5E5E3;border-radius:12px;overflow:hidden;">' +
           // Header
-          '<div style="padding:14px 18px 12px;display:flex;align-items:center;gap:14px;background:#FAFAF9;border-bottom:1px solid #F0F0EE;">' +
+          '<div style="padding:14px 18px 12px;display:flex;align-items:center;gap:14px;">' +
             '<div style="flex:1;min-width:0;">' +
               '<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">' +
                 '<span style="font-size:13px;font-weight:700;color:#1A1A1A;">' + deptName + '</span>' +
@@ -1577,23 +1469,117 @@ async function loadWorkload() {
 
 /* ── MY ACTIONS VIEW ── */
 function renderMyActions(el) {
-  const firstName = (currentUser.displayName || currentUser.email).split(' ')[0];
   el.innerHTML =
     '<div class="view-header">' +
       '<div>' +
         '<h1 class="view-title">My Actions</h1>' +
-        '<p class="view-subtitle">Tasks assigned to you that need attention right now</p>' +
+        '<p class="view-subtitle">Tasks assigned to you, plus your personal to-do list</p>' +
+      '</div>' +
+    '</div>' +
+    '<div class="panel" style="margin-bottom:16px;">' +
+      '<div class="panel-header">' +
+        '<span class="panel-title">Personal to-do</span>' +
+        '<span style="font-size:11px;color:var(--text-muted);">Private to you · included in your daily digest</span>' +
+      '</div>' +
+      '<div class="panel-body">' +
+        '<div style="display:flex;gap:8px;align-items:flex-end;margin-bottom:12px;flex-wrap:wrap;">' +
+          '<div style="flex:2;min-width:200px;">' +
+            '<label class="form-label" style="font-size:10px;">Task</label>' +
+            '<input id="st-title" class="input-field" style="width:100%;" placeholder="e.g. Draft Q4 pricing memo" ' +
+              'onkeydown="if(event.key===\'Enter\')addStandaloneTask()"/>' +
+          '</div>' +
+          '<div style="flex:1;min-width:130px;">' +
+            '<label class="form-label" style="font-size:10px;">Deadline</label>' +
+            '<input type="date" id="st-deadline" class="input-field" style="width:100%;"/>' +
+          '</div>' +
+          '<button class="btn-primary" style="font-size:12px;padding:8px 16px;" onclick="addStandaloneTask()">+ Add</button>' +
+        '</div>' +
+        '<div id="standalone-list"><div class="loading-row" style="padding:8px 0;font-size:12px;">Loading...</div></div>' +
       '</div>' +
     '</div>' +
     '<div id="my-actions-body"><div class="loading-row" style="padding:32px;">Loading your tasks...</div></div>';
+  loadStandaloneTasks();
   loadMyActions();
 }
+
+/* ══ STANDALONE PERSONAL TASKS ══════════════════════════════ */
+function standaloneRef() {
+  return 'standaloneTasks/' + sanitiseEmail(currentUser.email);
+}
+
+async function loadStandaloneTasks() {
+  const el = document.getElementById('standalone-list');
+  if (!el) return;
+  try {
+    const snap = await get(ref(db, standaloneRef()));
+    if (!snap.exists()) {
+      el.innerHTML = '<div style="font-size:12px;color:#9CA3AF;padding:6px 0;">Nothing here yet. Add your first personal task above.</div>';
+      return;
+    }
+    const tasks = Object.values(snap.val())
+      .sort((a, b) => {
+        if ((a.status === 'complete') !== (b.status === 'complete')) return a.status === 'complete' ? 1 : -1;
+        return (a.deadline || '9999').localeCompare(b.deadline || '9999');
+      });
+    const today = new Date(); today.setHours(0,0,0,0);
+    el.innerHTML = tasks.map(t => {
+      const done = t.status === 'complete';
+      let chip = '<span class="pill pill-grey" style="font-size:10px;">No date</span>';
+      if (t.deadline) {
+        const d = new Date(t.deadline); d.setHours(0,0,0,0);
+        const diff = Math.round((d - today) / 86400000);
+        const cls  = done ? 'pill-blue' : diff < 0 ? 'pill-red' : diff <= 3 ? 'pill-amber' : 'pill-green';
+        const lbl  = diff < 0 ? Math.abs(diff) + 'd overdue' : diff === 0 ? 'Today' : formatDate(t.deadline);
+        chip = '<span class="pill ' + cls + '" style="font-size:10px;">' + lbl + '</span>';
+      }
+      return '<div style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid #F3F3F2;">' +
+        '<input type="checkbox" ' + (done ? 'checked' : '') + ' onchange="toggleStandaloneTask(\'' + t.id + '\',this.checked)" ' +
+          'style="width:15px;height:15px;cursor:pointer;flex-shrink:0;accent-color:#16A34A;"/>' +
+        '<div style="flex:1;min-width:0;font-size:12px;color:' + (done ? '#9CA3AF' : 'var(--text)') + ';' +
+          (done ? 'text-decoration:line-through;' : 'font-weight:500;') + '">' + (t.title || 'Untitled') + '</div>' +
+        chip +
+        '<button onclick="deleteStandaloneTask(\'' + t.id + '\')" title="Delete" ' +
+          'style="background:none;border:none;cursor:pointer;color:#9CA3AF;font-size:14px;line-height:1;padding:2px 4px;">&times;</button>' +
+      '</div>';
+    }).join('');
+  } catch(e) {
+    el.innerHTML = '<div style="font-size:12px;color:#9CA3AF;">Could not load your personal tasks.</div>';
+  }
+}
+
+window.addStandaloneTask = async () => {
+  const titleEl = document.getElementById('st-title');
+  const dateEl  = document.getElementById('st-deadline');
+  const title   = (titleEl?.value || '').trim();
+  if (!title) { showToast('Enter a task first', 'error'); return; }
+  const id = 'st_' + Date.now();
+  await set(ref(db, standaloneRef() + '/' + id), {
+    id, title,
+    deadline:   dateEl?.value || '',
+    status:     'on-track',
+    ownerEmail: currentUser.email,
+    createdAt:  Date.now(),
+  });
+  if (titleEl) titleEl.value = '';
+  if (dateEl)  dateEl.value  = '';
+  loadStandaloneTasks();
+};
+
+window.toggleStandaloneTask = async (id, done) => {
+  await set(ref(db, standaloneRef() + '/' + id + '/status'), done ? 'complete' : 'on-track');
+  loadStandaloneTasks();
+};
+
+window.deleteStandaloneTask = async (id) => {
+  await set(ref(db, standaloneRef() + '/' + id), null);
+  loadStandaloneTasks();
+};
 
 async function loadMyActions() {
   const el = document.getElementById('my-actions-body');
   if (!el) return;
   try {
-    const unsub = onValue(ref(db, 'products'), snap => {
+    const snap = await get(ref(db, 'products'));
     const products = snap.val() || {};
     const userKey  = sanitiseEmail(currentUser.email);
     const today    = new Date(); today.setHours(0,0,0,0);
@@ -1607,19 +1593,27 @@ async function loadMyActions() {
       const isShared = prod.sharedWith?.[userKey];
       if (!isOwner && !isShared && currentRole !== 'admin') return;
 
-      const tasks = getProductTasks(prod);
+      const tasks = getProductTasks(prod).filter(t => canViewTask(t, prod));
       const allTasksMap = {};
       tasks.forEach(t => { allTasksMap[t.id] = t; });
 
       tasks.forEach(task => {
-        // ── CONFIDENTIALITY GATE ──────────────────────────────
-        // Private/restricted tasks are hidden from anyone not
-        // explicitly permitted, even in their own My Actions view.
-        if (!canViewTask(task, prod)) return;
-        // ─────────────────────────────────────────────────────
-
-        // Is this task assigned to the current user?
-        const ownerEmail = (task.owner || '').toLowerCase().trim();
+        // Match against EVERY owner on the task, not just the first,
+        // and treat a whole-department assignment as a match for its members.
+        const ownerList = (task.owners && task.owners.length > 0)
+          ? task.owners
+          : [{ dept: task.ownerDept || '', email: task.ownerEmail || '' }];
+        const meEmail = (currentUser.email || '').toLowerCase().trim();
+        const meDept  = (currentUserDept || '').toLowerCase().trim();
+        // Exact identity match only — no fuzzy name matching
+        const matchesMe = ownerList.some(o => {
+          const oe = (o.email || '').toLowerCase().trim();
+          const od = (o.dept  || '').toLowerCase().trim();
+          if (oe && oe === meEmail) return true;
+          if (od && meDept && od === meDept) return true;
+          return false;
+        });
+        const ownerEmail = matchesMe ? (currentUser.email || '').toLowerCase().trim() : '__nomatch__';
         const myEmail    = (currentUser.email || '').toLowerCase().trim();
         const myName     = (currentUser.displayName || '').toLowerCase().trim();
         const isMyTask   = ownerEmail === myEmail ||
@@ -1693,7 +1687,7 @@ async function loadMyActions() {
       const bgCol  = sectionBg[priority];
 
       html +=
-        '<div style="background:#fff;border:1px solid #E5E5E3;border-left:3px solid ' + color + ';border-radius:10px;padding:14px 16px;display:flex;align-items:flex-start;gap:14px;cursor:pointer;" onclick="dashNavToTrackerForProduct(\'' + prod.id + '\')">' +
+        '<div style="background:#fff;border:1px solid #E5E5E3;border-left:3px solid ' + color + ';border-radius:10px;padding:14px 16px;display:flex;align-items:flex-start;gap:14px;cursor:pointer;" onclick="loadView(\'tracker\')">' +
           '<div style="flex:1;min-width:0;">' +
             '<div style="font-size:13px;font-weight:600;color:#1A1A1A;margin-bottom:3px;">' + (task.title || 'Untitled task') + '</div>' +
             '<div style="font-size:11px;color:#6B7280;margin-bottom:6px;">' + prod.name + '</div>' +
@@ -1713,10 +1707,8 @@ async function loadMyActions() {
         '</div>';
     });
 
-   html += '</div>';
-      el.innerHTML = html;
-    });
-    registerListener('myactions', unsub);
+    html += '</div>';
+    el.innerHTML = html;
   } catch(e) {
     el.innerHTML = '<div class="loading-row muted" style="padding:24px;">Could not load your tasks. Try refreshing.</div>';
     console.warn('loadMyActions error:', e);
@@ -1726,56 +1718,39 @@ async function loadMyActions() {
 /* ── PRODUCTS VIEW ── */
 let productListCache = {};
 
-function renderProducts(el, filterType = 'product') {
-  const isProject = filterType === 'project';
-  const title = isProject ? 'Projects' : 'Products';
-  const subtitle = isProject ? 'All active, completed, and archived projects' : 'All active, completed, and archived products';
-  const btnHtml = isProject 
-    ? `<button class="btn-primary" style="background:var(--blue);border-color:var(--blue);" onclick="showCreateProduct('project')">+ New Project</button>`
-    : `<button class="btn-primary" onclick="showCreateProduct('product')">+ New Product</button>`;
-
+function renderProducts(el) {
   el.innerHTML = `
     <div class="view-header">
       <div>
-        <h1 class="view-title">${title}</h1>
-        <p class="view-subtitle">${subtitle}</p>
+        <h1 class="view-title">Products</h1>
+        <p class="view-subtitle">All product launches — active, completed, and archived</p>
       </div>
-      <div style="display:flex;gap:8px;">
-        ${btnHtml}
-      </div>
+      ${currentRole === 'admin' ? `<button class="btn-primary" onclick="showCreateProduct()">+ New product</button>` : ''}
     </div>
-    <div id="product-list-area"><div class="loading-row" style="padding:24px;">Loading ${title.toLowerCase()}...</div></div>
+    <div id="product-list-area"><div class="loading-row" style="padding:24px;">Loading products...</div></div>
     <div id="create-product-modal" class="modal-overlay" style="display:none;">
       <div class="modal-box">
         <div class="modal-header">
-          <span class="modal-title" id="modal-title-text">New Item</span>
+          <span class="modal-title" id="modal-title-text">New Product Launch</span>
           <button class="modal-close" onclick="closeProductModal()">✕</button>
         </div>
         <div class="modal-body" id="modal-body-content"></div>
       </div>
     </div>`;
-  loadProductList(filterType);
+  loadProductList();
 }
 
-async function loadProductList(filterType = 'product') {
+async function loadProductList() {
   const area = document.getElementById('product-list-area');
   if (!area) return;
   try {
-    const unsub = onValue(ref(db, 'products'), snap => {
-      const products = snap.val() || {};
-      productListCache = products;
-      const userKey  = sanitiseEmail(currentUser.email);
-      const list     = Object.values(products)
+    const snap     = await get(ref(db, 'products'));
+    const products = snap.val() || {};
+    productListCache = products;
+    const userKey  = sanitiseEmail(currentUser.email);
+    const list     = Object.values(products)
       .filter(p => {
         if (p.status === 'archived') return false;
-        
-        // Filter out items that do not match the current tab (product vs project)
-        const pType = p.itemType || 'product';
-        if (pType !== filterType) return false;
-
-        // Hide pending approvals from general view unless the user owns them or is an Admin/Lead
-        if (p.status === 'pending-approval' && currentRole !== 'admin' && p.ownerId !== userKey && window.currentDeptRole !== 'lead') return false;
-        
         if (currentRole === 'admin') return true;
         if (p.ownerId === userKey) return true;
         if (p.sharedWith?.[userKey]) return true;
@@ -1791,15 +1766,13 @@ async function loadProductList(filterType = 'product') {
     }
 
     area.innerHTML = '<div class="product-grid">' + list.map(p => renderProductCard(p)).join('') + '</div>';
-    });
-    registerListener('products', unsub);
   } catch(e) {
     area.innerHTML = '<div class="panel"><div class="empty-state-sm"><p>Failed to load products.</p></div></div>';
   }
 }
 
 function renderProductCard(p) {
-  const allTasks   = getProductTasks(p);
+  const allTasks   = getProductTasks(p).filter(t => canViewTask(t, p));
   const total      = allTasks.length || 1;
   const complete   = allTasks.filter(t => resolveTaskStatus(t) === 'complete').length;
   const overduePl  = allTasks.filter(t => {
@@ -1853,13 +1826,14 @@ function renderProductCard(p) {
       '</span>'
     : '';
 
-  // Static countdown to launch in days
+  // Live countdown chip — updates every second for last 3 days
+  const countdownId = 'cd-' + p.id;
   let countdownChip = '';
-  if (daysToLaunch !== null && daysToLaunch > 0) {
-    countdownChip = '<span style="font-size:10px;font-weight:700;color:#D97706;background:#FFFBEB;padding:2px 8px;border-radius:10px;letter-spacing:.02em;margin-left:8px;vertical-align:middle;">Launch in ' + daysToLaunch + ' day' + (daysToLaunch !== 1 ? 's' : '') + '</span>';
-  } else if (daysToLaunch === 0) {
-    countdownChip = '<span style="font-size:10px;font-weight:700;color:#C0282D;background:#FEF2F2;padding:2px 8px;border-radius:10px;letter-spacing:.02em;margin-left:8px;vertical-align:middle;">Launch Day!</span>';
+  if (daysToLaunch !== null && daysToLaunch >= 0 && daysToLaunch <= 3) {
+    countdownChip = '<span id="' + countdownId + '" style="font-size:10px;font-weight:700;color:#C0282D;background:#FEF2F2;padding:2px 8px;border-radius:10px;letter-spacing:.02em;"></span>';
+    setTimeout(() => startCountdown(countdownId, p.launchDate), 100);
   }
+
   const healthCls = overduePl > 0 ? 'pcf-health-red'
                   : delayed > 0   ? 'pcf-health-amber'
                   : pct === 100   ? 'pcf-health-done'
@@ -1868,49 +1842,27 @@ function renderProductCard(p) {
                   : delayed > 0   ? `${delayed} delayed`
                   : pct === 100   ? 'Complete' : 'On track';
 
-  // Task-visibility summary badge — at a glance, are this product's tasks Public, Private, Restricted, or a mix?
-  const visCounts = { public: 0, private: 0, restricted: 0 };
-  allTasks.forEach(t => { const v = t.visibility || 'public'; visCounts[v] = (visCounts[v] || 0) + 1; });
-  const visKindsPresent = ['public','private','restricted'].filter(k => visCounts[k] > 0);
-  let visBadge = '';
-  if (visKindsPresent.length === 1) {
-    const visMeta = {
-      public:     { icon: ICON.globe, label: 'All tasks Public — visible to everyone with product access', bg: '#F4F4F2', fg: 'var(--text-muted)', bd: 'var(--border)' },
-      private:    { icon: ICON.lock,  label: 'All tasks Private — only the product owner + task owners can see them', bg: '#FEF2F2', fg: 'var(--red)', bd: '#FCA5A5' },
-      restricted: { icon: ICON.users, label: 'All tasks Restricted — owner + task owners + allowlisted people only', bg: '#FFFBEB', fg: '#B45309', bd: '#FDE68A' },
-    }[visKindsPresent[0]];
-    visBadge = `<span title="${visMeta.label}" style="display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;border-radius:999px;background:${visMeta.bg};color:${visMeta.fg};border:1px solid ${visMeta.bd};flex-shrink:0;">${visMeta.icon}</span>`;
-  } else if (visKindsPresent.length > 1) {
-    const parts = [];
-    if (visCounts.public)     parts.push(visCounts.public + ' public');
-    if (visCounts.restricted) parts.push(visCounts.restricted + ' restricted');
-    if (visCounts.private)    parts.push(visCounts.private + ' private');
-    visBadge = `<span title="Mixed task visibility — ${parts.join(', ')}" style="display:inline-flex;align-items:center;gap:3px;font-size:10px;font-weight:700;color:#7C3AED;background:#F5F3FF;border:1px solid #DDD6FE;padding:2px 8px;border-radius:10px;letter-spacing:.02em;flex-shrink:0;">${ICON.lock}Mixed</span>`;
-  }
-
   return `
     <div class="product-card-full">
       <div class="pcf-header">
         <div class="pcf-header-left">
           <div class="pcf-health-dot ${healthCls}" title="${healthTip}"></div>
-          <div style="flex:1;min-width:0;">
+          <div>
             <div class="pcf-name-row"><span class="pcf-name">${p.name}</span>${typeBadge}${slipHtml}${atRiskBadge}${countdownChip}</div>
-            ${p.description ? `<div class="pcf-desc">${p.description.length > 110 ? p.description.slice(0,110)+'…' : p.description}</div>` : ''}
-            ${itemType === 'project' && (p.budget || p.spend) ? `
-              <div style="margin-top:12px;padding-top:12px;border-top:1px dashed var(--border);">
-                <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--text-muted);margin-bottom:4px;">
-                  <span><strong>Budget:</strong> ₦${Number(p.budget || 0).toLocaleString()}</span>
-                  <span><strong>Spend:</strong> ₦${Number(p.spend || 0).toLocaleString()}</span>
+            ${(p.itemType === 'project' && canViewBudget(p) && (p.budget || p.spend)) ? `
+              <div style="margin-top:6px;">
+                <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--text-muted);margin-bottom:3px;">
+                  <span>Budget ₦${Number(p.budget || 0).toLocaleString()}</span>
+                  <span style="color:${Number(p.spend || 0) > Number(p.budget || 0) ? 'var(--red)' : 'var(--text-muted)'};">Spent ₦${Number(p.spend || 0).toLocaleString()}</span>
                 </div>
-                ${p.budget && Number(p.budget) > 0 ? `
-                <div style="height:4px;background:#F0F0EE;border-radius:2px;overflow:hidden;">
-                  <div style="height:100%;width:${Math.min(100, (Number(p.spend || 0) / Number(p.budget)) * 100)}%;background:${(Number(p.spend || 0) > Number(p.budget)) ? 'var(--red)' : 'var(--blue)'};"></div>
+                ${Number(p.budget) > 0 ? `<div style="height:3px;background:#F0F0EE;border-radius:2px;overflow:hidden;">
+                  <div style="height:3px;width:${Math.min(100, (Number(p.spend || 0) / Number(p.budget)) * 100)}%;background:${Number(p.spend || 0) > Number(p.budget) ? 'var(--red)' : 'var(--blue)'};border-radius:2px;"></div>
                 </div>` : ''}
               </div>` : ''}
+            ${p.description ? `<div class="pcf-desc">${p.description.length > 110 ? p.description.slice(0,110)+'…' : p.description}</div>` : ''}
           </div>
         </div>
         <div class="pcf-header-right">
-          ${visBadge}
           ${launchBadge}
           <span class="status-chip status-${statusCls}">${statusLbl}</span>
         </div>
@@ -1944,7 +1896,7 @@ function renderProductCard(p) {
         ${canEdit(p) ? `<button class="btn-secondary-sm" onclick="showWeeklyLog('${p.id}')">Log</button>` : ''}
         ${canEdit(p) && !p.onboardedAt ? `<button class="btn-secondary-sm" style="color:var(--amber);border-color:var(--amber);" onclick="reOnboardProduct('${p.id}')">${ICON.warn} Onboard</button>` : ''}
         ${editBtn}
-        ${canEdit(p) ? `<button class="btn-secondary-sm" onclick="convertItemType('${p.id}','${p.itemType||'product'}')" style="font-size:10px;" title="Switch between Product and Project">⇄ ${(p.itemType||'product')==='project'?'To Product':'To Project'}</button>` : ''}
+        ${canEdit(p) ? `<button class="btn-secondary-sm" onclick="convertItemType('${p.id}','${p.itemType||'product'}')" style="font-size:10px;" title="Switch between Product and Project"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:middle;margin-right:3px;"><path d="M17 1l4 4-4 4"/><path d="M3 11V9a4 4 0 014-4h14"/><path d="M7 23l-4-4 4-4"/><path d="M21 13v2a4 4 0 01-4 4H3"/></svg>${(p.itemType||'product')==='project'?'To Product':'To Project'}</button>` : ''}
         ${canEdit(p) ? `<button class="btn-secondary-sm" onclick="showShareModal('${p.id}')">Share</button>` : ''}
         ${getProductAccess(p) === 'owner' || currentRole === 'admin' ? `<button class="btn-secondary-sm" onclick="showHandoverModal('${p.id}')">Handover</button>` : ''}
         <button class="btn-secondary-sm" onclick="showProductActivity('${p.id}')">Activity</button>
@@ -1953,9 +1905,8 @@ function renderProductCard(p) {
 }
 
 /* ── CREATE / EDIT PRODUCT MODAL ── */
-window.showCreateProduct = (type = 'product') => {
-  window._pendingCreateType = type;
-  document.getElementById('modal-title-text').textContent = type === 'project' ? 'New Project' : 'New Product Launch';
+window.showCreateProduct = () => {
+  document.getElementById('modal-title-text').textContent = 'New Product Launch';
   document.getElementById('modal-body-content').innerHTML = buildProductForm(null);
   document.getElementById('create-product-modal').style.display = 'flex';
 };
@@ -2014,6 +1965,11 @@ function buildTemplateChooser() {
           <div class="tmpl-option-title">Blank</div>
           <div class="tmpl-option-desc">Start from scratch and build your own task structure</div>
         </div>
+        <div class="tmpl-option" onclick="selectTemplate('import')">
+          <div class="tmpl-option-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg></div>
+          <div class="tmpl-option-title">Import from Excel</div>
+          <div class="tmpl-option-desc">Upload a spreadsheet of tasks, owners and deadlines</div>
+        </div>
         ${Object.keys(SAVED_TEMPLATES).length > 0 ? `
         <div class="tmpl-section-label">Saved templates</div>
         ${templateOptions}` : ''}
@@ -2022,6 +1978,7 @@ function buildTemplateChooser() {
 }
 
 window.selectTemplate = (templateId) => {
+  if (templateId === 'import') { showImportScreen(); return; }
   // Pre-fill _editingTasks based on template choice
   if (templateId === 'sop') {
     _editingTasks = PILLARS.map((pl, i) => ({
@@ -2044,10 +2001,815 @@ window.selectTemplate = (templateId) => {
     }));
   }
   document.getElementById('modal-body-content').innerHTML = buildTaskEditorForm();
-  if (window._pendingCreateType) {
-    setItemType(window._pendingCreateType);
+};
+
+/* ══ EXCEL TASK IMPORT ══════════════════════════════════════
+   Third task-input option. Parses a spreadsheet into _editingTasks
+   using the SAME shape the other two options produce, so everything
+   downstream (owner chips, email routing, workload, digests) works
+   without special-casing imported tasks. Owners resolve to canonical
+   emails via the live directory — never stored as bare name strings.
+   ══════════════════════════════════════════════════════════════ */
+window.showImportScreen = () => {
+  document.getElementById('modal-body-content').innerHTML =
+    '<div style="padding:4px 0;">' +
+      '<p style="font-size:13px;color:var(--text-mid);line-height:1.7;margin-bottom:16px;">' +
+        'Upload an .xlsx or .csv file. The first row must be headers. ' +
+        'Columns are matched by name, so order does not matter and extra columns are ignored.' +
+      '</p>' +
+      '<div style="background:#F8F8F7;border:1px solid var(--border);border-radius:10px;padding:14px 16px;margin-bottom:16px;">' +
+        '<div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:var(--text-muted);margin-bottom:8px;">Recognised columns</div>' +
+        '<div style="font-size:12px;color:var(--text);line-height:1.9;">' +
+          '<strong>Task</strong> <span style="color:#9CA3AF;">(required)</span> — also accepts: Task Name, Title, Activity, Next Steps, Action, Milestone<br>' +
+          '<strong>Owner</strong> — also accepts: Task Owner, Assignee, Responsible, Person<br>' +
+          '<strong>Department</strong> — also accepts: Dept, Team, Function<br>' +
+          '<strong>Deadline</strong> — also accepts: Due Date, Date, Timeline, Target Date<br>' +
+          '<strong>Status</strong> — also accepts: Progress, State' +
+        '</div>' +
+      '</div>' +
+      '<input type="file" id="import-file" accept=".xlsx,.xls,.csv" style="display:none;" onchange="handleImportFile(event)"/>' +
+      '<button class="btn-primary" style="width:100%;padding:14px;" onclick="document.getElementById(\'import-file\').click()">' +
+        'Choose spreadsheet' +
+      '</button>' +
+      '<div id="import-preview" style="margin-top:16px;"></div>' +
+      '<div class="form-actions" style="margin-top:18px;">' +
+        '<button class="btn-outline" onclick="showCreateProduct()">← Back</button>' +
+      '</div>' +
+    '</div>';
+};
+
+// Header aliases — lowercase, punctuation-stripped
+const IMPORT_COLS = {
+  title:    ['task','taskname','title','activity','nextsteps','action','actionitem','actionpoint','milestone',
+             'deliverable','description','item','itemdescription','issue','workstream','subject','topic'],
+  owner:    ['owner','taskowner','assignee','responsible','responsibleparty','person','assignedto','who',
+             'actionby','lead','accountable'],
+  dept:     ['department','dept','team','function','unit','division'],
+  deadline: ['deadline','duedate','date','timeline','targetdate','due','nextstepstimeline','completiondate',
+             'targetcompletion','expecteddate','eta','bywhen','lastupdate','resolved'],
+  status:   ['status','progress','state','currentstatus','statusatlastmeeting','ragstatus','rag'],
+  notes:    ['notes','note','comment','comments','remarks','update','updates','context','finaloutcome','detail','details'],
+};
+
+function normaliseHeader(h) {
+  return String(h || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+
+function mapImportHeaders(headers) {
+  const map = {};
+  headers.forEach((h, i) => {
+    const n = normaliseHeader(h);
+    if (!n) return;
+    for (const field in IMPORT_COLS) {
+      if (map[field] !== undefined) continue;
+      if (IMPORT_COLS[field].includes(n)) { map[field] = i; return; }
+    }
+  });
+  return map;
+}
+
+// Excel serial dates, Date objects and common text formats → YYYY-MM-DD
+function parseImportDate(v) {
+  if (v === null || v === undefined || v === '') return '';
+  if (v instanceof Date && !isNaN(v)) return v.toISOString().slice(0, 10);
+  if (typeof v === 'number' && v > 20000 && v < 60000) {
+    const d = new Date(Math.round((v - 25569) * 86400 * 1000));
+    return isNaN(d) ? '' : d.toISOString().slice(0, 10);
+  }
+  const s = String(v).trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+  const d = new Date(s);
+  return isNaN(d) ? '' : d.toISOString().slice(0, 10);
+}
+
+/* Status vocabulary covers plain words, the Lakowe RAG scheme
+   (Green/Amber/Red/Grey), and the emoji flags used in the New Items tab. */
+function normaliseImportStatus(v) {
+  const raw = String(v || '').trim();
+  if (!raw) return 'on-track';
+  if (/[\u2705]/.test(raw)) return 'complete';                    // check mark
+  if (/[\u23F8\u26A0]/.test(raw)) return 'delayed';              // pause / warning
+  const s = raw.toLowerCase();
+  // 'green' deliberately NOT treated as complete — in the RAG scheme it means
+  // on-track OR completed, and wrongly marking complete hides it from alerts.
+  if (/(done|complete|closed|finished|resolved|delivered|approved)/.test(s)) return 'complete';
+  if (/(delay|blocked|behind|slipp|at.?risk|escalate|stalled|paused|on.?hold|overdue|red|amber)/.test(s)) return 'delayed';
+  return 'on-track';
+}
+
+// Strip leading status emoji / bullet glyphs from an imported title cell
+function cleanImportTitle(v) {
+  return String(v || '')
+    .replace(/^[\s\u2022\u2705\u23F8\u26A0\u{1F195}\u{1F534}\u{1F7E1}\u{1F7E2}\u26AA*\-]+/u, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/* Resolve a spreadsheet owner cell to canonical identity.
+   Accepts a name, an email, or a department. Returns
+   { dept, email, nameCache, matched } — matched=false means we
+   kept the text for display but could not resolve an address. */
+function resolveImportOwner(ownerText, deptText) {
+  const raw   = String(ownerText || '').trim();
+  const depts = getDepts();
+  let dept = String(deptText || '').trim();
+
+  // Validate the declared department against the live directory
+  if (dept) {
+    const hit = depts.find(d => d.toLowerCase() === dept.toLowerCase());
+    dept = hit || dept;
+  }
+  if (!raw) return { dept, email: '', nameCache: '', matched: !!dept };
+
+  // Direct email
+  if (raw.includes('@')) {
+    const s = STAKEHOLDERS.find(x => x.email.toLowerCase() === raw.toLowerCase());
+    return { dept: dept || (s ? s.dept : ''), email: raw.toLowerCase(),
+             nameCache: s ? s.name : raw, matched: true };
+  }
+  // Exact name
+  let s = STAKEHOLDERS.find(x => (x.name || '').toLowerCase() === raw.toLowerCase());
+  // Surname match — only when it is unambiguous
+  if (!s) {
+    const last = raw.split(/[\s.]+/).filter(Boolean).pop() || '';
+    if (last.length > 2) {
+      const hits = STAKEHOLDERS.filter(x => (x.name || '').toLowerCase().includes(last.toLowerCase()));
+      if (hits.length === 1) s = hits[0];
+    }
+  }
+  if (s) return { dept: dept || s.dept, email: s.email, nameCache: s.name, matched: true };
+
+  // Owner cell naming a department
+  const asDept = depts.find(d => d.toLowerCase() === raw.toLowerCase());
+  if (asDept) return { dept: asDept, email: '', nameCache: '', matched: true };
+
+  return { dept, email: '', nameCache: raw, matched: false };
+}
+
+function renderSheetPicker(wb, fileName) {
+  const preview = document.getElementById('import-preview');
+  preview.innerHTML =
+    '<div style="background:#EFF6FF;border:1px solid #BFDBFE;border-radius:8px;padding:12px 14px;margin-bottom:10px;">' +
+      '<div style="font-size:12px;font-weight:600;color:#2563EB;margin-bottom:3px;">' + fileName + ' has ' + wb.SheetNames.length + ' sheets</div>' +
+      '<div style="font-size:11px;color:#1E40AF;">Choose which one holds the tasks you want to import.</div>' +
+    '</div>' +
+    '<div style="display:flex;flex-direction:column;gap:6px;">' +
+      wb.SheetNames.map(n =>
+        '<button class="btn-outline" style="text-align:left;font-size:12px;padding:10px 14px;" ' +
+          'onclick="parseImportSheet(\'' + String(n).replace(/'/g, "\\'") + '\')">' + n + '</button>'
+      ).join('') +
+    '</div>';
+}
+
+window.parseImportSheet = (sheetName) => {
+  const preview = document.getElementById('import-preview');
+  try {
+    const wb    = window._importWB;
+    const sheet = wb.Sheets[sheetName];
+    if (!sheet) throw new Error('Could not open that sheet.');
+    const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, blankrows: false, defval: '' });
+    if (rows.length < 2) throw new Error('"' + sheetName + '" needs a header row and at least one task row.');
+
+    // Header row is not always row 1 — scan the first few rows for the best match
+    let headerIdx = 0, map = mapImportHeaders(rows[0]);
+    for (let r = 0; r < Math.min(6, rows.length); r++) {
+      const cand = mapImportHeaders(rows[r]);
+      if (Object.keys(cand).length > Object.keys(map).length) { map = cand; headerIdx = r; }
+    }
+    if (map.title === undefined) {
+      throw new Error('No task column found in "' + sheetName + '". Expected a column headed Task, Item, Activity or Next Steps.');
+    }
+
+    const parsed = [];
+    for (let i = headerIdx + 1; i < rows.length; i++) {
+      const r     = rows[i];
+      const title = cleanImportTitle(r[map.title]);
+      if (!title) continue;
+      // Skip section-divider rows (a title with nothing else on the row)
+      const hasOther = ['owner','dept','deadline','status','notes']
+        .some(f => map[f] !== undefined && String(r[map[f]] ?? '').trim());
+      if (!hasOther && title.length < 4) continue;
+
+      parsed.push({
+        title,
+        deadline: map.deadline !== undefined ? parseImportDate(r[map.deadline]) : '',
+        status:   map.status   !== undefined ? normaliseImportStatus(r[map.status]) : 'on-track',
+        notes:    map.notes    !== undefined ? String(r[map.notes] ?? '').trim() : '',
+        owner:    resolveImportOwner(
+                    map.owner !== undefined ? r[map.owner] : '',
+                    map.dept  !== undefined ? r[map.dept]  : ''
+                  ),
+      });
+    }
+    if (parsed.length === 0) throw new Error('No rows with a task name were found in "' + sheetName + '".');
+    window._importParsed = parsed;
+    renderImportPreview(parsed, map, window._importName + ' — ' + sheetName);
+  } catch (err) {
+    preview.innerHTML =
+      '<div style="background:#FEF2F2;border:1px solid #FECACA;border-radius:8px;padding:12px 14px;font-size:12px;color:#C0282D;">' +
+        (err.message || 'Could not read that sheet.') +
+      '</div>' +
+      (window._importWB && window._importWB.SheetNames.length > 1
+        ? '<button class="btn-outline" style="width:100%;margin-top:8px;font-size:12px;" onclick="renderSheetPicker(window._importWB, window._importName)">← Pick a different sheet</button>'
+        : '');
   }
 };
+
+window.handleImportFile = (evt) => {
+  const file = evt.target.files?.[0];
+  if (!file) return;
+  const preview = document.getElementById('import-preview');
+  if (typeof XLSX === 'undefined') {
+    preview.innerHTML = '<div style="background:#FEF2F2;border:1px solid #FECACA;border-radius:8px;padding:12px;font-size:12px;color:#C0282D;">Spreadsheet library did not load. Check your connection and reload.</div>';
+    return;
+  }
+  preview.innerHTML = '<div class="loading-row" style="padding:12px 0;font-size:12px;">Reading file...</div>';
+
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    try {
+      const wb = XLSX.read(new Uint8Array(e.target.result), { type: 'array', cellDates: true });
+      window._importWB   = wb;
+      window._importName = file.name;
+      // Multi-sheet workbooks (Lakowe trackers carry New Items / Recurring /
+      // Historical tabs) — let the user choose rather than assuming sheet 1.
+      if (wb.SheetNames.length > 1) { renderSheetPicker(wb, file.name); return; }
+      parseImportSheet(wb.SheetNames[0]);
+    } catch (err) {
+      preview.innerHTML =
+        '<div style="background:#FEF2F2;border:1px solid #FECACA;border-radius:8px;padding:12px 14px;font-size:12px;color:#C0282D;">' +
+          (err.message || 'Could not read that file.') +
+        '</div>';
+    }
+  };
+  reader.onerror = () => {
+    preview.innerHTML = '<div style="background:#FEF2F2;border:1px solid #FECACA;border-radius:8px;padding:12px;font-size:12px;color:#C0282D;">Could not read that file.</div>';
+  };
+  reader.readAsArrayBuffer(file);
+};
+
+function renderImportPreview(parsed, map, fileName) {
+  const unmatched = parsed.filter(p => !p.owner.matched && p.owner.nameCache);
+  const noDate    = parsed.filter(p => !p.deadline);
+  const found     = Object.keys(map).filter(k => map[k] !== undefined);
+
+  const warn = (txt) =>
+    '<div style="background:#FFFBEB;border:1px solid #FDE68A;border-radius:8px;padding:10px 12px;font-size:11px;color:#92400E;margin-bottom:8px;line-height:1.6;">' + txt + '</div>';
+
+  let html =
+    '<div style="background:#F0FDF4;border:1px solid #BBF7D0;border-radius:8px;padding:10px 12px;font-size:12px;color:#16A34A;font-weight:500;margin-bottom:10px;">' +
+      parsed.length + ' task' + (parsed.length !== 1 ? 's' : '') + ' read from ' + fileName +
+      '<div style="font-size:11px;font-weight:400;color:#15803D;margin-top:2px;">Columns matched: ' + found.join(', ') + '</div>' +
+    '</div>';
+
+  if (unmatched.length) {
+    html += warn('<strong>' + unmatched.length + ' owner' + (unmatched.length !== 1 ? 's' : '') +
+      ' could not be matched to the directory</strong> — the name is kept for display but these tasks will not receive email until reassigned: ' +
+      unmatched.slice(0, 6).map(u => u.owner.nameCache).join(', ') +
+      (unmatched.length > 6 ? ' and ' + (unmatched.length - 6) + ' more' : ''));
+  }
+  if (noDate.length) {
+    html += warn('<strong>' + noDate.length + ' task' + (noDate.length !== 1 ? 's' : '') +
+      ' have no deadline.</strong> They will import, but deadline alerts only fire for tasks with a date.');
+  }
+
+  html +=
+    '<div style="border:1px solid var(--border);border-radius:8px;overflow:hidden;max-height:260px;overflow-y:auto;">' +
+      '<table style="width:100%;border-collapse:collapse;">' +
+        '<thead><tr style="background:#1A1A1A;position:sticky;top:0;">' +
+          '<th style="padding:7px 10px;text-align:left;font-size:10px;color:#fff;text-transform:uppercase;letter-spacing:.05em;">Task</th>' +
+          '<th style="padding:7px 10px;text-align:left;font-size:10px;color:#fff;text-transform:uppercase;letter-spacing:.05em;">Owner</th>' +
+          '<th style="padding:7px 10px;text-align:left;font-size:10px;color:#fff;text-transform:uppercase;letter-spacing:.05em;">Deadline</th>' +
+        '</tr></thead><tbody>' +
+        parsed.slice(0, 40).map(p => {
+          const label = p.owner.email
+            ? (p.owner.nameCache || p.owner.email)
+            : (p.owner.dept || p.owner.nameCache || '—');
+          const dot = p.owner.matched ? '#16A34A' : '#D97706';
+          return '<tr style="border-bottom:1px solid #F3F3F2;">' +
+            '<td style="padding:7px 10px;font-size:11px;color:var(--text);">' + p.title + '</td>' +
+            '<td style="padding:7px 10px;font-size:11px;color:#6B7280;">' +
+              '<span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:' + dot + ';margin-right:5px;"></span>' +
+              label + (p.owner.dept && p.owner.email ? ' <span style="color:#9CA3AF;">(' + p.owner.dept + ')</span>' : '') +
+            '</td>' +
+            '<td style="padding:7px 10px;font-size:11px;color:' + (p.deadline ? '#6B7280' : '#D97706') + ';">' +
+              (p.deadline ? formatDate(p.deadline) : 'No date') + '</td>' +
+          '</tr>';
+        }).join('') +
+      '</tbody></table>' +
+      (parsed.length > 40 ? '<div style="padding:7px 10px;font-size:11px;color:#9CA3AF;">+' + (parsed.length - 40) + ' more rows</div>' : '') +
+    '</div>' +
+    '<button class="btn-primary" style="width:100%;margin-top:12px;padding:12px;" onclick="confirmImportTasks()">' +
+      'Import ' + parsed.length + ' task' + (parsed.length !== 1 ? 's' : '') + ' and continue' +
+    '</button>';
+
+  document.getElementById('import-preview').innerHTML = html;
+}
+
+window.confirmImportTasks = () => {
+  const parsed = window._importParsed || [];
+  if (!parsed.length) { showToast('Nothing to import', 'error'); return; }
+
+  // Build tasks in exactly the shape the other two options produce
+  _editingTasks = parsed.map((p, i) => {
+    const owners = (p.owner.email || p.owner.dept)
+      ? [{ dept: p.owner.dept || '', email: p.owner.email || '', nameCache: p.owner.nameCache || '' }]
+      : [];
+    return {
+      id: generateTaskId(),
+      title: p.title,
+      owners,
+      owner:      owners.length ? (p.owner.nameCache || p.owner.dept) : '',
+      ownerEmail: p.owner.email || '',
+      ownerDept:  p.owner.dept  || '',
+      deadline:   p.deadline,
+      status:     p.status,
+      predecessors: [], locked: false, pillarId: null,
+      notes: p.notes || '',
+      order: i, kanbanCol: p.status === 'complete' ? 'done' : 'todo',
+      importedAt: Date.now(),
+    };
+  });
+  window._importParsed = null;
+  document.getElementById('modal-body-content').innerHTML = buildTaskEditorForm();
+  showToast(_editingTasks.length + ' tasks imported — review and edit before saving.', 'success');
+};
+
+/* ══════════════════════════════════════════════════════════════
+   ASK — question answering over task and project data
+
+   ACCESS MODEL (this is the important part):
+   The model never queries the database. The frontend builds the
+   context, and it can only build context from items the signed-in
+   user is already permitted to see — the same visibility test the
+   Products list uses. An admin's context includes everything; a
+   member's includes only what they own, are shared on, or that their
+   department is assigned to. The model cannot widen its own scope
+   because it never sees anything outside the context it is handed.
+   ══════════════════════════════════════════════════════════════ */
+const AI_PROVIDERS = [
+  { name: 'Groq',      url: 'https://api.groq.com/openai/v1/chat/completions',
+    key: () => GROQ_API_KEY,      model: 'llama-3.3-70b-versatile' },
+  { name: 'Cerebras',  url: 'https://api.cerebras.ai/v1/chat/completions',
+    key: () => CEREBRAS_API_KEY,  model: 'llama-3.3-70b' },
+  { name: 'SambaNova', url: 'https://api.sambanova.ai/v1/chat/completions',
+    key: () => SAMBANOVA_API_KEY, model: 'Meta-Llama-3.3-70B-Instruct' },
+];
+
+function providerConfigured(p) {
+  const k = p.key();
+  return !!k && !k.startsWith('__');   // unreplaced placeholder means not configured
+}
+
+async function askAI(messages, maxTokens) {
+  const available = AI_PROVIDERS.filter(providerConfigured);
+  if (available.length === 0) throw new Error('No AI provider is configured. Add at least one API key in your deployment secrets.');
+  let lastErr;
+  for (const p of available) {
+    try {
+      const resp = await fetch(p.url, {
+        method: 'POST',
+        headers: { 'Authorization': 'Bearer ' + p.key(), 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model: p.model, max_tokens: maxTokens || 1200, temperature: 0.2, messages }),
+      });
+      if (!resp.ok) {
+        const e = await resp.json().catch(() => ({}));
+        throw new Error(e.error?.message || (p.name + ' returned ' + resp.status));
+      }
+      const data = await resp.json();
+      const text = data.choices?.[0]?.message?.content?.trim();
+      if (!text) throw new Error(p.name + ' returned an empty response');
+      return { text, provider: p.name };
+    } catch(err) {
+      lastErr = err;
+      console.warn(p.name + ' failed, trying next provider:', err.message);
+    }
+  }
+  throw lastErr || new Error('All AI providers failed.');
+}
+
+/* The visibility test — identical rule to the Products list.
+   Everything the assistant can see flows through this one function. */
+/* ══════════════════════════════════════════════════════════════
+   TASK-LEVEL PRIVACY
+
+   Levels:
+     private     — product owner + the task's own owners. DEFAULT.
+     department  — the above, plus everyone in an assigned department.
+     public      — everyone who can see the product.
+
+   An UNSET visibility field is treated as PRIVATE. This is deliberate:
+   the field did not exist before this release, so defaulting to public
+   would leave every historical task exposed. Note that a task assigned
+   to a department is still visible to that department under 'private',
+   because those members ARE its owners.
+
+   Matching is on canonical email — never on display names, which can
+   be renamed in the People tab.
+   ══════════════════════════════════════════════════════════════ */
+const TASK_VISIBILITY = {
+  private:    { label: 'Private',    desc: 'Owners only',                 color: '#C0282D' },
+  department: { label: 'Department', desc: 'Assigned departments',        color: '#D97706' },
+  public:     { label: 'Public',     desc: 'Everyone on this item',       color: '#16A34A' },
+};
+
+function getTaskVisibility(task) {
+  const v = task && task.visibility;
+  return (v === 'public' || v === 'department' || v === 'restricted') ? (v === 'restricted' ? 'department' : v) : 'private';
+}
+
+function taskOwnerList(task) {
+  if (task.owners && task.owners.length > 0) return task.owners;
+  if (task.owner || task.ownerEmail) {
+    return [{ dept: task.ownerDept || '', email: task.ownerEmail || '', nameCache: task.owner || '' }];
+  }
+  return [];
+}
+
+function canViewTask(task, prod) {
+  if (currentRole === 'admin' || isSuperAdmin) return true;
+  if (!currentUser) return false;
+
+  const vis     = getTaskVisibility(task);
+  const userKey = sanitiseEmail(currentUser.email);
+  const myEmail = (currentUser.email || '').toLowerCase();
+  const myDept  = (currentUserDept || '').toLowerCase();
+
+  if (prod && prod.ownerId === userKey) return true;   // product owner always sees their own board
+
+  const owners = taskOwnerList(task);
+
+  // Am I an owner of this task — by email, or as a member of an owning department?
+  const isTaskOwner = owners.some(o => {
+    if (o.email && o.email.toLowerCase() === myEmail) return true;
+    if (o.dept && myDept && o.dept.toLowerCase() === myDept) return true;
+    return false;
+  });
+  if (isTaskOwner) return true;
+
+  if (vis === 'private') return false;
+
+  if (vis === 'department') {
+    // Explicit extra departments or people granted access
+    if (Array.isArray(task.visibleTo) && task.visibleTo.some(e => {
+      const v = String(e || '').toLowerCase().trim();
+      return v === myEmail || (myDept && v === myDept);
+    })) return true;
+    return false;   // owners already checked above
+  }
+
+  if (vis === 'public') return true;   // anyone who can see the product
+
+  return false;   // unknown value → deny
+}
+
+function canSetTaskVisibility(prod) {
+  if (currentRole === 'admin' || isSuperAdmin) return true;
+  if (!currentUser || !prod) return false;
+  return prod.ownerId === sanitiseEmail(currentUser.email);
+}
+
+/* Budgets are a different sensitivity class from task data —
+   owner, admin and super-admin only. */
+function canViewBudget(prod) {
+  if (currentRole === 'admin' || isSuperAdmin) return true;
+  if (!currentUser || !prod) return false;
+  return prod.ownerId === sanitiseEmail(currentUser.email);
+}
+
+function canUserSeeProduct(p, userKey) {
+  if (currentRole === 'admin') return true;
+  if (p.ownerId === userKey) return true;
+  if (p.sharedWith?.[userKey]) return true;
+  // Department assignment: visible if my dept owns any task on it
+  if (currentUserDept) {
+    const tasks = getProductTasks(p);
+    const mine = tasks.some(t => {
+      const owners = (t.owners && t.owners.length) ? t.owners
+        : [{ dept: t.ownerDept || '', email: t.ownerEmail || '' }];
+      return owners.some(o =>
+        (o.dept && o.dept.toLowerCase() === currentUserDept.toLowerCase()) ||
+        (o.email && o.email.toLowerCase() === (currentUser.email || '').toLowerCase()));
+    });
+    if (mine) return true;
+  }
+  return false;
+}
+
+let _askSelected = [];
+let _askHistory  = [];
+
+function renderAsk(el) {
+  el.innerHTML =
+    '<div class="view-header">' +
+      '<div>' +
+        '<h1 class="view-title">Ask</h1>' +
+        '<p class="view-subtitle">Ask questions about your products, projects and tasks</p>' +
+      '</div>' +
+    '</div>' +
+    '<div class="panel" style="margin-bottom:14px;">' +
+      '<div class="panel-header">' +
+        '<span class="panel-title">Scope</span>' +
+        '<span id="ask-scope-note" style="font-size:11px;color:var(--text-muted);"></span>' +
+      '</div>' +
+      '<div class="panel-body" id="ask-scope"><div class="loading-row" style="font-size:12px;">Loading...</div></div>' +
+    '</div>' +
+    '<div class="panel">' +
+      '<div class="panel-header"><span class="panel-title">Conversation</span>' +
+        '<button class="btn-link-sm" onclick="clearAskHistory()">Clear</button></div>' +
+      '<div id="ask-thread" style="padding:16px 18px;min-height:120px;max-height:420px;overflow-y:auto;">' +
+        '<div style="font-size:12px;color:#9CA3AF;text-align:center;padding:24px 0;">' +
+          'Select one or more items above, then ask a question.' +
+        '</div>' +
+      '</div>' +
+      '<div style="border-top:1px solid var(--border);padding:12px 18px;display:flex;gap:8px;align-items:flex-end;">' +
+        '<textarea id="ask-input" rows="2" placeholder="e.g. What is overdue across these, and who owns it?" ' +
+          'style="flex:1;border:1px solid var(--border);border-radius:8px;padding:9px 12px;font-size:12px;' +
+          'font-family:Poppins,sans-serif;resize:none;outline:none;color:var(--text);line-height:1.6;" ' +
+          'onkeydown="if(event.key===\'Enter\'&&!event.shiftKey){event.preventDefault();submitAsk();}"></textarea>' +
+        '<button class="btn-primary" id="ask-send" style="font-size:12px;padding:10px 18px;" onclick="submitAsk()">Ask</button>' +
+      '</div>' +
+    '</div>';
+  loadAskScope();
+}
+
+async function loadAskScope() {
+  const el = document.getElementById('ask-scope');
+  if (!el) return;
+  try {
+    const snap = await get(ref(db, 'products'));
+    const all  = Object.values(snap.val() || {}).filter(p => p.status !== 'archived');
+    const userKey = sanitiseEmail(currentUser.email);
+    const visible = all.filter(p => canUserSeeProduct(p, userKey));
+    window._askVisible = visible;
+
+    const note = document.getElementById('ask-scope-note');
+    if (note) {
+      note.textContent = currentRole === 'admin'
+        ? 'Admin — all ' + visible.length + ' items'
+        : visible.length + ' of ' + all.length + ' items visible to you' +
+          (currentUserDept ? ' (' + currentUserDept + ')' : '');
+    }
+    if (visible.length === 0) {
+      el.innerHTML = '<div style="font-size:12px;color:#9CA3AF;">You do not have access to any products or projects yet.</div>';
+      return;
+    }
+    el.innerHTML =
+      '<div style="display:flex;gap:6px;margin-bottom:10px;">' +
+        '<button class="btn-outline" style="font-size:11px;padding:4px 10px;" onclick="askSelectAll(true)">Select all</button>' +
+        '<button class="btn-outline" style="font-size:11px;padding:4px 10px;" onclick="askSelectAll(false)">Clear</button>' +
+      '</div>' +
+      '<div style="display:flex;flex-wrap:wrap;gap:6px;">' +
+        visible.map(p => {
+          const on = _askSelected.includes(p.id);
+          const type = (p.itemType || 'product') === 'project' ? 'PROJECT' : 'PRODUCT';
+          const clr  = type === 'PROJECT' ? '#2563EB' : '#C0282D';
+          return '<button id="askchip-' + p.id + '" onclick="toggleAskItem(\'' + p.id + '\')" ' +
+            'style="border:1px solid ' + (on ? clr : 'var(--border)') + ';background:' + (on ? clr + '12' : '#fff') +
+            ';color:' + (on ? clr : 'var(--text)') + ';border-radius:20px;padding:5px 12px;font-size:11px;' +
+            'font-weight:500;cursor:pointer;font-family:Poppins,sans-serif;">' +
+            '<span style="font-size:9px;font-weight:700;opacity:.7;">' + type + '</span> ' + p.name +
+          '</button>';
+        }).join('') +
+      '</div>';
+  } catch(e) {
+    el.innerHTML = '<div style="font-size:12px;color:#9CA3AF;">Could not load your items.</div>';
+  }
+}
+
+window.toggleAskItem = (id) => {
+  const i = _askSelected.indexOf(id);
+  if (i > -1) _askSelected.splice(i, 1); else _askSelected.push(id);
+  loadAskScope();
+};
+
+window.askSelectAll = (on) => {
+  _askSelected = on ? (window._askVisible || []).map(p => p.id) : [];
+  loadAskScope();
+};
+
+window.clearAskHistory = () => {
+  _askHistory = [];
+  const t = document.getElementById('ask-thread');
+  if (t) t.innerHTML = '<div style="font-size:12px;color:#9CA3AF;text-align:center;padding:24px 0;">Conversation cleared.</div>';
+};
+
+/* Build the context. Only selected AND visible items are included —
+   the visibility filter is re-applied here so a stale selection can
+   never leak an item the user has lost access to. */
+function buildAskContext() {
+  const userKey = sanitiseEmail(currentUser.email);
+  const chosen  = (window._askVisible || [])
+    .filter(p => _askSelected.includes(p.id) && canUserSeeProduct(p, userKey));
+  const today = new Date(); today.setHours(0,0,0,0);
+
+  return chosen.map(p => {
+    const tasks = getProductTasks(p).filter(t => canViewTask(t, p));
+    const lines = tasks.map(t => {
+      const eff = resolveTaskStatus(t);
+      const owners = (t.owners && t.owners.length) ? t.owners
+        : (t.owner ? [{ dept: t.ownerDept || '', email: t.ownerEmail || '', nameCache: t.owner }] : []);
+      const who = owners.length ? owners.map(o => ownerLabel(o) + (o.dept ? ' [' + o.dept + ']' : '')).join(' + ') : 'Unassigned';
+      let due = 'no deadline';
+      if (t.deadline) {
+        const d = new Date(t.deadline); d.setHours(0,0,0,0);
+        const diff = Math.round((d - today) / 86400000);
+        due = t.deadline + (diff < 0 ? ' (' + Math.abs(diff) + 'd overdue)' : diff === 0 ? ' (due today)' : ' (in ' + diff + 'd)');
+      }
+      return '  - "' + (t.title || 'Untitled') + '" | status: ' + eff + ' | owner: ' + who + ' | due: ' + due +
+             (t.notes ? ' | notes: ' + String(t.notes).slice(0, 200) : '');
+    }).join('\n');
+
+    const done = tasks.filter(t => resolveTaskStatus(t) === 'complete').length;
+    return '### ' + p.name + ' (' + (p.itemType || 'product') + ')\n' +
+      'Launch/target date: ' + (p.launchDate || 'not set') + '\n' +
+      'Owner: ' + (p.ownerName || 'unassigned') + '\n' +
+      'Progress: ' + done + ' of ' + tasks.length + ' tasks complete\n' +
+      (p.description ? 'Description: ' + String(p.description).slice(0, 400) + '\n' : '') +
+      'Tasks:\n' + (lines || '  (none)');
+  }).join('\n\n');
+}
+
+window.submitAsk = async () => {
+  const input = document.getElementById('ask-input');
+  const btn   = document.getElementById('ask-send');
+  const thread = document.getElementById('ask-thread');
+  const q = (input?.value || '').trim();
+  if (!q) return;
+  if (_askSelected.length === 0) { showToast('Select at least one product or project first', 'error'); return; }
+
+  const context = buildAskContext();
+  if (!context) { showToast('Nothing in scope — your selection may no longer be visible to you', 'error'); return; }
+
+  if (_askHistory.length === 0) thread.innerHTML = '';
+  appendAskMessage('user', q);
+  input.value = '';
+  if (btn) { btn.disabled = true; btn.textContent = 'Thinking...'; }
+  const thinkingId = appendAskMessage('assistant', '...', true);
+
+  const askerName = currentPreferredName || currentUser.displayName || currentUser.email.split('@')[0];
+  const roleLabel = currentRole === 'admin' ? 'Admin (full portfolio visibility)'
+                  : 'Team member' + (currentUserDept ? ' in ' + currentUserDept : '');
+
+  const system =
+    'You are the Mixta Africa NPD Hub assistant. You answer questions about product and project tracking data.\n\n' +
+    'WHO IS ASKING: ' + askerName + ' (' + currentUser.email + '). Role: ' + roleLabel + '.\n\n' +
+    'RULES:\n' +
+    '- Answer ONLY from the DATA below. It is already filtered to what this person is permitted to see.\n' +
+    '- If the answer is not in the data, say so plainly. Never guess, and never invent tasks, owners or dates.\n' +
+    '- If asked about a product, project, person or department that is not in the data, say it is not in their current scope and suggest they select it above or request access.\n' +
+    '- Be concise and specific. Cite task names and dates exactly as written.\n' +
+    '- Use short prose or a compact list. No preamble, no restating the question.\n' +
+    '- Today is ' + new Date().toISOString().slice(0, 10) + '.\n\n' +
+    'DATA:\n' + context;
+
+  try {
+    const messages = [{ role: 'system', content: system }]
+      .concat(_askHistory.slice(-6))
+      .concat([{ role: 'user', content: q }]);
+    const { text, provider } = await askAI(messages, 1000);
+    _askHistory.push({ role: 'user', content: q });
+    _askHistory.push({ role: 'assistant', content: text });
+    replaceAskMessage(thinkingId, text, provider);
+  } catch(err) {
+    replaceAskMessage(thinkingId, 'Could not get an answer: ' + (err.message || 'unknown error'), null, true);
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = 'Ask'; }
+  }
+};
+
+function appendAskMessage(role, text, pending) {
+  const thread = document.getElementById('ask-thread');
+  if (!thread) return null;
+  const id = 'askmsg_' + Date.now() + '_' + Math.floor(Math.random() * 1000);
+  const isUser = role === 'user';
+  const div = document.createElement('div');
+  div.id = id;
+  div.style.cssText = 'margin-bottom:14px;display:flex;gap:10px;' + (isUser ? 'flex-direction:row-reverse;' : '');
+  div.innerHTML =
+    '<div style="width:26px;height:26px;border-radius:50%;flex-shrink:0;display:flex;align-items:center;justify-content:center;' +
+      'font-size:10px;font-weight:700;background:' + (isUser ? '#FEF2F2' : '#F0F0EE') + ';color:' + (isUser ? '#C0282D' : '#6B7280') + ';">' +
+      (isUser ? (currentPreferredName || currentUser.email)[0].toUpperCase() : 'AI') +
+    '</div>' +
+    '<div style="max-width:78%;background:' + (isUser ? '#FEF2F2' : '#F8F8F7') + ';border-radius:10px;padding:9px 13px;' +
+      'font-size:12px;line-height:1.7;color:var(--text);white-space:pre-wrap;word-break:break-word;' +
+      (pending ? 'opacity:.5;' : '') + '">' + text + '</div>';
+  thread.appendChild(div);
+  thread.scrollTop = thread.scrollHeight;
+  return id;
+}
+
+function replaceAskMessage(id, text, provider, isError) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  const bubble = el.querySelector('div:last-child');
+  if (!bubble) return;
+  bubble.style.opacity = '1';
+  if (isError) { bubble.style.background = '#FEF2F2'; bubble.style.color = '#C0282D'; }
+  bubble.textContent = text;
+  if (provider) {
+    const tag = document.createElement('div');
+    tag.style.cssText = 'font-size:9px;color:#9CA3AF;margin-top:5px;';
+    tag.textContent = 'via ' + provider;
+    bubble.appendChild(tag);
+  }
+  const thread = document.getElementById('ask-thread');
+  if (thread) thread.scrollTop = thread.scrollHeight;
+}
+
+/* ══ VISIBILITY + ACKNOWLEDGEMENT ACTIONS ══════════════════ */
+window.cycleTaskVisibility = async (productId, taskId) => {
+  const prod = productListCache[productId];
+  if (!prod) return;
+  if (!canSetTaskVisibility(prod)) { showToast('Only the owner or an admin can change visibility', 'error'); return; }
+  const task = getProductTasks(prod).find(t => t.id === taskId);
+  if (!task) return;
+
+  const order = ['private', 'department', 'public'];
+  const next  = order[(order.indexOf(getTaskVisibility(task)) + 1) % order.length];
+  const path  = prod.tasks?.[taskId] ? 'tasks' : 'pillars';
+
+  await set(ref(db, 'products/' + productId + '/' + path + '/' + taskId + '/visibility'), next);
+  if (productListCache[productId][path]?.[taskId]) {
+    productListCache[productId][path][taskId].visibility = next;
+  }
+  await logActivity(productId, 'visibility',
+    'Task visibility changed to ' + TASK_VISIBILITY[next].label,
+    (task.title || taskId) + ' — by ' + (currentPreferredName || currentUser.email));
+  showToast('Now ' + TASK_VISIBILITY[next].label + ' — ' + TASK_VISIBILITY[next].desc, 'success');
+  const body = document.getElementById('product-detail-body');
+  if (body) body.innerHTML = buildPillarDetail(productListCache[productId]);
+};
+
+window.clearTaskAck = async (productId, taskId) => {
+  const prod = productListCache[productId];
+  if (!prod) return;
+  const path = prod.tasks?.[taskId] ? 'tasks' : 'pillars';
+  await set(ref(db, 'products/' + productId + '/' + path + '/' + taskId + '/acknowledgement'), null);
+  if (productListCache[productId][path]?.[taskId]) {
+    productListCache[productId][path][taskId].acknowledgement = null;
+  }
+  showToast('Acknowledgement cleared.', 'success');
+  const body = document.getElementById('product-detail-body');
+  if (body) body.innerHTML = buildPillarDetail(productListCache[productId]);
+};
+
+/* Bulk visibility sweep. Works in both directions:
+     'private' — lock everything down
+     'department' — open my tasks to my department
+   Scope is admins → everything, members → only tasks they own. */
+async function bulkSetVisibility(target) {
+  if (!currentUser) return;
+  const isAdminSweep = currentRole === 'admin' || isSuperAdmin;
+  const scope = isAdminSweep ? 'every task in the hub' : 'every task you own';
+  const meta  = TASK_VISIBILITY[target];
+  if (!confirm('Set ' + scope + ' to ' + meta.label + ' (' + meta.desc + ')?\n\nThis can be reversed at any time.')) return;
+
+  const btnIds = ['bulk-private-btn', 'bulk-dept-btn'];
+  btnIds.forEach(id => { const b = document.getElementById(id); if (b) { b.disabled = true; b.textContent = 'Working...'; } });
+
+  try {
+    const snap    = await get(ref(db, 'products'));
+    const products = snap.val() || {};
+    const myEmail = (currentUser.email || '').toLowerCase();
+    const myDept  = (currentUserDept || '').toLowerCase();
+    let changed = 0;
+
+    for (const pid of Object.keys(products)) {
+      const prod = products[pid];
+      const path = prod.tasks ? 'tasks' : (prod.pillars ? 'pillars' : null);
+      if (!path) continue;
+      for (const tid of Object.keys(prod[path] || {})) {
+        const task = prod[path][tid];
+        if (getTaskVisibility(task) === target) continue;
+
+        if (!isAdminSweep) {
+          // Members may only change tasks they own
+          const owners = taskOwnerList(task);
+          const mine = owners.some(o =>
+            (o.email && o.email.toLowerCase() === myEmail) ||
+            (o.dept && myDept && o.dept.toLowerCase() === myDept));
+          if (!mine && prod.ownerId !== sanitiseEmail(currentUser.email)) continue;
+        }
+        await set(ref(db, 'products/' + pid + '/' + path + '/' + tid + '/visibility'), target);
+        if (productListCache[pid]?.[path]?.[tid]) productListCache[pid][path][tid].visibility = target;
+        changed++;
+      }
+    }
+    showToast(changed + ' task' + (changed !== 1 ? 's' : '') + ' set to ' + meta.label + '.', 'success');
+  } catch(e) {
+    console.error('bulkSetVisibility failed:', e);
+    showToast('Bulk update failed — check the console.', 'error');
+  } finally {
+    const b1 = document.getElementById('bulk-private-btn');
+    const b2 = document.getElementById('bulk-dept-btn');
+    if (b1) { b1.disabled = false; b1.textContent = 'Lock all to Private'; }
+    if (b2) { b2.disabled = false; b2.textContent = 'Open all to my Department'; }
+  }
+}
+
+window.lockAllTasksToPrivate  = () => bulkSetVisibility('private');
+window.openAllTasksToDept     = () => bulkSetVisibility('department');
 
 function buildTaskEditorForm() {
   const taskRows = _editingTasks.map((t, i) => buildTaskRow(t, i)).join('');
@@ -2068,7 +2830,7 @@ function buildTaskEditorForm() {
       <input type="hidden" id="f-item-type" value="product"/>
     </div>
     <div class="form-row">
-      <label class="form-label">Name <span class="req">*</span></label>
+      <label class="form-label">Product name <span class="req">*</span></label>
       <input type="text" id="f-name" class="input-field" placeholder="e.g. Lakowe Garden Terrace Phase 3"/>
     </div>
     <div class="form-row">
@@ -2079,16 +2841,14 @@ function buildTaskEditorForm() {
       <label class="form-label">Target launch date <span class="req">*</span></label>
       <input type="date" id="f-launch" class="input-field"/>
     </div>
-    <div class="form-row project-only-field" style="display:none;">
-      <div style="display:flex;gap:10px;">
-        <div style="flex:1;">
-          <label class="form-label">Total Budget (Optional)</label>
-          <input type="number" id="f-budget" class="input-field" placeholder="e.g. 5000000"/>
-        </div>
-        <div style="flex:1;">
-          <label class="form-label">Spend Till Date (Optional)</label>
-          <input type="number" id="f-spend" class="input-field" placeholder="e.g. 1500000"/>
-        </div>
+    <div id="budget-fields" style="display:none;">
+      <div class="form-row">
+        <label class="form-label">Budget (₦) <span class="form-hint">— projects only, visible to owner and admins</span></label>
+        <input type="number" id="f-budget" class="input-field" placeholder="e.g. 5000000"/>
+      </div>
+      <div class="form-row">
+        <label class="form-label">Spend to date (₦)</label>
+        <input type="number" id="f-spend" class="input-field" placeholder="e.g. 1500000"/>
       </div>
     </div>
     ${buildOwnerField(null)}
@@ -2105,7 +2865,7 @@ function buildTaskEditorForm() {
       <div style="display:flex;gap:10px;justify-content:flex-end;">
         <button class="btn-outline" onclick="showCreateProduct()">← Back</button>
         <button class="btn-outline" onclick="saveAsTemplatePrompt()">Save as template</button>
-        <button class="btn-primary" id="create-item-btn" onclick="saveProduct('')">Create ${window._pendingCreateType === 'project' ? 'project' : 'product'}</button>
+        <button class="btn-primary" onclick="saveProduct('')">Create product</button>
       </div>
     </div>`;
 }
@@ -2116,14 +2876,30 @@ function buildOwnerDeptOptions(selectedDept) {
   ).join('');
 }
 
-function buildOwnerIndividualOptions(dept, selectedName) {
+/* Owner options carry the EMAIL as the value — email is the canonical
+   identity. The visible label is the name, which may be renamed freely
+   in the People tab without breaking any task assignment. */
+function buildOwnerIndividualOptions(dept, selectedEmail) {
   const members = STAKEHOLDERS.filter(s => s.dept === dept && s.enabled !== false);
   if (!members.length) return '<option value="">— no members —</option>';
   return members.map(s =>
-    '<option value="' + s.name + '"' + (selectedName === s.name ? ' selected' : '') + '>' +
+    '<option value="' + s.email + '"' +
+      ' data-name="' + (s.name || '').replace(/"/g, '') + '"' +
+      (selectedEmail === s.email ? ' selected' : '') + '>' +
       (s.isDeptEmail ? dept + ' (whole dept)' : s.name) +
     '</option>'
   ).join('');
+}
+
+// Display helper: email → current name from the directory, with graceful fallback
+function ownerLabel(o) {
+  if (!o) return 'Unassigned';
+  if (o.email) {
+    const s = STAKEHOLDERS.find(x => x.email === o.email);
+    if (s) return s.isDeptEmail ? (s.dept + ' (dept)') : s.name;
+    return o.nameCache || o.email;
+  }
+  return o.individual || o.dept || 'Unassigned';
 }
 
 function buildTaskRow(t, i) {
@@ -2133,10 +2909,10 @@ function buildTaskRow(t, i) {
     .join('');
 
   // Multi-department owner chips — stored in t.owners as [{ dept, individual }]
-  const owners = t.owners && t.owners.length > 0 ? t.owners : (t.owner ? [{ dept: t.ownerDept || '', individual: t.owner }] : []);
+  const owners = t.owners && t.owners.length > 0 ? t.owners : (t.owner ? [{ dept: t.ownerDept || '', email: t.ownerEmail || '', nameCache: t.owner }] : []);
   const ownerChips = owners.map((o, oi) =>
     '<span style="display:inline-flex;align-items:center;gap:4px;background:#EFF6FF;color:#2563EB;border:1px solid #BFDBFE;border-radius:20px;padding:2px 8px;font-size:11px;font-weight:500;">' +
-      (o.individual || o.dept || 'Unknown') + (o.dept && o.individual !== o.dept ? ' (' + o.dept + ')' : '') +
+      ownerLabel(o) + (o.dept ? ' (' + o.dept + ')' : '') +
       '<button onclick="removeTaskOwner(\'' + t.id + '\',' + oi + ')" style="background:none;border:none;cursor:pointer;color:#2563EB;font-size:12px;line-height:1;padding:0 1px;">×</button>' +
     '</span>'
   ).join('');
@@ -2173,6 +2949,15 @@ function buildTaskRow(t, i) {
           '</button>' +
         '</div>' +
       '</div>' +
+      '<div class="task-edit-col">' +
+        '<label class="form-label">Visibility</label>' +
+        '<select class="select-field" onchange="updateEditingTask(\'' + t.id + '\',\'visibility\',this.value)">' +
+          Object.keys(TASK_VISIBILITY).map(function(k) {
+            return '<option value="' + k + '"' + (getTaskVisibility(t) === k ? ' selected' : '') + '>' +
+              TASK_VISIBILITY[k].label + ' — ' + TASK_VISIBILITY[k].desc + '</option>';
+          }).join('') +
+        '</select>' +
+      '</div>' +
       '<div class="task-edit-col task-edit-col-wide">' +
         '<label class="form-label">Depends on <span class="form-hint">— hold Ctrl/Cmd for multiple</span></label>' +
         '<select class="select-field" multiple style="height:52px;font-size:12px;" onchange="updateEditingTaskPreds(\'' + t.id + '\',this)">' +
@@ -2180,34 +2965,6 @@ function buildTaskRow(t, i) {
           predOptions +
         '</select>' +
       '</div>' +
-      /* ── TASK VISIBILITY (access control) ─────────────────────────────────
-         Controls who can see this task on the Launch Calendar and My Actions.
-         'public'     = everyone who can see this product  (default)
-         'private'    = only the task's assigned owners + the product owner
-         'restricted' = owners + product owner + explicit email allowlist
-      ── */
-      '<div class="task-edit-col task-edit-col-wide" style="grid-column:span 3;">' +
-        '<label class="form-label">' +
-          '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:middle;margin-right:4px;"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg>' +
-          'Task visibility' +
-          '<span class="form-hint"> — who can see this task on the calendar and actions views</span>' +
-        '</label>' +
-        '<div style="display:flex;gap:8px;margin-top:4px;align-items:flex-start;flex-wrap:wrap;">' +
-          '<select class="select-field" style="flex:0 0 auto;" ' +
-            'onchange="updateEditingTask(\'' + t.id + '\',\'visibility\',this.value);toggleVisibleToField(\'' + t.id + '\',this.value)">' +
-            '<option value="public"'      + ((!t.visibility || t.visibility==='public')      ? ' selected' : '') + '>[ Public ] Everyone on this product</option>' +
-            '<option value="private"'     + (t.visibility==='private'                        ? ' selected' : '') + '>[ Private ] Owners only</option>' +
-            '<option value="restricted"'  + (t.visibility==='restricted'                     ? ' selected' : '') + '>[ Restricted ] Owners + specific people</option>' +
-          '</select>' +
-          '<div id="visible-to-' + t.id + '" style="flex:1;min-width:200px;' + (t.visibility==='restricted' ? '' : 'display:none;') + '">' +
-            '<input class="input-field" style="width:100%;" placeholder="email1@mixtafrica.com, email2@mixtafrica.com"' +
-              ' value="' + (Array.isArray(t.visibleTo) ? t.visibleTo.join(', ') : '') + '"' +
-              ' onblur="updateEditingTaskVisibleTo(\'' + t.id + '\',this.value)"/>' +
-            '<div style="font-size:10px;color:var(--text-muted);margin-top:3px;">Comma-separated emails of people who can view this task in addition to owners.</div>' +
-          '</div>' +
-        '</div>' +
-      '</div>' +
-      /* ────────────────────────────────────────────────────────────────────── */
     '</div>' +
   '</div>';
 }
@@ -2221,23 +2978,24 @@ window.updateAddIndividuals = (taskId) => {
 window.addTaskOwner = (taskId) => {
   const t = _editingTasks.find(x => x.id === taskId);
   if (!t) return;
-  const dept = document.getElementById('add-dept-' + taskId)?.value || '';
-  const ind  = document.getElementById('add-ind-' + taskId)?.value || dept;
-  if (!ind) return;
+  const dept   = document.getElementById('add-dept-' + taskId)?.value || '';
+  const sel    = document.getElementById('add-ind-' + taskId);
+  const email  = sel?.value || '';
+  const nameCache = sel?.selectedOptions?.[0]?.dataset?.name || '';
+  if (!email && !dept) return;
   if (!t.owners) t.owners = [];
-  // Avoid duplicate
-  if (t.owners.some(o => o.individual === ind && o.dept === dept)) {
+  if (t.owners.some(o => o.email === email && o.dept === dept)) {
     showToast('Already assigned', 'info'); return;
   }
-  t.owners.push({ dept, individual: ind });
-  // Keep legacy owner field pointing to first owner
-  if (t.owners.length === 1) { t.owner = ind; t.ownerDept = dept; }
+  t.owners.push({ dept, email, nameCache });
+  // Legacy mirrors — display only, never used for routing
+  if (t.owners.length === 1) { t.owner = nameCache || dept; t.ownerDept = dept; t.ownerEmail = email; }
   // Re-render just the chips
   const chipsEl = document.getElementById('owner-chips-' + taskId);
   if (chipsEl) {
     chipsEl.innerHTML = t.owners.map((o, oi) =>
       '<span style="display:inline-flex;align-items:center;gap:4px;background:#EFF6FF;color:#2563EB;border:1px solid #BFDBFE;border-radius:20px;padding:2px 8px;font-size:11px;font-weight:500;">' +
-        (o.individual || o.dept) + (o.dept && o.individual !== o.dept ? ' (' + o.dept + ')' : '') +
+        ownerLabel(o) + (o.dept ? ' (' + o.dept + ')' : '') +
         '<button onclick="removeTaskOwner(\'' + taskId + '\',' + oi + ')" style="background:none;border:none;cursor:pointer;color:#2563EB;font-size:12px;line-height:1;padding:0 1px;">×</button>' +
       '</span>'
     ).join('');
@@ -2248,33 +3006,20 @@ window.removeTaskOwner = (taskId, ownerIndex) => {
   const t = _editingTasks.find(x => x.id === taskId);
   if (!t || !t.owners) return;
   t.owners.splice(ownerIndex, 1);
-  if (t.owners.length > 0) { t.owner = t.owners[0].individual; t.ownerDept = t.owners[0].dept; }
-  else { t.owner = ''; t.ownerDept = ''; }
+  if (t.owners.length > 0) { t.owner = ownerLabel(t.owners[0]); t.ownerDept = t.owners[0].dept; t.ownerEmail = t.owners[0].email || ''; }
+  else { t.owner = ''; t.ownerDept = ''; t.ownerEmail = ''; }
   const chipsEl = document.getElementById('owner-chips-' + taskId);
   if (chipsEl) {
     chipsEl.innerHTML = t.owners.length
       ? t.owners.map((o, oi) =>
           '<span style="display:inline-flex;align-items:center;gap:4px;background:#EFF6FF;color:#2563EB;border:1px solid #BFDBFE;border-radius:20px;padding:2px 8px;font-size:11px;font-weight:500;">' +
-            (o.individual || o.dept) + (o.dept && o.individual !== o.dept ? ' (' + o.dept + ')' : '') +
+            ownerLabel(o) + (o.dept ? ' (' + o.dept + ')' : '') +
             '<button onclick="removeTaskOwner(\'' + taskId + '\',' + oi + ')" style="background:none;border:none;cursor:pointer;color:#2563EB;font-size:12px;line-height:1;padding:0 1px;">×</button>' +
           '</span>'
         ).join('')
       : '<span style="font-size:11px;color:#9CA3AF;">No owners assigned</span>';
   }
 };
-
-/* ── Task visibility UI helpers ────────────────────────────── */
-window.toggleVisibleToField = (taskId, visibility) => {
-  const el = document.getElementById('visible-to-' + taskId);
-  if (el) el.style.display = visibility === 'restricted' ? '' : 'none';
-};
-
-window.updateEditingTaskVisibleTo = (taskId, raw) => {
-  const t = _editingTasks.find(x => x.id === taskId);
-  if (!t) return;
-  t.visibleTo = raw.split(',').map(e => e.trim().toLowerCase()).filter(Boolean);
-};
-/* ─────────────────────────────────────────────────────────── */
 
 window.updateTaskOwnerDept = (id, dept) => {
   const t = _editingTasks.find(x => x.id === id);
@@ -2304,7 +3049,7 @@ window.addNewTaskRow = () => {
   const t = {
     id: generateTaskId(), title: '', owner: '',
     ownerDept: getDepts()[0] || '', ownerIndividual: '',
-    deadline: '', status: 'on-track',
+    deadline: '', status: 'on-track', visibility: 'private',
     predecessors: [], locked: false, pillarId: null,
     order: _editingTasks.length, kanbanCol: 'todo',
   };
@@ -2368,6 +3113,15 @@ function buildEditProductForm(p) {
 
   const itemType = p.itemType || 'product';
   const convertLabel = itemType === 'project' ? 'Convert to Product' : 'Convert to Project';
+  const budgetFields = (itemType === 'project' && canViewBudget(p)) ? `
+    <div class="form-row">
+      <label class="form-label">Budget (₦)</label>
+      <input type="number" id="f-budget" class="input-field" value="${p.budget ?? ''}"/>
+    </div>
+    <div class="form-row">
+      <label class="form-label">Spend to date (₦)</label>
+      <input type="number" id="f-spend" class="input-field" value="${p.spend ?? ''}"/>
+    </div>` : '';
 
   const ownerKey = p?.ownerId || sanitiseEmail(currentUser.email);
   const ownerMember = TEAM_MEMBERS[ownerKey];
@@ -2380,18 +3134,6 @@ function buildEditProductForm(p) {
       <textarea id="f-desc" class="input-field" rows="2">${p.description||''}</textarea></div>
     <div class="form-row"><label class="form-label">Target launch date <span class="req">*</span></label>
       <input type="date" id="f-launch" class="input-field" value="${p.launchDate||''}"/></div>
-    <div class="form-row project-only-field" style="display:${itemType === 'project' ? 'block' : 'none'};">
-      <div style="display:flex;gap:10px;">
-        <div style="flex:1;">
-          <label class="form-label">Total Budget (Optional)</label>
-          <input type="number" id="f-budget" class="input-field" value="${p.budget || ''}"/>
-        </div>
-        <div style="flex:1;">
-          <label class="form-label">Spend Till Date (Optional)</label>
-          <input type="number" id="f-spend" class="input-field" value="${p.spend || ''}"/>
-        </div>
-      </div>
-    </div>
     ${buildOwnerField(p)}
     <div class="form-section-label" style="margin-top:20px;display:flex;align-items:center;justify-content:space-between;">
       <span>Tasks ${locked ? '<span class="pill pill-red" style="font-size:10px;">Locked</span>' : ''}</span>
@@ -2424,6 +3166,7 @@ function buildEditProductForm(p) {
       <div class="escalation-chain-editor" id="escalation-editor"></div>
       <button class="btn-outline" style="font-size:11px;margin-top:6px;" onclick="addEscalationLevel('${p.id}')">+ Add escalation level</button>
     </div>
+    ${budgetFields}
     <div class="form-actions">
       <button class="btn-outline" onclick="convertItemType('${p.id}','${itemType}')" style="margin-right:auto;">
         <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-right:4px;vertical-align:middle;"><path d="M17 1l4 4-4 4"/><path d="M3 11V9a4 4 0 014-4h14M7 23l-4-4 4-4"/><path d="M21 13v2a4 4 0 01-4 4H3"/></svg>
@@ -2479,26 +3222,22 @@ window.showAddTaskToProduct = (productId) => {
   window._atOwners = [];
 };
 
-window.updateAddTaskIndividuals = () => {
-  const dept = document.getElementById('at-dept')?.value || '';
-  const sel  = document.getElementById('at-owner');
-  if (sel) sel.innerHTML = buildOwnerIndividualOptions(dept, '');
-};
-
 window.addNewTaskOwnerChip = () => {
-  const dept = document.getElementById('at-dept')?.value || '';
-  const ind  = document.getElementById('at-owner')?.value || dept;
-  if (!ind) return;
+  const dept  = document.getElementById('at-dept')?.value || '';
+  const sel   = document.getElementById('at-owner');
+  const email = sel?.value || '';
+  const nameCache = sel?.selectedOptions?.[0]?.dataset?.name || '';
+  if (!email && !dept) return;
   if (!window._atOwners) window._atOwners = [];
-  if (window._atOwners.some(o => o.individual === ind && o.dept === dept)) {
+  if (window._atOwners.some(o => o.email === email && o.dept === dept)) {
     showToast('Already added', 'info'); return;
   }
-  window._atOwners.push({ dept, individual: ind });
+  window._atOwners.push({ dept, email, nameCache });
   const chips = document.getElementById('at-owner-chips');
   if (chips) {
     chips.innerHTML = window._atOwners.map((o, i) =>
       '<span style="display:inline-flex;align-items:center;gap:4px;background:#EFF6FF;color:#2563EB;border:1px solid #BFDBFE;border-radius:20px;padding:2px 8px;font-size:11px;font-weight:500;">' +
-        (o.individual || o.dept) + (o.dept && o.individual !== o.dept ? ' (' + o.dept + ')' : '') +
+        ownerLabel(o) + (o.dept ? ' (' + o.dept + ')' : '') +
         '<button onclick="removeAtOwner(' + i + ')" style="background:none;border:none;cursor:pointer;color:#2563EB;font-size:12px;padding:0 1px;">×</button>' +
       '</span>'
     ).join('');
@@ -2513,7 +3252,7 @@ window.removeAtOwner = (i) => {
     chips.innerHTML = window._atOwners.length
       ? window._atOwners.map((o, idx) =>
           '<span style="display:inline-flex;align-items:center;gap:4px;background:#EFF6FF;color:#2563EB;border:1px solid #BFDBFE;border-radius:20px;padding:2px 8px;font-size:11px;font-weight:500;">' +
-            (o.individual || o.dept) + (o.dept && o.individual !== o.dept ? ' (' + o.dept + ')' : '') +
+            ownerLabel(o) + (o.dept ? ' (' + o.dept + ')' : '') +
             '<button onclick="removeAtOwner(' + idx + ')" style="background:none;border:none;cursor:pointer;color:#2563EB;font-size:12px;padding:0 1px;">×</button>' +
           '</span>'
         ).join('')
@@ -2528,15 +3267,16 @@ window.addTaskToProduct = async (productId) => {
   if (!deadline) { showToast('Deadline is required.', 'error'); return; }
 
   const owners = window._atOwners && window._atOwners.length > 0 ? window._atOwners : [];
-  const primaryOwner = owners.length > 0 ? owners[0].individual : '';
+  const primaryOwner = owners.length > 0 ? (owners[0].nameCache || owners[0].email) : '';
   const primaryDept  = owners.length > 0 ? owners[0].dept : '';
+  const primaryEmail = owners.length > 0 ? (owners[0].email || '') : '';
 
   const prod   = productListCache[productId];
   const tasks  = getProductTasks(prod);
   const taskId = generateTaskId();
   const task   = {
     id: taskId, title,
-    owner: primaryOwner, ownerDept: primaryDept, owners,
+    owner: primaryOwner, ownerDept: primaryDept, ownerEmail: primaryEmail, owners,
     deadline, status: 'on-track', predecessors: [], locked: false,
     pillarId: null, order: tasks.length, kanbanCol: 'todo',
     createdAt: Date.now(), createdBy: currentUser.email,
@@ -2549,7 +3289,7 @@ window.addTaskToProduct = async (productId) => {
 
   closeProductModal();
   await logActivity(productId, 'task_added', 'New task added: ' + title,
-    'Owners: ' + (owners.map(o => o.individual || o.dept).join(', ') || 'Unassigned'));
+    'Owners: ' + (owners.map(o => ownerLabel(o)).join(', ') || 'Unassigned'));
   showToast('Task added.', 'success');
   if (currentView === 'tracker') renderTrackerTable(productListCache[productId], null);
 };
@@ -2564,7 +3304,7 @@ window.convertItemType = async (productId, currentType) => {
   await logActivity(productId, 'type_changed', 'Converted to ' + label, 'By ' + currentUser.email);
   showToast('Converted to ' + label + '.', 'success');
   closeProductModal();
-  if (currentView === 'products' || currentView === 'projects') loadView(currentView);
+  loadProductList();
 };
 
 window.setItemType = (type) => {
@@ -2577,15 +3317,8 @@ window.setItemType = (type) => {
   const nameLabel = document.querySelector('label[for="f-name"], .form-label');
   const launchLabel = document.querySelector('#f-launch')?.closest('.form-row')?.querySelector('.form-label');
   if (launchLabel) launchLabel.textContent = type === 'project' ? 'Target completion date *' : 'Target launch date *';
-  
-  // Show/Hide project-specific fields
-  document.querySelectorAll('.project-only-field').forEach(el => {
-    el.style.display = type === 'project' ? 'block' : 'none';
-  });
-  // Keep the create button label in sync with the chosen type
-  window._pendingCreateType = type;
-  const createBtn = document.getElementById('create-item-btn');
-  if (createBtn) createBtn.textContent = type === 'project' ? 'Create project' : 'Create product';
+  const bf = document.getElementById('budget-fields');
+  if (bf) bf.style.display = type === 'project' ? 'block' : 'none';
 };
 
 window.saveProduct = async (existingId) => {
@@ -2627,19 +3360,19 @@ window.saveProduct = async (existingId) => {
 
   const itemType = (document.getElementById('f-item-type')?.value || 'product');
   const budget   = document.getElementById('f-budget')?.value || '';
-  const spend    = document.getElementById('f-spend')?.value || '';
-
-  // Determine if this should go live or enter the approval queue
-  const initialProductStatus = (isNew && currentRole !== 'admin' && !isSuperAdmin) ? 'pending-approval' : 'active';
+  const spend    = document.getElementById('f-spend')?.value  || '';
 
   const payload = {
     id, name, description: desc, launchDate,
     itemType: isNew ? itemType : (productListCache[existingId]?.itemType || 'product'),
-    budget: budget,
-    spend: spend,
+    budget: budget !== '' ? Number(budget) : (isNew ? null : (productListCache[existingId]?.budget ?? null)),
+    spend:  spend  !== '' ? Number(spend)  : (isNew ? null : (productListCache[existingId]?.spend  ?? null)),
     tasks,
-    status:     isNew ? initialProductStatus : (productListCache[existingId]?.status || 'active'),
-    taskSchema:          isNew ? (_editingTasks.length > 0 && _editingTasks[0].pillarId ? 'sop' : 'custom') : (productListCache[existingId]?.taskSchema || 'sop'),
+    status:     'active',
+    taskSchema:          isNew
+      ? (_editingTasks.length > 0 && _editingTasks[0].pillarId ? 'sop'
+         : (_editingTasks.length > 0 && _editingTasks[0].importedAt ? 'imported' : 'custom'))
+      : (productListCache[existingId]?.taskSchema || 'sop'),
     baselineLaunchDate:  isNew ? launchDate : (productListCache[existingId]?.baselineLaunchDate || launchDate),
     ownerId:      ownerKey,
     ownerName:    ownerName,
@@ -2665,7 +3398,7 @@ window.saveProduct = async (existingId) => {
       await logActivity(existingId, 'status', `Product details updated`);
       closeProductModal();
       showToast('Product updated.', 'success');
-      if (currentView === 'products' || currentView === 'projects') loadView(currentView);
+      loadProductList();
     }
   } catch(e) {
     showToast('Save failed: ' + e.message, 'error');
@@ -2817,7 +3550,7 @@ window.toggleAllStakeholders = (selectAll) => {
 window.skipGASSetup = () => {
   closeProductModal();
   showToast('Product created. Drive setup and emails skipped.', 'info');
-  if (currentView === 'products' || currentView === 'projects') loadView(currentView);
+  loadProductList();
   pendingProduct = null;
   selectedStakeholders = [];
 };
@@ -2853,7 +3586,7 @@ window.confirmAndLaunchGAS = async () => {
     await set(ref(db, `products/${pendingProduct.id}/onboardedEmails`), selectedStakeholders);
 
     closeProductModal();
-    if (currentView === 'products' || currentView === 'projects') loadView(currentView);
+    loadProductList();
 
     // Step 2: Open AI email composer for onboarding emails
     // Group recipients by dept for context-aware drafts
@@ -2887,7 +3620,7 @@ window.confirmAndLaunchGAS = async () => {
       productId: prod.id,
       draftPrompt: buildOnboardingPrompt(prod, allDepts, tasks.slice(0, 8), 'the team'),
       onSend: async ({ subject, body, toEmails, ccEmails, testMode }) => {
-        const result = await callGAS('sendComposedEmail', {
+        const result = await callGAS('sendComposedEmail', { sentByName: currentPreferredName || currentUser.displayName || currentUser.email.split('@')[0], sentByEmail: currentUser.email,
           subject, body, toEmails, ccEmails,
           testMode,
           productName:     prod.name,
@@ -2907,7 +3640,7 @@ window.confirmAndLaunchGAS = async () => {
   } catch(e) {
     showToast('Setup failed: ' + e.message, 'error');
     closeProductModal();
-    if (currentView === 'products' || currentView === 'projects') loadView(currentView);
+    loadProductList();
   }
 
   pendingProduct = null;
@@ -2935,6 +3668,9 @@ window.switchProductTab = (productId, tab, el) => {
   } else if (tab === 'comments') {
     body.innerHTML = buildCommentsTab(p);
     loadProductComments(productId);
+  } else if (tab === 'comms') {
+    body.innerHTML = buildCommsTab(p);
+    loadEmailLog(productId);
   } else if (tab === 'assignees') {
     body.innerHTML = '<div class="loading-row" style="padding:16px;">Loading assignee history...</div>';
     loadAssigneeHistory(productId);
@@ -2972,6 +3708,7 @@ function buildProductDetail(p, tab) {
       '<button class="pdt-tab" onclick="switchProductTab(\'' + p.id + '\',\'assignees\',this)">Assignees</button>' +
       '<button class="pdt-tab" onclick="switchProductTab(\'' + p.id + '\',\'description\',this)">Description</button>' +
       '<button class="pdt-tab" onclick="switchProductTab(\'' + p.id + '\',\'comments\',this)">Comments</button>' +
+      '<button class="pdt-tab" onclick="switchProductTab(\'' + p.id + '\',\'comms\',this)">Sent emails</button>' +
     '</div>' +
     '</div>';
 
@@ -2994,7 +3731,7 @@ function buildDescriptionTab(p) {
       '<div class="pdt-ds-item"><span class="pdt-ds-label">Tasks</span><span class="pdt-ds-val">' + tasks2.length + '</span></div>' +
       '<div class="pdt-ds-item"><span class="pdt-ds-label">Complete</span><span class="pdt-ds-val green">' + complete2 + '</span></div>' +
       '<div class="pdt-ds-item"><span class="pdt-ds-label">Progress</span><span class="pdt-ds-val">' + pct2 + '%</span></div>' +
-      '<div class="pdt-ds-item"><span class="pdt-ds-label">Schema</span><span class="pdt-ds-val">' + (p.taskSchema === 'sop' ? 'SOP 12-pillar' : 'Custom') + '</span></div>' +
+      '<div class="pdt-ds-item"><span class="pdt-ds-label">Schema</span><span class="pdt-ds-val">' + (p.taskSchema === 'sop' ? 'SOP 12-pillar' : p.taskSchema === 'imported' ? 'Imported from spreadsheet' : 'Custom') + '</span></div>' +
       '<div class="pdt-ds-item"><span class="pdt-ds-label">Created</span><span class="pdt-ds-val">' + created + '</span></div>' +
       '<div class="pdt-ds-item"><span class="pdt-ds-label">Drive</span><span class="pdt-ds-val">' + driveLink + '</span></div>' +
     '</div></div>';
@@ -3002,7 +3739,7 @@ function buildDescriptionTab(p) {
 
 
 function buildPillarDetail(p) {
-  const tasks = getProductTasks(p);
+  const tasks = getProductTasks(p).filter(t => canViewTask(t, p));
   if (!tasks.length) {
     return '<div class="pillar-detail-list"><div class="muted" style="padding:24px 0;text-align:center;font-size:13px;">No tasks set up for this product yet.</div></div>' +
       '<div class="form-actions">' +
@@ -3040,23 +3777,17 @@ function buildPillarDetail(p) {
               : '<span class="pill pill-green">' + formatDate(task.deadline) + '</span>';
 
     const blockedHint = isBlocked
-      ? `<div style="font-size:11px;color:#D97706;margin-top:4px;display:flex;align-items:center;gap:4px;">` +
-          `<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 007.54.54l3-3a5 5 0 00-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 00-7.54-.54l-3 3a5 5 0 007.07 7.07l1.71-1.71"/></svg>` +
+      ? '<div style="font-size:11px;color:#D97706;margin-top:4px;display:flex;align-items:center;gap:4px;">' +
+          '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 007.54.54l3-3a5 5 0 00-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 00-7.54-.54l-3 3a5 5 0 007.07 7.07l1.71-1.71"/></svg>' +
           'Waiting on: ' + blockedNames.join(', ') +
         '</div>'
       : '';
 
-    const ackBadge = task.acknowledgement 
-      ? (task.acknowledgement.type === 'needs_more_time' 
-          ? `<div style="font-size:10px;font-weight:700;color:#C0282D;background:#FEF2F2;border:1px dashed #FECACA;padding:2px 6px;border-radius:4px;display:inline-block;margin-top:4px;cursor:pointer;" onclick="clearTaskAck('${p.id}', '${task.id}')" title="Click to dismiss">🚨 Requested more time ✕</div>` 
-          : `<div style="font-size:10px;font-weight:700;color:#16A34A;background:#F0FDF4;border:1px dashed #BBF7D0;padding:2px 6px;border-radius:4px;display:inline-block;margin-top:4px;cursor:pointer;" onclick="clearTaskAck('${p.id}', '${task.id}')" title="Click to dismiss">✅ Acknowledged ✕</div>`)
-      : '';
-
     const owners  = task.owners && task.owners.length > 0
       ? task.owners
-      : (task.owner ? [{ dept: task.ownerDept || '', individual: task.owner }] : []);
+      : (task.owner ? [{ dept: task.ownerDept || '', email: task.ownerEmail || '', nameCache: task.owner }] : []);
     const ownerDisplay = owners.length > 0
-      ? owners.map(o => '<span class="pillar-owner">' + (o.individual || o.dept || '') + '</span>').join('')
+      ? owners.map(o => '<span class="pillar-owner">' + ownerLabel(o) + '</span>').join('')
       : '';
 
     const statusEl = isBlocked
@@ -3088,43 +3819,35 @@ function buildPillarDetail(p) {
         '</button>'
       : '';
 
+    // Visibility pill — click to change (product owner / admin only)
+    const vis     = getTaskVisibility(task);
+    const visMeta = TASK_VISIBILITY[vis];
+    const canSetVis = canSetTaskVisibility(p);
+    const visPill = '<span ' + (canSetVis
+        ? 'onclick="cycleTaskVisibility(\'' + p.id + '\',\'' + task.id + '\')" title="Click to change visibility" style="cursor:pointer;"'
+        : 'title="Visibility: ' + visMeta.label + '"') +
+      ' style="font-size:9px;font-weight:700;letter-spacing:.04em;color:' + visMeta.color +
+      ';background:' + visMeta.color + '15;padding:1px 6px;border-radius:8px;' + (canSetVis ? 'cursor:pointer;' : '') + '">' +
+      visMeta.label.toUpperCase() + '</span>';
+
+    // Acknowledgement badge — surfaces what the GAS email links already write
+    const ack = task.acknowledgement;
+    const ackBadge = ack
+      ? '<span title="' + (ack.acknowledgedBy || '') + ' on ' +
+          (ack.acknowledgedAt ? new Date(ack.acknowledgedAt).toLocaleDateString('en-GB',{day:'numeric',month:'short'}) : '') + '" ' +
+          'style="font-size:9px;font-weight:700;letter-spacing:.04em;padding:1px 6px;border-radius:8px;' +
+          (ack.type === 'needs_more_time'
+            ? 'color:#D97706;background:#D9770615;">MORE TIME REQUESTED'
+            : 'color:#16A34A;background:#16A34A15;">ACKNOWLEDGED') +
+        '</span>' +
+        (canSetVis ? '<button onclick="clearTaskAck(\'' + p.id + '\',\'' + task.id + '\')" title="Clear acknowledgement" ' +
+          'style="background:none;border:none;cursor:pointer;color:#9CA3AF;font-size:11px;padding:0 2px;">&times;</button>' : '')
+      : '';
+
     // Spin-out link if task was previously spun out
     const spinLink = task.spunOutTo
       ? '<div style="font-size:10px;color:var(--blue);margin-top:4px;">→ Spun out: ' + (task.spunOutName || task.spunOutTo) + '</div>'
       : '';
-
-    // ── TASK VISIBILITY BADGE + CONTROL ────────────────────────────────────
-    // Only the product owner and admins can change task visibility.
-    const userKey2   = sanitiseEmail(currentUser.email);
-    const canSetVis  = currentRole === 'admin' || isSuperAdmin || p.ownerId === userKey2;
-    const visVal     = task.visibility || 'public';
-    const visLabel   = visVal === 'private' ? '[ Private ]' : visVal === 'restricted' ? '[ Restricted ]' : null;
-    // Only show the badge when visibility is non-default (don't clutter every row)
-    // Use 2D line-art SVG icons — no emoji
-    const visIconSvg = visVal === 'private'
-      ? '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:middle;margin-right:3px;"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg>'
-      : '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:middle;margin-right:3px;"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87"/><path d="M16 3.13a4 4 0 010 7.75"/></svg>';
-    const visBadge = visLabel && !canSetVis
-      ? '<div style="font-size:10px;color:#6B7280;background:#F3F3F2;border:1px solid var(--border);border-radius:4px;padding:1px 6px;display:inline-flex;align-items:center;margin-top:3px;">' + visIconSvg + visLabel + '</div>'
-      : '';
-    const visControl = canSetVis
-      ? '<div style="margin-top:6px;display:flex;align-items:center;gap:6px;">' +
-          '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="#9CA3AF" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg>' +
-          '<select style="font-size:10px;border:1px solid var(--border);border-radius:4px;padding:2px 4px;background:#fff;font-family:Poppins,sans-serif;color:var(--text-mid);" ' +
-            'onchange="saveTaskVisibility(\'' + p.id + '\',\'' + task.id + '\',this.value)">' +
-            '<option value="public"'     + (visVal==='public'     ? ' selected' : '') + '>[ Public ]</option>' +
-            '<option value="private"'    + (visVal==='private'    ? ' selected' : '') + '>[ Private ]</option>' +
-            '<option value="restricted"' + (visVal==='restricted' ? ' selected' : '') + '>[ Restricted ]</option>' +
-          '</select>' +
-          (visVal === 'restricted'
-            ? '<input style="font-size:10px;border:1px solid var(--border);border-radius:4px;padding:2px 5px;flex:1;font-family:Poppins,sans-serif;" ' +
-                'placeholder="allowed emails, comma-separated" ' +
-                'value="' + (Array.isArray(task.visibleTo) ? task.visibleTo.join(', ') : '') + '" ' +
-                'onblur="saveTaskVisibleTo(\'' + p.id + '\',\'' + task.id + '\',this.value)"/>'
-            : '') +
-        '</div>'
-      : visBadge;
-    // ────────────────────────────────────────────────────────────────────────
 
     return '<div class="pillar-detail-row' + (isBlocked ? ' pillar-row-blocked' : '') + '">' +
       '<div class="pillar-detail-num">' + (i + 1) + '</div>' +
@@ -3133,9 +3856,10 @@ function buildPillarDetail(p) {
         '<div class="pillar-detail-meta">' +
           ownerDisplay +
           deadlineChip +
+          visPill +
+          ackBadge +
         '</div>' +
-        blockedHint + spinLink + ackBadge +
-        visControl +
+        blockedHint + spinLink +
       '</div>' +
       '<div style="display:flex;align-items:center;gap:4px;">' +
         statusEl + reassignBtn + spinOutBtn +
@@ -3153,69 +3877,6 @@ function buildPillarDetail(p) {
     '<div id="modal-reassign-panel" style="padding:0;"></div>' +
     '<div class="form-actions">' + addTaskBtn + editBtn + '<button class="btn-outline" onclick="closeProductModal()">Close</button></div>';
 }
-
-/* ══ TASK VISIBILITY — LIVE SAVE ════════════════════════════
-   Critical confidentiality feature.
-   When a task is set to 'private' or 'restricted', it must be
-   immediately and completely expunged from every other user's
-   view — calendar, tracker, My Actions, dashboard, workload.
-   We achieve this by:
-     1. Persisting the new visibility to Firebase immediately.
-     2. Updating all in-memory caches atomically.
-     3. Force-refreshing the active view so it re-runs the
-        canViewTask() gate and hides the task without a reload.
-════════════════════════════════════════════════════════════ */
-window.saveTaskVisibility = async (productId, taskId, visibility) => {
-  try {
-    // 1. Persist to Firebase — source of truth for all other sessions
-    await set(ref(db, 'products/' + productId + '/tasks/' + taskId + '/visibility'), visibility);
-
-    // 2. Update ALL in-memory caches so the change takes effect
-    //    in this session immediately without waiting for a reload
-    [productListCache, trackerProductsCache, calProductsCache].forEach(cache => {
-      if (cache[productId]?.tasks?.[taskId]) {
-        cache[productId].tasks[taskId].visibility = visibility;
-      }
-    });
-
-    // 3. Refresh the task detail panel (restricted-email input show/hide)
-    const body = document.getElementById('product-detail-body');
-    if (body && productListCache[productId]) {
-      body.innerHTML = buildPillarDetail(productListCache[productId]);
-    }
-
-    // 4. Force-refresh calendar and tracker caches so private tasks
-    //    vanish from the Gantt/month view in the current session.
-    //    (Other users' sessions are protected at read time via canViewTask.)
-    if (visibility === 'private' || visibility === 'restricted') {
-      // Invalidate calendar cache for this product so next draw re-filters
-      if (calProductsCache[productId]?.tasks?.[taskId]) {
-        calProductsCache[productId].tasks[taskId].visibility = visibility;
-      }
-      // If calendar is the active view, redraw immediately
-      if (currentView === 'calendar') {
-        if (calViewMode === 'gantt') drawGantt();
-        else { drawCalendar(); drawMilestoneList(); }
-      }
-    }
-
-    const visLabels = { public: 'Public', private: 'Private', restricted: 'Restricted' };
-    showToast('Task visibility set to ' + (visLabels[visibility] || visibility) + '.', 'success');
-  } catch(e) { showToast('Failed: ' + e.message, 'error'); }
-};
-
-window.saveTaskVisibleTo = async (productId, taskId, raw) => {
-  const emails = raw.split(',').map(e => e.trim().toLowerCase()).filter(Boolean);
-  try {
-    await set(ref(db, 'products/' + productId + '/tasks/' + taskId + '/visibleTo'), emails);
-    // Update all in-memory caches atomically
-    [productListCache, trackerProductsCache, calProductsCache].forEach(cache => {
-      if (cache[productId]?.tasks?.[taskId]) cache[productId].tasks[taskId].visibleTo = emails;
-    });
-    showToast('Allowed viewers updated.', 'success');
-  } catch(e) { showToast('Failed: ' + e.message, 'error'); }
-};
-/* ────────────────────────────────────────────────────────── */
 
 /* ══ TASK REASSIGNMENT ══════════════════════════════════════ */
 window.showReassignTask = async (productId, taskId) => {
@@ -3243,19 +3904,10 @@ window.showReassignTask = async (productId, taskId) => {
 
   const curDept = task.ownerDept || getDepts()[0] || '';
 
-  // Initialize the array from task.owners or fallback to task.owner
-  window._raOwners = task.owners && task.owners.length > 0 ? JSON.parse(JSON.stringify(task.owners)) : (task.owner ? [{dept: task.ownerDept || '', individual: task.owner}] : []);
-
   panel.innerHTML =
     '<div style="background:#F8F8F7;border-top:1px solid var(--border);padding:14px 16px;margin-top:8px;">' +
       '<div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:var(--text-muted);margin-bottom:10px;">Reassign: ' + (task.title || 'Task') + '</div>' +
-      
-      '<div style="margin-bottom:12px;">' +
-        '<label class="form-label" style="font-size:10px;">Assigned Owners <span style="font-weight:normal;color:var(--text-muted);">(First is Primary, others are Supporting)</span></label>' +
-        '<div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:6px;" id="ra-owner-chips">' + window.renderRaOwnerChips() + '</div>' +
-      '</div>' +
-
-      '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end;margin-bottom:12px;">' +
+      '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end;">' +
         '<div style="flex:1;min-width:130px;">' +
           '<label class="form-label" style="font-size:10px;">Department</label>' +
           '<select id="ra-dept" class="select-field" style="width:100%;" onchange="updateReassignIndividuals()">' +
@@ -3265,20 +3917,12 @@ window.showReassignTask = async (productId, taskId) => {
         '<div style="flex:1;min-width:140px;">' +
           '<label class="form-label" style="font-size:10px;">Individual</label>' +
           '<select id="ra-individual" class="select-field" style="width:100%;">' +
-            buildOwnerIndividualOptions(curDept, '') +
+            buildOwnerIndividualOptions(curDept, task.ownerEmail || '') +
           '</select>' +
         '</div>' +
-        '<button class="btn-outline" style="font-size:11px;padding:7px 10px;white-space:nowrap;" onclick="addNewRaOwnerChip()">+ Add Owner</button>' +
-      '</div>' +
-
-      '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end;">' +
         '<div style="flex:1;min-width:160px;">' +
           '<label class="form-label" style="font-size:10px;">Reason (optional)</label>' +
           '<input id="ra-reason" class="input-field" placeholder="e.g. Capacity change" style="width:100%;"/>' +
-        '</div>' +
-        '<div style="flex:1;min-width:180px;">' +
-          '<label class="form-label" style="font-size:10px;">CC Emails (comma separated)</label>' +
-          '<input id="ra-cc" class="input-field" placeholder="email1@mixtafrica.com..." style="width:100%;"/>' +
         '</div>' +
         '<button class="btn-primary" style="font-size:12px;padding:8px 14px;white-space:nowrap;" onclick="confirmReassign(\'' + productId + '\',\'' + taskId + '\')">' +
           'Confirm reassign' +
@@ -3289,36 +3933,6 @@ window.showReassignTask = async (productId, taskId) => {
   panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 };
 
-window.renderRaOwnerChips = () => {
-  if (!window._raOwners || window._raOwners.length === 0) return '<span style="font-size:11px;color:#9CA3AF;">No owners assigned</span>';
-  return window._raOwners.map((o, i) =>
-    '<span style="display:inline-flex;align-items:center;gap:4px;background:' + (i===0 ? '#FEF2F2' : '#EFF6FF') + ';color:' + (i===0 ? '#C0282D' : '#2563EB') + ';border:1px solid ' + (i===0 ? '#FECACA' : '#BFDBFE') + ';border-radius:20px;padding:2px 8px;font-size:11px;font-weight:500;">' +
-      (i===0 ? 'Primary: ' : 'Support: ') + (o.individual || o.dept) + (o.dept && o.individual !== o.dept ? ' (' + o.dept + ')' : '') +
-      '<button onclick="removeRaOwner(' + i + ')" style="background:none;border:none;cursor:pointer;color:inherit;font-size:12px;padding:0 1px;margin-left:2px;">×</button>' +
-    '</span>'
-  ).join('');
-};
-
-window.addNewRaOwnerChip = () => {
-  const dept = document.getElementById('ra-dept')?.value || '';
-  const ind  = document.getElementById('ra-individual')?.value || dept;
-  if (!ind) return;
-  if (!window._raOwners) window._raOwners = [];
-  if (window._raOwners.some(o => o.individual === ind && o.dept === dept)) {
-    showToast('Already added', 'info'); return;
-  }
-  window._raOwners.push({ dept, individual: ind });
-  const chips = document.getElementById('ra-owner-chips');
-  if (chips) chips.innerHTML = window.renderRaOwnerChips();
-};
-
-window.removeRaOwner = (i) => {
-  if (!window._raOwners) return;
-  window._raOwners.splice(i, 1);
-  const chips = document.getElementById('ra-owner-chips');
-  if (chips) chips.innerHTML = window.renderRaOwnerChips();
-};
-
 window.updateReassignIndividuals = () => {
   const dept = document.getElementById('ra-dept')?.value || '';
   const sel  = document.getElementById('ra-individual');
@@ -3326,107 +3940,70 @@ window.updateReassignIndividuals = () => {
 };
 
 window.confirmReassign = async (productId, taskId) => {
-  const reason     = document.getElementById('ra-reason')?.value.trim() || '';
-  const ccRaw      = document.getElementById('ra-cc')?.value || '';
-  const ccEmails   = ccRaw.split(',').map(e => e.trim()).filter(Boolean);
-  
-  if (!window._raOwners || window._raOwners.length === 0) {
-    showToast('Add at least one owner', 'error'); return;
-  }
-
-  const primary = window._raOwners[0];
-  const individual = primary.individual;
-  const dept = primary.dept;
+  const dept      = document.getElementById('ra-dept')?.value || '';
+  const sel       = document.getElementById('ra-individual');
+  const toEmail   = sel?.value || '';
+  const toName    = sel?.selectedOptions?.[0]?.dataset?.name || toEmail || dept;
+  const reason    = document.getElementById('ra-reason')?.value.trim() || '';
+  if (!toEmail && !dept) { showToast('Select an individual or department', 'error'); return; }
 
   const prod  = productListCache[productId];
   const tasks = getProductTasks(prod);
   const task  = tasks.find(t => t.id === taskId);
   if (!task) return;
 
-  const prevOwner = task.owner || 'Unassigned';
+  const prevOwners = (task.owners && task.owners.length > 0)
+    ? task.owners
+    : (task.owner ? [{ dept: task.ownerDept || '', email: task.ownerEmail || '', nameCache: task.owner }] : []);
+  const prevLabel = prevOwners.length ? prevOwners.map(o => ownerLabel(o)).join(', ') : 'Unassigned';
+
   const now       = Date.now();
   const histEntry = {
-    from:      prevOwner,
-    to:        individual,
+    from:      prevLabel,
+    fromEmail: prevOwners.map(o => o.email || '').filter(Boolean).join(','),
+    to:        toName,
+    toEmail:   toEmail,
     dept:      dept,
-    owners:    window._raOwners,
     reason:    reason,
-    by:        currentUser.displayName || currentUser.email,
+    by:        currentPreferredName || currentUser.displayName || currentUser.email,
     byEmail:   currentUser.email,
     at:        now,
   };
 
-  // Write new owner array + legacy fallbacks for dashboards
-  await set(ref(db, 'products/' + productId + '/tasks/' + taskId + '/owners'), window._raOwners);
-  await set(ref(db, 'products/' + productId + '/tasks/' + taskId + '/owner'), individual);
+  // Reassignment replaces the owner set — email is the canonical field
+  const newOwners = [{ dept, email: toEmail, nameCache: toName }];
+  await set(ref(db, 'products/' + productId + '/tasks/' + taskId + '/owners'), newOwners);
+  await set(ref(db, 'products/' + productId + '/tasks/' + taskId + '/owner'), toName);
+  await set(ref(db, 'products/' + productId + '/tasks/' + taskId + '/ownerEmail'), toEmail);
   await set(ref(db, 'products/' + productId + '/tasks/' + taskId + '/ownerDept'), dept);
   const histId = 'ra_' + now;
   await set(ref(db, 'products/' + productId + '/tasks/' + taskId + '/assigneeHistory/' + histId), histEntry);
 
   // Also log as a comment for visibility
   const commentId = 'c_ra_' + now;
-  const supportingStr = window._raOwners.length > 1 ? ' (with supporting departments)' : '';
-  const commentText = 'Task reassigned from ' + prevOwner + ' to ' + individual + supportingStr +
+  const commentText = 'Task reassigned from ' + prevLabel + ' to ' + toName +
     (dept ? ' (' + dept + ')' : '') + (reason ? ' — ' + reason : '') +
-    '. By ' + (currentUser.displayName || currentUser.email) + '.';
+    '. By ' + (currentPreferredName || currentUser.displayName || currentUser.email) + '.';
   await set(ref(db, 'products/' + productId + '/comments/' + commentId), {
     id: commentId, text: commentText,
     userEmail: currentUser.email,
-    userName: currentUser.displayName || currentUser.email.split('@')[0],
+    userName: currentPreferredName || currentUser.displayName || currentUser.email.split('@')[0],
     type: 'reassignment', createdAt: now,
   });
 
-  // Update local cache for both new tasks and legacy pillars
-  if (productListCache[productId]) {
-    if (productListCache[productId].tasks && productListCache[productId].tasks[taskId]) {
-      productListCache[productId].tasks[taskId].owners = window._raOwners;
-      productListCache[productId].tasks[taskId].owner = individual;
-      productListCache[productId].tasks[taskId].ownerDept = dept;
-    } else if (productListCache[productId].pillars && productListCache[productId].pillars[taskId]) {
-      productListCache[productId].pillars[taskId].owners = window._raOwners;
-      productListCache[productId].pillars[taskId].owner = individual;
-      productListCache[productId].pillars[taskId].ownerDept = dept;
-    }
+  // Update local cache
+  if (productListCache[productId]?.tasks?.[taskId]) {
+    const c = productListCache[productId].tasks[taskId];
+    c.owners = newOwners; c.owner = toName; c.ownerEmail = toEmail; c.ownerDept = dept;
   }
 
-  showToast('Task reassigned to ' + individual + (window._raOwners.length > 1 ? ' + support' : ''), 'success');
+  showToast('Task reassigned to ' + individual, 'success');
   document.getElementById('modal-reassign-panel').innerHTML = '';
-  
   // Refresh the tasks tab
   const body = document.getElementById('product-detail-body');
   if (body) body.innerHTML = buildPillarDetail(productListCache[productId]);
-
-  // Automatically pop open the email composer to notify the new owner and CCs
-  const allOwnerEmails = [];
-  window._raOwners.forEach(o => {
-    const match = STAKEHOLDERS.find(s => s.name === o.individual || s.dept === o.individual);
-    if (match) allOwnerEmails.push(match.email);
-  });
-  
-  const toEmails = [...new Set(allOwnerEmails)];
-  const supportingText = window._raOwners.length > 1 
-    ? `\n\nSupporting Departments/Individuals: ${window._raOwners.slice(1).map(o => o.individual).join(', ')}`
-    : '';
-  
-  await openEmailComposer({
-    type: 'reassignment',
-    subject: `Task Reassigned: ${task.title || 'Task'} — ${prod.name}`,
-    toEmails: toEmails,
-    ccEmails: ccEmails,
-    productId: productId,
-    draftPrompt: `Write a brief, professional email to ${individual} (Primary Owner) notifying them that they have been reassigned ownership of the task "${task.title}" for the product "${prod.name}".${supportingText}\n\nReason provided: ${reason || 'Capacity/Workload balancing'}\n\nAsk them to review the task on the NPD Hub and update the status when possible.`,
-    onSend: async ({ subject, body, toEmails, ccEmails, testMode }) => {
-      const threadId = prod.gmailThreadId;
-      if (threadId) {
-        await callGAS('replyToThread', { threadId, emailBody: body, subject, toEmails, ccEmails, testMode, productName: prod.name });
-      } else {
-        await callGAS('sendComposedEmail', { subject, body, toEmails, ccEmails, testMode, productName: prod.name });
-      }
-      showToast('Reassignment notification sent to ' + individual, 'success');
-    }
-  });
 };
-  
+
 /* ══ TASK SPIN-OUT ══════════════════════════════════════════ */
 window.spinOutTask = (productId, taskId, taskTitle) => {
   const overlay = document.createElement('div');
@@ -3502,6 +4079,124 @@ window.confirmSpinOut = async (sourceProductId, sourceTaskId) => {
   showToast(name + ' created as a ' + type + '.', 'success');
   loadProductList();
 };
+
+async function loadDashboardEmailLog() {
+  const el = document.getElementById('dash-emaillog');
+  if (!el) return;
+  try {
+    const [logSnap, prodSnap] = await Promise.all([
+      get(ref(db, 'emailLog')),
+      get(ref(db, 'products')),
+    ]);
+    if (!logSnap.exists()) {
+      el.innerHTML = '<div style="padding:16px 18px;font-size:12px;color:#9CA3AF;">No emails sent yet.</div>';
+      return;
+    }
+    const products = prodSnap.val() || {};
+    const userKey  = sanitiseEmail(currentUser.email);
+    const all = [];
+    Object.entries(logSnap.val()).forEach(([pid, entries]) => {
+      const prod = products[pid];
+      if (!prod) return;
+      // Only surface items this user can see
+      const visible = currentRole === 'admin' || prod.ownerId === userKey || prod.sharedWith?.[userKey];
+      if (!visible) return;
+      Object.values(entries).forEach(e => all.push(Object.assign({ productName: prod.name }, e)));
+    });
+    if (all.length === 0) {
+      el.innerHTML = '<div style="padding:16px 18px;font-size:12px;color:#9CA3AF;">No emails sent yet.</div>';
+      return;
+    }
+    all.sort((a, b) => b.sentAt - a.sentAt);
+    const typeLabel = { deadline_alert:'Deadline alert', reminder:'Reminder', onboarding:'Onboarding',
+                        report:'Progress report', handover:'Handover', delayed:'Delay notice', composed:'Email' };
+    el.innerHTML = all.slice(0, 8).map(l => {
+      const auto = l.trigger === 'automated';
+      const clr  = auto ? '#2563EB' : '#16A34A';
+      const when = new Date(l.sentAt).toLocaleDateString('en-GB',
+        { day:'numeric', month:'short', hour:'2-digit', minute:'2-digit' });
+      const to = (l.to || []).join(', ');
+      return '<div style="display:flex;gap:10px;padding:10px 18px;border-bottom:1px solid var(--border);">' +
+        '<div style="width:7px;height:7px;border-radius:50%;background:' + clr + ';flex-shrink:0;margin-top:5px;"></div>' +
+        '<div style="flex:1;min-width:0;">' +
+          '<div style="font-size:12px;font-weight:600;color:var(--text);">' +
+            (typeLabel[l.type] || 'Email') +
+            ' <span style="font-weight:400;color:#9CA3AF;">· ' + (l.productName || '') + '</span></div>' +
+          (to ? '<div style="font-size:11px;color:#6B7280;margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">To: ' + to + '</div>' : '') +
+        '</div>' +
+        '<div style="text-align:right;flex-shrink:0;">' +
+          '<div style="font-size:10px;font-weight:600;color:' + clr + ';">' + (auto ? 'AUTO' : 'MANUAL') + '</div>' +
+          '<div style="font-size:10px;color:#9CA3AF;">' + when + '</div>' +
+        '</div>' +
+      '</div>';
+    }).join('');
+  } catch(e) {
+    el.innerHTML = '<div style="padding:16px 18px;font-size:12px;color:#9CA3AF;">Could not load the email log.</div>';
+  }
+}
+
+/* ══ EMAIL VISIBILITY LOG ══════════════════════════════════
+   Every send is recorded so the owner can see what left the system
+   without being CC'd on everything. GAS logs automated sends; this
+   logs user-initiated ones. ══════════════════════════════════════ */
+async function logEmailSent(productId, record) {
+  if (!productId) return;
+  try {
+    const id = 'em_' + Date.now() + '_' + Math.floor(Math.random() * 1000);
+    await set(ref(db, 'emailLog/' + productId + '/' + id), Object.assign({
+      id, sentAt: Date.now(),
+      sentBy: currentPreferredName || currentUser.displayName || currentUser.email,
+      sentByEmail: currentUser.email,
+      trigger: 'manual',
+    }, record));
+  } catch(e) { console.warn('logEmailSent failed', e); }
+}
+
+function buildCommsTab(p) {
+  return '<div id="comms-list" style="min-height:80px;padding:4px 0;">' +
+      '<div class="loading-row" style="padding:16px 0;font-size:12px;">Loading sent emails...</div>' +
+    '</div>';
+}
+
+async function loadEmailLog(productId) {
+  const el = document.getElementById('comms-list');
+  if (!el) return;
+  try {
+    const snap = await get(ref(db, 'emailLog/' + productId));
+    if (!snap.exists()) {
+      el.innerHTML = '<div style="text-align:center;padding:28px 0;font-size:12px;color:#9CA3AF;">No emails sent for this item yet.</div>';
+      return;
+    }
+    const logs = Object.values(snap.val()).sort((a,b) => b.sentAt - a.sentAt);
+    const typeLabel = { deadline_alert:'Deadline alert', reminder:'Reminder', onboarding:'Onboarding',
+                        report:'Progress report', handover:'Handover', delayed:'Delay notice', composed:'Email' };
+    el.innerHTML = logs.map(l => {
+      const auto = l.trigger === 'automated';
+      const clr  = auto ? '#2563EB' : '#16A34A';
+      const when = new Date(l.sentAt).toLocaleDateString('en-GB',
+        { day:'numeric', month:'short', hour:'2-digit', minute:'2-digit' });
+      const to = (l.to || []).join(', ');
+      return '<div style="display:flex;gap:10px;padding:10px 0;border-bottom:1px solid #F3F3F2;">' +
+        '<div style="width:7px;height:7px;border-radius:50%;background:' + clr + ';flex-shrink:0;margin-top:6px;"></div>' +
+        '<div style="flex:1;min-width:0;">' +
+          '<div style="display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;">' +
+            '<span style="font-size:12px;font-weight:600;color:var(--text);">' +
+              (typeLabel[l.type] || l.type || 'Email') + '</span>' +
+            '<span style="font-size:10px;font-weight:600;color:' + clr + ';background:' + clr + '15;padding:1px 6px;border-radius:8px;">' +
+              (auto ? 'AUTOMATED' : 'MANUAL') + '</span>' +
+            '<span style="font-size:10px;color:#9CA3AF;">' + when + '</span>' +
+          '</div>' +
+          (l.subject ? '<div style="font-size:11px;color:var(--text);margin-top:2px;">' + l.subject + '</div>' : '') +
+          (to ? '<div style="font-size:11px;color:#6B7280;margin-top:1px;">To: ' + to + '</div>' : '') +
+          ((l.cc && l.cc.length) ? '<div style="font-size:10px;color:#9CA3AF;">CC: ' + l.cc.join(', ') + '</div>' : '') +
+          '<div style="font-size:10px;color:#9CA3AF;margin-top:2px;">Sent by ' + (l.sentBy || 'Unknown') + '</div>' +
+        '</div>' +
+      '</div>';
+    }).join('');
+  } catch(e) {
+    el.innerHTML = '<div style="font-size:12px;color:#9CA3AF;padding:12px 0;">Could not load the email log.</div>';
+  }
+}
 
 /* ══ COMMENTS TAB ══════════════════════════════════════════ */
 function buildCommentsTab(p) {
@@ -3833,24 +4528,6 @@ window.calDayClick = (day) => {
 async function loadCalendarData() {
   const snap = await get(ref(db, 'products'));
   calProductsCache = snap.val() || {};
-
-  // ── ACCESS FILTER ──────────────────────────────────────────────────────────
-  // Apply the same ownership/sharing rules used by every other view.
-  // Without this, every signed-in user sees every other user's tasks on the
-  // calendar regardless of department or sharing settings.
-  const userKey = sanitiseEmail(currentUser.email);
-  const calAccessible = {};
-  Object.entries(calProductsCache).forEach(([id, p]) => {
-    if (p.status === 'archived') return;
-    if (currentRole === 'admin') { calAccessible[id] = p; return; }
-    if (p.ownerId === userKey)           { calAccessible[id] = p; return; }
-    if (p.sharedWith?.[userKey])         { calAccessible[id] = p; return; }
-    // dept-lead visibility (mirrors loadDashboardStats)
-    if (window.currentDeptRole === 'lead') { calAccessible[id] = p; return; }
-  });
-  calProductsCache = calAccessible;
-  // ───────────────────────────────────────────────────────────────────────────
-
   const active = Object.values(calProductsCache).filter(p => p.status !== 'archived');
   const sel = document.getElementById('cal-product-filter');
   if (sel) active.forEach(p => { const o=document.createElement('option'); o.value=p.id; o.textContent=p.name; sel.appendChild(o); });
@@ -3860,40 +4537,12 @@ async function loadCalendarData() {
 function getCalMilestones() {
   const prods = Object.values(calProductsCache).filter(p => p.status !== 'archived');
   const filtered = calSelectedProduct === 'all' ? prods : prods.filter(p => p.id === calSelectedProduct);
-  const userKey  = sanitiseEmail(currentUser.email);
   const out = [];
   filtered.forEach(prod => {
     // Use unified task system — handles new tasks{} and legacy pillars{}
     const tasks = getProductTasks(prod);
     tasks.forEach(task => {
       if (!task.deadline) return;
-
-      // ── TASK-LEVEL VISIBILITY GATE ──────────────────────────────────────────
-      // Each task can carry a `visibility` field:
-      //   'public'  (default) — visible to everyone who can see this product
-      //   'private' — visible only to the task's assigned owners and the product owner
-      //   'restricted' — visible only to emails listed in task.visibleTo[]
-      //
-      // Admins and super-admins bypass all task-level restrictions.
-      if (task.visibility && task.visibility !== 'public') {
-        if (currentRole !== 'admin' && !isSuperAdmin) {
-          const isProductOwner = prod.ownerId === userKey;
-          const isTaskOwner    = task.owners
-            ? task.owners.some(o => sanitiseEmail(o.individual || '') === userKey || sanitiseEmail(o.email || '') === userKey)
-            : (sanitiseEmail(task.owner || '') === userKey ||
-               sanitiseEmail(task.ownerEmail || '') === userKey);
-          const isInAllowlist  = Array.isArray(task.visibleTo) &&
-            task.visibleTo.some(e => sanitiseEmail(e) === userKey);
-
-          if (task.visibility === 'private') {
-            if (!isProductOwner && !isTaskOwner) return; // skip
-          } else if (task.visibility === 'restricted') {
-            if (!isProductOwner && !isTaskOwner && !isInAllowlist) return; // skip
-          }
-        }
-      }
-      // ────────────────────────────────────────────────────────────────────────
-
       const effective = resolveTaskStatus(task);
       out.push({
         date:           task.deadline,
@@ -4007,7 +4656,7 @@ function renderTracker(el) {
       </div>
       <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
         <select id="tracker-product-sel" class="select-field" onchange="trackerSelectProduct()">
-          <option value="">Select a product or project...</option>
+          <option value="">Select a product...</option>
         </select>
         <div class="cal-view-toggle">
           <button class="cal-view-btn active" id="tv-btn-table"  onclick="setTrackerView('table')">Table</button>
@@ -4031,45 +4680,24 @@ window.setTrackerView = (mode) => {
   const body = document.getElementById('tracker-body');
   if (body) body.innerHTML = '<div class="loading-row" style="padding:16px;">Loading...</div>';
   setTimeout(() => {
-            if (mode === 'table')  renderTrackerTable(prod, window._trackerFilter);
-            if (mode === 'kanban') renderKanban(prod);
-            if (mode === 'gantt')  renderTrackerGantt(prod);
-          }, 30);
+    if (mode === 'table')  renderTrackerTable(prod, null);
+    if (mode === 'kanban') renderKanban(prod);
+    if (mode === 'gantt')  renderTrackerGantt(prod);
+  }, 30);
 };
 
 async function loadTrackerProducts() {
   const snap = await get(ref(db, 'products'));
-  const all = snap.val() || {};
-
-  // Apply the same product-level access filter used by every other view.
-  // Non-admin users only see products they own or have been explicitly shared on.
-  const userKey = sanitiseEmail(currentUser.email);
-  trackerProductsCache = {};
-  Object.entries(all).forEach(([id, p]) => {
-    if (p.status === 'archived') return;
-    if (currentRole === 'admin') { trackerProductsCache[id] = p; return; }
-    if (p.ownerId === userKey)           { trackerProductsCache[id] = p; return; }
-    if (p.sharedWith?.[userKey])         { trackerProductsCache[id] = p; return; }
-    if (window.currentDeptRole === 'lead') { trackerProductsCache[id] = p; return; }
-  });
-
+  trackerProductsCache = snap.val() || {};
   const active = Object.values(trackerProductsCache).filter(p => p.status !== 'archived');
   const sel = document.getElementById('tracker-product-sel');
   if (!sel) return;
   active.forEach(p => { const o=document.createElement('option'); o.value=p.id; o.textContent=p.name; sel.appendChild(o); });
   if (active.length > 0) {
-    // Check if we came from a specific product click
-    let targetId = active[0].id;
-    if (window._trackerTargetProduct && active.find(p => p.id === window._trackerTargetProduct)) {
-      targetId = window._trackerTargetProduct;
-    }
-    
-    sel.value = targetId;
-    trackerSelectedProduct = targetId;
-    subscribeToProduct(targetId);
-    
-    // Clear the target so it doesn't stick permanently
-    window._trackerTargetProduct = null;
+    sel.value = active[0].id;
+    trackerSelectedProduct = active[0].id;
+    subscribeToProduct(active[0].id);
+    window._trackerFilter = null;
   } else {
     document.getElementById('tracker-body').innerHTML =
       '<div class="panel"><div class="empty-state"><span class="empty-icon" style="color:var(--text-muted);"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 4h2a2 2 0 012 2v14a2 2 0 01-2 2H6a2 2 0 01-2-2V6a2 2 0 012-2h2"/><rect x="8" y="2" width="8" height="4" rx="1"/></svg></span><h3>No products yet</h3><p>Create a product first.</p></div></div>';
@@ -4084,11 +4712,11 @@ function subscribeToProduct(productId) {
     trackerProductsCache[productId] = prod;
     productListCache[productId]     = prod;
     // Only re-render if tracker is visible and this product is selected
-            if (currentView === 'tracker' && trackerSelectedProduct === productId) {
-              if (trackerViewMode === 'kanban') renderKanban(prod);
-              else if (trackerViewMode === 'gantt') renderTrackerGantt(prod);
-              else renderTrackerTable(prod, window._trackerFilter);
-            }
+    if (currentView === 'tracker' && trackerSelectedProduct === productId) {
+      if (trackerViewMode === 'kanban') renderKanban(prod);
+      else if (trackerViewMode === 'gantt') renderTrackerGantt(prod);
+      else renderTrackerTable(prod, null);
+    }
   }, { onlyOnce: false });
   registerListener('tracker_product', unsub);
 }
@@ -4103,8 +4731,8 @@ window.trackerSelectProduct = () => {
 function renderTrackerTable(prod, filter) {
   const body = document.getElementById('tracker-body');
   if (!body) return;
-  // Use unified task system
-  const allTasks  = getProductTasks(prod);
+  // Use unified task system — privacy-gated
+  const allTasks  = getProductTasks(prod).filter(t => canViewTask(t, prod));
   const total     = allTasks.length || 1;
   const complete  = allTasks.filter(t => t.status === 'complete').length;
   const delayed   = allTasks.filter(t => t.status === 'delayed').length;
@@ -4115,7 +4743,7 @@ function renderTrackerTable(prod, filter) {
   }).length;
   const locked    = isProductLocked(prod);
 
-  const rows = allTasks.filter(pl => canViewTask(pl, prod)).map((pl, i) => {
+  const rows = allTasks.map((pl, i) => {
     // pl is a task object from getProductTasks()
     const pd       = pl;
     const rawSt    = pl.status || 'on-track';
@@ -4135,12 +4763,6 @@ function renderTrackerTable(prod, filter) {
       ? `<div style="font-size:11px;color:var(--amber);margin-top:3px;display:inline-flex;align-items:center;gap:4px;">
           ${ICON.link} Blocked by: ${blockedBy.map(pid => allTasks.find(t => t.id === pid)?.title || pid).join(', ')}
          </div>`
-      : '';
-
-    const ackBadge = pl.acknowledgement 
-      ? (pl.acknowledgement.type === 'needs_more_time' 
-          ? `<div style="font-size:10px;font-weight:700;color:#C0282D;background:#FEF2F2;border:1px dashed #FECACA;padding:2px 6px;border-radius:4px;display:inline-block;margin-top:4px;cursor:pointer;" onclick="clearTaskAck('${prod.id}', '${pl.id}')" title="Click to dismiss">🚨 Requested more time ✕</div>` 
-          : `<div style="font-size:10px;font-weight:700;color:#16A34A;background:#F0FDF4;border:1px dashed #BBF7D0;padding:2px 6px;border-radius:4px;display:inline-block;margin-top:4px;cursor:pointer;" onclick="clearTaskAck('${prod.id}', '${pl.id}')" title="Click to dismiss">✅ Acknowledged ✕</div>`)
       : '';
 
     const taskLocked = locked && !isSuperAdmin && currentRole !== 'admin';
@@ -4209,7 +4831,6 @@ function renderTrackerTable(prod, filter) {
         <div class="tracker-pillar-name">${taskLocked ? ICON.lock + ' ' : ''}${pl.title||pl.name||'Untitled'}</div>
         <div class="tracker-pillar-owner">${pl.owner||''}</div>
         ${blockedLabel}
-        ${ackBadge}
       </td>
       <td class="tracker-deadline">${deadlinePill}</td>
       <td class="tracker-status">${statusCtrl}</td>
@@ -4266,31 +4887,6 @@ function renderTrackerTable(prod, filter) {
   }
 }
 
-window.clearTaskAck = async (productId, taskId) => {
-  try {
-    const prod = productListCache[productId] || trackerProductsCache[productId];
-    if (prod?.tasks?.[taskId]) {
-      await set(ref(db, `products/${productId}/tasks/${taskId}/acknowledgement`), null);
-      prod.tasks[taskId].acknowledgement = null;
-    } else {
-      await set(ref(db, `products/${productId}/pillars/${taskId}/acknowledgement`), null);
-      if (prod?.pillars?.[taskId]) prod.pillars[taskId].acknowledgement = null;
-    }
-    showToast('Alert cleared.', 'success');
-    refreshActiveView(productId);
-    
-    // Refresh modal if open
-    const modal = document.getElementById('create-product-modal');
-    const titleEl = document.getElementById('modal-title-text');
-    if (modal && modal.style.display !== 'none' && titleEl && titleEl.textContent === prod.name) {
-      const body = document.getElementById('product-detail-body');
-      if (body && body.querySelector('.pillar-detail-list')) {
-        body.innerHTML = buildPillarDetail(prod);
-      }
-    }
-  } catch(e) { showToast('Failed to clear alert: ' + e.message, 'error'); }
-};
-
 window.updatePillarStatus = async (productId, taskId, newStatus) => {
   try {
     const prod  = trackerProductsCache[productId] || productListCache[productId];
@@ -4327,17 +4923,6 @@ window.updatePillarStatus = async (productId, taskId, newStatus) => {
 
     // Re-render whichever view is currently active
     refreshActiveView(productId);
-    
-    // INSTANT MODAL REFRESH: If the product detail modal is open, rebuild it live
-    const modal = document.getElementById('create-product-modal');
-    const titleEl = document.getElementById('modal-title-text');
-    if (modal && modal.style.display !== 'none' && titleEl && titleEl.textContent === prod.name) {
-      const body = document.getElementById('product-detail-body');
-      if (body && body.querySelector('.pillar-detail-list')) {
-        body.innerHTML = buildPillarDetail(prod);
-      }
-    }
-
     // Log to activity feed
     const taskObj  = tasks.find(t => t.id === taskId);
     const taskName = taskObj?.title || taskObj?.name || taskId;
@@ -4438,7 +5023,7 @@ function renderDocuments(el) {
       <div style="display:flex;gap:8px;align-items:center;">
         ${currentRole === 'admin' ? '<button class="btn-outline" onclick="showAddDocFolder()" style="font-size:12px;">+ Add folder</button>' : ''}
         <select id="docs-product-sel" class="select-field" onchange="docsSelectProduct()">
-          <option value="">Select a product or project...</option>
+          <option value="">Select a product...</option>
         </select>
       </div>
     </div>
@@ -4778,6 +5363,22 @@ function renderReports(el) {
     </div>
 
     <div class="panel" style="margin-top:16px;">
+      <div class="panel-header"><span class="panel-title">Task privacy</span></div>
+      <div class="panel-body">
+        <p style="font-size:13px;color:var(--text-mid);line-height:1.7;margin-bottom:14px;">
+          Tasks are <strong>Private by default</strong> — visible only to the product owner and the task's own owners.
+          A task assigned to a department stays visible to that department.
+          Use these to change everything at once${currentRole === 'admin' ? ' (as an admin, this affects all tasks in the hub)' : ' (this affects only tasks you own)'}.
+          Both directions are reversible.
+        </p>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;">
+          <button class="btn-outline" id="bulk-private-btn" style="flex:1;min-width:180px;font-size:12px;" onclick="lockAllTasksToPrivate()">Lock all to Private</button>
+          <button class="btn-outline" id="bulk-dept-btn" style="flex:1;min-width:180px;font-size:12px;" onclick="openAllTasksToDept()">Open all to my Department</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="panel" style="margin-top:16px;">
       <div class="panel-header">
         <span class="panel-title">GCCO read-only dashboard</span>
       </div>
@@ -4992,7 +5593,7 @@ window.generateProgressReport = async () => {
     productId,
     draftPrompt: buildProgressReportPrompt(prod, tasks, pct),
     onSend: async ({ subject, body, toEmails, ccEmails, testMode }) => {
-      await callGAS('sendComposedEmail', {
+      await callGAS('sendComposedEmail', { sentByName: currentPreferredName || currentUser.displayName || currentUser.email.split('@')[0], sentByEmail: currentUser.email,
         subject, body, toEmails, ccEmails, testMode,
         productName: prod.name,
       });
@@ -5229,19 +5830,6 @@ function renderSettings(el) {
       </div>
     </div>
 
-    <div class="panel" style="margin-bottom:16px;">
-      <div class="panel-header"><span class="panel-title">Task privacy</span></div>
-      <div class="panel-body">
-        <p class="settings-hint">
-          ${ICON.lock} New tasks default to Public visibility within the products they belong to. Use this to bulk-lock
-          ${currentRole === 'admin' || isSuperAdmin ? 'every existing task across the entire hub' : 'every existing task in products/projects you own'}
-          to <strong>Private</strong> (visible only to the product owner and each task's own owners) in one shot.
-          You can still reopen any individual task afterward and switch it to Public or Restricted from its visibility control.
-        </p>
-        <button class="btn-danger-sm" id="lock-all-tasks-btn" onclick="lockAllTasksToPrivate()">🔒 Set all my tasks to Private</button>
-      </div>
-    </div>
-
     ${currentRole === 'admin' ? `
     <div class="panel" style="margin-bottom:16px;" id="access-requests-panel">
       <div class="panel-header">
@@ -5336,84 +5924,6 @@ window.removeFromAllowlist = async (key) => {
   loadAllowlist();
 };
 
-/* ── ONE-TIME MIGRATION: bulk-lock existing tasks to Private ──
-   Runs inside the app so `db` / `currentUser` are already in scope
-   (a DevTools console script can't reach the module-scoped db).
-   Non-admins only ever touch products they own; admins/super-admins
-   can sweep every product/project in the hub. ──────────────────── */
-window.lockAllTasksToPrivate = async () => {
-  if (!currentUser) return;
-  const isAdminSweep = currentRole === 'admin' || isSuperAdmin;
-  const scopeLabel = isAdminSweep
-    ? 'EVERY product/project across the whole hub'
-    : 'every product/project you own';
-
-  if (!confirm(
-    `This sets every task in ${scopeLabel} to Private — visible only to the product owner and each task's own owners.\n\n` +
-    `Tasks already set to Public or Restricted will be switched to Private too. You can re-open any task afterward ` +
-    `and change it back individually.\n\nContinue?`
-  )) return;
-
-  const btn = document.getElementById('lock-all-tasks-btn');
-  if (btn) { btn.disabled = true; btn.textContent = 'Locking tasks…'; }
-
-  try {
-    const snap = await get(ref(db, 'products'));
-    const products = snap.val() || {};
-    const userKey = sanitiseEmail(currentUser.email);
-
-    const updates = {};
-    let taskCount = 0, productCount = 0;
-
-    Object.entries(products).forEach(([prodId, prod]) => {
-      const isOwner = prod.ownerId === userKey;
-      if (!isAdminSweep && !isOwner) return; // non-admins: owned products only
-
-      const tasks = prod.tasks || {};
-      const taskIds = Object.keys(tasks);
-      if (taskIds.length === 0) return;
-
-      taskIds.forEach(taskId => {
-        updates[`products/${prodId}/tasks/${taskId}/visibility`] = 'private';
-      });
-      taskCount    += taskIds.length;
-      productCount += 1;
-    });
-
-    if (taskCount === 0) {
-      showToast('No existing tasks found to lock.', 'info');
-    } else {
-      await update(ref(db), updates);
-
-      // Keep every in-memory cache consistent without a page refresh
-      [productListCache, trackerProductsCache, calProductsCache].forEach(cache => {
-        if (!cache) return;
-        Object.entries(cache).forEach(([prodId, p]) => {
-          if (!p || !p.tasks) return;
-          Object.keys(p.tasks).forEach(tid => {
-            if (updates.hasOwnProperty(`products/${prodId}/tasks/${tid}/visibility`)) {
-              p.tasks[tid].visibility = 'private';
-            }
-          });
-        });
-      });
-
-      showToast(`Locked ${taskCount} task${taskCount === 1 ? '' : 's'} across ${productCount} product${productCount === 1 ? '' : 's'} to Private.`, 'success');
-    }
-
-    // Re-render whatever's on screen so the change is visible immediately
-    if (['dashboard','myactions','tracker','calendar','workload','products','projects','settings'].includes(currentView)) {
-      loadView(currentView);
-    }
-  } catch (e) {
-    console.error('lockAllTasksToPrivate failed:', e);
-    showToast('Failed to lock tasks — check the browser console.', 'error');
-  } finally {
-    const btnAfter = document.getElementById('lock-all-tasks-btn');
-    if (btnAfter) { btnAfter.disabled = false; btnAfter.textContent = '🔒 Set all my tasks to Private'; }
-  }
-};
-
 /* ─── UTILITIES ─── */
 // Preferred name — loaded from Firebase users record
 let currentPreferredName = '';
@@ -5456,7 +5966,29 @@ function getGreeting() {
   return 'evening';
 }
 
-// Countdown timers removed in favor of daily tracking
+const _countdownTimers = {};
+function startCountdown(elId, launchDateStr) {
+  if (_countdownTimers[elId]) clearInterval(_countdownTimers[elId]);
+  const update = () => {
+    const el = document.getElementById(elId);
+    if (!el) { clearInterval(_countdownTimers[elId]); return; }
+    const now    = new Date();
+    const launch = new Date(launchDateStr);
+    launch.setHours(23, 59, 59, 0);
+    const diff   = launch - now;
+    if (diff <= 0) {
+      el.textContent = 'Launch day!';
+      clearInterval(_countdownTimers[elId]);
+      return;
+    }
+    const h = Math.floor(diff / 3600000);
+    const m = Math.floor((diff % 3600000) / 60000);
+    const s = Math.floor((diff % 60000) / 1000);
+    el.textContent = h + 'h ' + m + 'm ' + s + 's';
+  };
+  update();
+  _countdownTimers[elId] = setInterval(update, 1000);
+}
 
 window.showToast = (msg, type = 'info') => {
   let t = document.getElementById('toast');
@@ -5690,7 +6222,7 @@ window.confirmHandover = async (productId) => {
       onSend: async ({ subject, body, toEmails, ccEmails, testMode }) => {
         await callGAS('sendComposedEmail', {
           subject, body, toEmails, ccEmails, testMode,
-          productName: prod.name,
+          productName: prod.name, sentByName: currentPreferredName || currentUser.displayName || currentUser.email.split('@')[0], sentByEmail: currentUser.email,
         });
         showToast('Handover email sent.', 'success');
       },
@@ -6578,9 +7110,6 @@ async function renderSAUsers(el) {
           <button class="btn-secondary-sm" style="font-size:10px;" onclick="saToggleRole('${key}','${al.role}')">
             ${al.role === 'admin' ? '↓ Member' : '↑ Admin'}
           </button>
-          <button class="btn-secondary-sm" style="font-size:10px;" onclick="saToggleDeptRole('${key}','${u.deptRole || 'member'}')">
-            ${u.deptRole === 'lead' ? '↓ Dept Member' : '↑ Dept Lead'}
-          </button>
           <button class="btn-danger-xs" onclick="saResetUser('${key}')">Reset</button>
         </div>
       </td>
@@ -6620,16 +7149,6 @@ window.saToggleRole = async (userKey, currentRole) => {
   try {
     await set(ref(db, `allowlist/${userKey}/role`), newRole);
     showToast(`Role updated to ${newRole}.`, 'success');
-    loadSATab('users');
-  } catch(e) { showToast('Failed: ' + e.message, 'error'); }
-};
-
-window.saToggleDeptRole = async (userKey, currentRole) => {
-  const newRole = currentRole === 'lead' ? 'member' : 'lead';
-  if (!confirm(`Change this user's department role to ${newRole}?`)) return;
-  try {
-    await set(ref(db, `users/${userKey}/deptRole`), newRole);
-    showToast(`Department role updated to ${newRole}.`, 'success');
     loadSATab('users');
   } catch(e) { showToast('Failed: ' + e.message, 'error'); }
 };
@@ -6825,12 +7344,6 @@ window.dashNavToTracker = (filter) => {
   loadView('tracker');
 };
 
-window.dashNavToTrackerForProduct = (productId, filter) => {
-  window._trackerTargetProduct = productId;
-  window._trackerFilter = filter || null;
-  loadView('tracker');
-};
-
 /* ── DASHBOARD: DEADLINE REMINDER MODAL ── */
 window.showReminderModal = async (productId, pillarId, pillarName, productName, deadline) => {
   const prod  = productListCache[productId] || {};
@@ -6854,7 +7367,7 @@ window.showReminderModal = async (productId, pillarId, pillarName, productName, 
     productId,
     draftPrompt: buildReminderPrompt(prod, task, daysOverdue),
     onSend: async ({ subject, body, toEmails, ccEmails, testMode }) => {
-      await callGAS('sendComposedEmail', {
+      await callGAS('sendComposedEmail', { sentByName: currentPreferredName || currentUser.displayName || currentUser.email.split('@')[0], sentByEmail: currentUser.email,
         subject, body, toEmails, ccEmails, testMode,
         productName, pillarName,
       });
@@ -6876,14 +7389,18 @@ window.sendReminder = async (productId, pillarId, pillarName, productName, deadl
       .filter(s => s.enabled !== false && (s.pillarIds||[]).includes(pillarId))
       .map(s => s.email);
 
-    const result = await callGAS('sendDeadlineReminder', {
+    const result = await callGAS('sendDeadlineReminder', { sentByName: currentPreferredName || currentUser.displayName || currentUser.email.split('@')[0], sentByEmail: currentUser.email,
       productName, productId, pillarName, pillarId, deadline,
       customMessage: msg,
       deptEmails,
       testMode,
     });
-
     if (!result.ok) throw new Error(result.error || 'Send failed');
+    await logEmailSent(productId, {
+      type: 'reminder', subject: 'Reminder — ' + (pillarName || ''),
+      to: testMode ? ['(test mode)'] : (deptEmails || []),
+      cc: [], taskTitles: [pillarName], trigger: testMode ? 'test' : 'manual',
+    });
     document.getElementById('email-composer-modal').style.display = 'none';
     showToast(`Reminder sent${testMode ? ' (test)' : ''} to ${testMode ? 'o.olasunkanmi@mixtafrica.com' : deptEmails.length + ' recipients'}.`, 'success');
   } catch(e) {
@@ -6898,7 +7415,7 @@ function renderKanban(prod) {
   const body = document.getElementById('tracker-body');
   if (!body) return;
 
-  const tasks  = getProductTasks(prod);
+  const tasks  = getProductTasks(prod).filter(t => canViewTask(t, prod));
   const locked = isProductLocked(prod);
   const canEdit = currentRole === 'admin' || isSuperAdmin || !locked;
 
@@ -6917,7 +7434,7 @@ function renderKanban(prod) {
   }
 
   const columns = cols.map(col => {
-    const colTasks = tasks.filter(t => canViewTask(t, prod) && taskToCol(t) === col.id);
+    const colTasks = tasks.filter(t => taskToCol(t) === col.id);
     const cards    = colTasks.map(t => {
       const today    = new Date(); today.setHours(0,0,0,0);
       const isLocked = locked && !isSuperAdmin && currentRole !== 'admin';
@@ -7047,7 +7564,7 @@ function renderTrackerGantt(prod) {
   const body = document.getElementById('tracker-body');
   if (!body) return;
 
-  const tasks = getProductTasks(prod);
+  const tasks = getProductTasks(prod).filter(t => canViewTask(t, prod));
   if (tasks.length === 0) {
     body.innerHTML = '<div class="empty-state-sm"><p>No tasks to display.</p></div>';
     return;
@@ -7228,8 +7745,6 @@ window.editDepartment = (id) => {
           <input id="de-name" class="input-field" value="${d.name}"/></div>
         <div class="form-row"><label class="form-label">Colour</label>
           <input id="de-colour" type="color" value="${d.colour||'#6B7280'}" style="width:60px;height:36px;padding:2px;border:1px solid var(--border-mid);border-radius:6px;cursor:pointer;"/></div>
-        <div class="form-row"><label class="form-label">Department Lead Email</label>
-          <input id="de-lead" class="input-field" placeholder="e.g. lead@mixtafrica.com" value="${d.leadEmail||''}"/></div>
         <div class="form-row"><label class="form-label">Emails <span class="form-hint">— one per line</span></label>
           <textarea id="de-emails" class="input-field" rows="4"></textarea></div>
         <div class="form-actions">
@@ -7249,11 +7764,10 @@ window.editDepartment = (id) => {
 window.saveDepartment = async (id) => {
   const name   = document.getElementById('de-name')?.value.trim();
   const colour = document.getElementById('de-colour')?.value || '#6B7280';
-  const leadEmail = document.getElementById('de-lead')?.value.trim() || '';
   const emailsRaw = document.getElementById('de-emails')?.value || '';
   const emails = emailsRaw.split(/\r?\n/).map(e => e.trim()).filter(Boolean);
   if (!name) { showToast('Name required.', 'error'); return; }
-  DEPARTMENTS[id] = { ...DEPARTMENTS[id], name, colour, emails, leadEmail };
+  DEPARTMENTS[id] = { ...DEPARTMENTS[id], name, colour, emails };
   try {
     await set(ref(db, 'config/departments/' + id), DEPARTMENTS[id]);
     showToast('Department saved.', 'success');
@@ -7284,9 +7798,7 @@ window.showAddDepartment = () => {
         <div class="form-row"><label class="form-label">Name <span class="req">*</span></label>
           <input id="de-name" class="input-field" placeholder="e.g. Legal"/></div>
         <div class="form-row"><label class="form-label">Colour</label>
-          <input id="de-colour" type="color" value="${d.colour||'#6B7280'}" style="width:60px;height:36px;padding:2px;border:1px solid var(--border-mid);border-radius:6px;cursor:pointer;"/></div>
-        <div class="form-row"><label class="form-label">Department Lead Email</label>
-          <input id="de-lead" class="input-field" placeholder="e.g. lead@mixtafrica.com" value="${d.leadEmail||''}"/></div>
+          <input id="de-colour" type="color" value="#6B7280" style="width:60px;height:36px;padding:2px;border:1px solid var(--border-mid);border-radius:6px;cursor:pointer;"/></div>
         <div class="form-row"><label class="form-label">Emails <span class="form-hint">— one per line</span></label>
           <textarea id="de-emails" class="input-field" rows="3" placeholder="team@mixtafrica.com"></textarea></div>
         <div class="form-actions">
@@ -7302,11 +7814,10 @@ window.addNewDepartment = async () => {
   const key    = (document.getElementById('de-key')?.value.trim() || '').replace(/\s+/g,'_').toLowerCase();
   const name   = document.getElementById('de-name')?.value.trim();
   const colour = document.getElementById('de-colour')?.value || '#6B7280';
-  const leadEmail = document.getElementById('de-lead')?.value.trim() || '';
   const emailsRaw = document.getElementById('de-emails')?.value || '';
   const emails = emailsRaw.split(/\r?\n/).map(e => e.trim()).filter(Boolean);
   if (!key || !name) { showToast('Key and name required.', 'error'); return; }
-  DEPARTMENTS[key] = { name, colour, emails, leadEmail };
+  DEPARTMENTS[key] = { name, colour, emails };
   try {
     await set(ref(db, 'config/departments/' + key), DEPARTMENTS[key]);
     showToast('Department added.', 'success');
@@ -7466,8 +7977,7 @@ window.saEditTask = async (productId, taskId) => {
             <option value="complete"  ${task.status==='complete' ?'selected':''}>Complete</option>
           </select></div>
         <div class="form-actions">
-          <button class="btn-danger-sm" style="margin-right:auto;" onclick="saeDeleteTask('${productId}','${taskId}')">Delete task</button>
-          <button class="btn-outline" onclick="document.getElementById('sa-modal').style.display='none'">Cancel</button>
+          <button class="btn-outline" onclick="document.getElementById('email-composer-modal').style.display='none'">Cancel</button>
           <button class="btn-primary" onclick="saeSaveTask('${productId}','${taskId}')">Save changes</button>
         </div>
       </div>
@@ -7493,21 +8003,6 @@ window.saeSaveTask = async (productId, taskId) => {
     showToast('Task updated by super admin.', 'success');
     loadSATab('tasks');
   } catch(e) { showToast('Save failed: ' + e.message, 'error'); }
-};
-
-window.saeDeleteTask = async (productId, taskId) => {
-  if (!confirm('Are you sure you want to permanently delete this task? This cannot be undone.')) return;
-  try {
-    const prod = trackerProductsCache[productId] || productListCache[productId];
-    if (prod?.tasks?.[taskId]) {
-      await set(ref(db, `products/${productId}/tasks/${taskId}`), null);
-    } else {
-      await set(ref(db, `products/${productId}/pillars/${taskId}`), null);
-    }
-    document.getElementById('sa-modal').style.display = 'none';
-    showToast('Task deleted.', 'success');
-    loadSATab('tasks');
-  } catch(e) { showToast('Delete failed: ' + e.message, 'error'); }
 };
 
 /* ══ ITEM 4: ACTIVITY FEED ══════════════════════════════════ */
@@ -7664,7 +8159,7 @@ window.showQuickUpdate = async (productId) => {
         attentionHtml + ontrackHtml +
       '</div>' +
       '<div style="padding:12px 18px;border-top:1px solid var(--border);flex-shrink:0;">' +
-        '<button class="btn-secondary-sm" style="width:100%;" onclick="document.getElementById(\'quick-update-modal\').style.display=\'none\';dashNavToTrackerForProduct(\'' + productId + '\')">Open full tracker →</button>' +
+        '<button class="btn-secondary-sm" style="width:100%;" onclick="document.getElementById(\'quick-update-modal\').style.display=\'none\';loadView(\'tracker\')">Open full tracker →</button>' +
       '</div>' +
     '</div>';
   modal.style.display = 'flex';
@@ -7713,12 +8208,9 @@ async function generateAIDraft(prompt) {
             role: 'system',
             content: `You are an expert real estate professional at Mixta Africa writing internal emails.
 Write concise, professional emails in a direct business tone.
-CRITICAL RULES:
-1. ALWAYS start the email with "Dear [First Name]," (or "Dear Team," if addressing multiple people).
-2. Whenever you mention a person's name in the email body, use ONLY their first name (e.g., use "Andrea" instead of "Andrea Cameron Cole").
-3. Do not use filler phrases like "I hope this finds you well."
-4. Write only the email body — no subject lines.
-Use specific details provided. Be concrete about responsibilities and deadlines.`,
+Do not use filler phrases. Do not add "I hope this finds you well."
+Write only the email body — no subject line, no salutation unless requested.
+Use specific product details provided. Be concrete about responsibilities and deadlines.`,
           },
           { role: 'user', content: prompt },
         ],
@@ -7903,7 +8395,7 @@ window.sendComposedEmail = async () => {
 
     if (threadId && !context.isThreadStarter) {
       // ── REPLY IN THREAD ──
-      const result = await callGAS('replyToThread', {
+      const result = await callGAS('replyToThread', { sentByName: currentPreferredName || currentUser.displayName || currentUser.email.split('@')[0], sentByEmail: currentUser.email,
         threadId, emailBody: body, subject, toEmails, ccEmails,
         testMode, productName: prod.name,
       });
@@ -8088,7 +8580,7 @@ function buildProgressReportPrompt(prod, tasks, pct) {
   const atRisk   = tasks.filter(t => t.deadline && t.status !== 'complete' && getPillarStatus(t.deadline) === 'warning').map(t => t.title||t.name).join(', ');
   const overdueList = tasks.filter(t => t.deadline && t.status !== 'complete' && getPillarStatus(t.deadline) === 'overdue').map(t => (t.title||t.name) + ' (' + t.owner + ')').join(', ');
 
-  return `Write a progress report email body for internal stakeholders.
+  return `Write a concise progress report email body for internal stakeholders.
 
 Product: ${prod.name}
 Launch date: ${prod.launchDate}
@@ -8097,16 +8589,14 @@ Delayed tasks: ${delayed}
 Overdue tasks: ${overdue}${overdueList ? ' — ' + overdueList : ''}
 At risk (due within 3 days): ${atRisk || 'none'}
 
-CRITICAL FORMATTING INSTRUCTIONS:
-1. Start with "Dear Team,".
-2. Provide a 1-sentence intro.
-3. Present the core status as a Markdown Table with columns: | Category | Status/Details | Owner/Action |
-   - Row 1: Status Summary
-   - Row 2: Key Risks
-   - Row 3: Required Actions
-4. Do NOT repeat or summarize the contents of the table in paragraph form below the table.
-5. Use ONLY first names when mentioning people.`;
+Write 3 short sections with bold headers:
+**Status Summary** — one sentence on overall health
+**Key Risks** — specific tasks or areas that need attention (be concrete)
+**Required Actions** — what stakeholders need to do before the next update
+
+Be direct. No filler. Flag risks clearly.`;
 }
+
 function buildHandoverPrompt(prod, tasks, relieverName, returnDate, ownerNotes) {
   const complete = tasks.filter(t => t.status === 'complete').length;
   const open     = tasks.filter(t => t.status !== 'complete');
@@ -8230,14 +8720,18 @@ Tone: professional, direct, not accusatory. This is a coordination message, not 
       if (threadId) {
         await callGAS('replyToThread', {
           threadId, emailBody: body, subject, toEmails, ccEmails,
-          testMode, productName: prod.name,
+          testMode, productName: prod.name, sentByName: currentPreferredName || currentUser.displayName || currentUser.email.split('@')[0], sentByEmail: currentUser.email,
         });
       } else {
         await callGAS('sendComposedEmail', {
           subject, body, toEmails, ccEmails, testMode,
-          productName: prod.name,
+          productName: prod.name, sentByName: currentPreferredName || currentUser.displayName || currentUser.email.split('@')[0], sentByEmail: currentUser.email,
         });
       }
+      await logEmailSent(productId, {
+        type: 'delayed', subject, to: toEmails, cc: ccEmails || [],
+        taskTitles: [task.title || task.name], taskId: task.id,
+      });
       await logActivity(productId, 'status',
         `Delay notification sent: ${task.title || task.name}`,
         `To: ${toEmails.join(', ')}`
@@ -8389,10 +8883,8 @@ window.__npd_init({
   exportAllData:           window.exportAllData,
   clearAuditLog:           window.clearAuditLog,
   saToggleRole:            window.saToggleRole,
-  saToggleDeptRole:        window.saToggleDeptRole,
   saToggleProductStatus:   window.saToggleProductStatus,
   dashNavToTracker:        window.dashNavToTracker,
-  dashNavToTrackerForProduct: window.dashNavToTrackerForProduct,
   showReminderModal:       window.showReminderModal,
   sendReminder:            window.sendReminder,
   setCalView:              window.setCalView,
@@ -8418,9 +8910,7 @@ window.__npd_init({
   deleteTemplate:          window.deleteTemplate,
   saEditTask:              window.saEditTask,
   saeSaveTask:             window.saeSaveTask,
-  saeDeleteTask:           window.saeDeleteTask,
   showProductActivity:     window.showProductActivity,
-  clearTaskAck:            window.clearTaskAck,
   showQuickUpdate:         window.showQuickUpdate,
   quickSetStatus:          window.quickSetStatus,
   dismissWelcome:          window.dismissWelcome,
@@ -8442,12 +8932,25 @@ window.__npd_init({
   updateAddTaskIndividuals: window.updateAddTaskIndividuals,
   addNewTaskOwnerChip:     window.addNewTaskOwnerChip,
   removeAtOwner:           window.removeAtOwner,
-  addNewRaOwnerChip:       window.addNewRaOwnerChip,
-  removeRaOwner:           window.removeRaOwner,
   addTaskOwner:            window.addTaskOwner,
   removeTaskOwner:         window.removeTaskOwner,
   updateAddIndividuals:    window.updateAddIndividuals,
   saAddStakeholderInDept:  window.saAddStakeholderInDept,
+  addStandaloneTask:       window.addStandaloneTask,
+  showImportScreen:        window.showImportScreen,
+  cycleTaskVisibility:     window.cycleTaskVisibility,
+  clearTaskAck:            window.clearTaskAck,
+  lockAllTasksToPrivate:   window.lockAllTasksToPrivate,
+  openAllTasksToDept:      window.openAllTasksToDept,
+  toggleAskItem:           window.toggleAskItem,
+  askSelectAll:            window.askSelectAll,
+  submitAsk:               window.submitAsk,
+  clearAskHistory:         window.clearAskHistory,
+  parseImportSheet:        window.parseImportSheet,
+  handleImportFile:        window.handleImportFile,
+  confirmImportTasks:      window.confirmImportTasks,
+  toggleStandaloneTask:    window.toggleStandaloneTask,
+  deleteStandaloneTask:    window.deleteStandaloneTask,
   submitAccessRequest:     window.submitAccessRequest,
   approveAccessRequest:    window.approveAccessRequest,
   denyAccessRequest:       window.denyAccessRequest,
@@ -8466,8 +8969,6 @@ window.__npd_init({
   sendMyTodoNow:           window.sendMyTodoNow,
   showAddDocFolder:        window.showAddDocFolder,
   confirmAddDocFolder:     window.confirmAddDocFolder,
-  approveProduct:          window.approveProduct,
-  rejectProduct:           window.rejectProduct,
 });
 
 </script>
@@ -9437,17 +9938,14 @@ textarea.input-field { resize: vertical; line-height: 1.6; }
         <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 3.6-7 8-7s8 3 8 7"/><polyline points="16 11 17.5 12.5 21 9"/></svg>
         <span>My Actions</span>
       </button>
+      <button class="nav-item" data-view="ask" onclick="loadView('ask')">
+        <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.38 8.38 0 01-.9 3.8 8.5 8.5 0 01-7.6 4.7 8.38 8.38 0 01-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 01-.9-3.8 8.5 8.5 0 014.7-7.6 8.38 8.38 0 013.8-.9h.5a8.48 8.48 0 018 8v.5z"/></svg>
+        <span>Ask</span>
+      </button>
       <button class="nav-item" data-view="products" onclick="loadView('products')">
         <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21 16V8a2 2 0 00-1-1.73l-7-4a2 2 0 00-2 0l-7 4A2 2 0 003 8v8a2 2 0 001 1.73l7 4a2 2 0 002 0l7-4A2 2 0 0021 16z"/></svg>
         <span>Products</span>
       </button>
-      <button class="nav-item" data-view="projects" onclick="loadView('projects')">
-  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="nav-icon">
-    <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
-    <line x1="9" y1="3" x2="9" y2="21"></line>
-  </svg>
-  <span>Projects</span>
-</button>
 
       <div class="nav-section-label">Operations</div>
       <button class="nav-item" data-view="calendar" onclick="loadView('calendar')">
