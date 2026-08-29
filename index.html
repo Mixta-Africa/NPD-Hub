@@ -78,7 +78,6 @@ const GAS_ENDPOINT = '__GAS_ENDPOINT__';
 const GROQ_API_KEY      = '__GROQ_API_KEY__';
 const CEREBRAS_API_KEY  = '__CEREBRAS_API_KEY__';
 const SAMBANOVA_API_KEY = '__SAMBANOVA_API_KEY__';
-const GROQ_MODEL   = 'llama-3.3-70b-versatile';
 const TEST_EMAIL   = 'o.olasunkanmi@mixtafrica.com';
 
 // Super admin password hash — injected at deploy time (SHA-256, never stored as plaintext)
@@ -2347,45 +2346,102 @@ window.confirmImportTasks = () => {
    department is assigned to. The model cannot widen its own scope
    because it never sees anything outside the context it is handed.
    ══════════════════════════════════════════════════════════════ */
+/* All three providers are OpenAI-compatible, so each exposes GET /v1/models.
+   Model IDs get deprecated without warning — Groq retired
+   llama-3.3-70b-versatile in June 2026 — so rather than hardcoding one ID we
+   list preferences and DISCOVER what the account can actually reach at
+   runtime. `prefer` entries are matched as substrings, best first; if none
+   match we fall back to any chat model the provider offers. */
 const AI_PROVIDERS = [
-  { name: 'Groq',      url: 'https://api.groq.com/openai/v1/chat/completions',
-    key: () => GROQ_API_KEY,      model: 'llama-3.3-70b-versatile' },
-  { name: 'Cerebras',  url: 'https://api.cerebras.ai/v1/chat/completions',
-    key: () => CEREBRAS_API_KEY,  model: 'llama-3.3-70b' },
-  { name: 'SambaNova', url: 'https://api.sambanova.ai/v1/chat/completions',
-    key: () => SAMBANOVA_API_KEY, model: 'Meta-Llama-3.3-70B-Instruct' },
+  { name: 'Groq',
+    base: 'https://api.groq.com/openai/v1',
+    key:  () => GROQ_API_KEY,
+    prefer: ['gpt-oss-120b', 'qwen3', 'gpt-oss-20b', 'llama-4', 'llama-3.3-70b'] },
+  { name: 'Cerebras',
+    base: 'https://api.cerebras.ai/v1',
+    key:  () => CEREBRAS_API_KEY,
+    prefer: ['llama-3.3-70b', 'llama3.3-70b', 'qwen-3', 'gpt-oss', 'llama-4'] },
+  { name: 'SambaNova',
+    base: 'https://api.sambanova.ai/v1',
+    key:  () => SAMBANOVA_API_KEY,
+    prefer: ['Llama-3.3-70B', 'Llama-4', 'DeepSeek', 'Qwen3'] },
 ];
+
+// Cache of resolved model IDs so we only hit /models once per session
+const _aiModelCache = {};
+
+async function discoverModel(p) {
+  if (_aiModelCache[p.name]) return _aiModelCache[p.name];
+  const resp = await fetch(p.base + '/models', {
+    headers: { 'Authorization': 'Bearer ' + p.key() },
+  });
+  if (!resp.ok) throw new Error(p.name + ' model list returned ' + resp.status);
+  const data = await resp.json();
+  const ids  = (data.data || []).map(m => m.id).filter(Boolean);
+  if (ids.length === 0) throw new Error(p.name + ' returned no models for this key');
+
+  // First preference that actually exists
+  for (const want of p.prefer) {
+    const hit = ids.find(id => id.toLowerCase().includes(want.toLowerCase()));
+    if (hit) { _aiModelCache[p.name] = hit; return hit; }
+  }
+  // Nothing preferred — take any chat-capable model, skipping non-chat ones
+  const chat = ids.find(id => !/whisper|tts|embed|guard|ocr|rerank/i.test(id));
+  const pick = chat || ids[0];
+  _aiModelCache[p.name] = pick;
+  console.info(p.name + ': no preferred model available, using ' + pick);
+  return pick;
+}
 
 function providerConfigured(p) {
   const k = p.key();
   return !!k && !k.startsWith('__');   // unreplaced placeholder means not configured
 }
 
+async function callProvider(p, model, messages, maxTokens) {
+  const resp = await fetch(p.base + '/chat/completions', {
+    method: 'POST',
+    headers: { 'Authorization': 'Bearer ' + p.key(), 'Content-Type': 'application/json' },
+    body: JSON.stringify({ model, max_tokens: maxTokens || 1200, temperature: 0.2, messages }),
+  });
+  if (!resp.ok) {
+    const e = await resp.json().catch(() => ({}));
+    const msg = e.error?.message || (p.name + ' returned ' + resp.status);
+    const err = new Error(msg);
+    // Flag a stale/absent model so the caller can re-discover and retry
+    err.modelGone = resp.status === 404 || /does not exist|decommission|deprecat|not found/i.test(msg);
+    throw err;
+  }
+  const data = await resp.json();
+  const text = data.choices?.[0]?.message?.content?.trim();
+  if (!text) throw new Error(p.name + ' returned an empty response');
+  return text;
+}
+
 async function askAI(messages, maxTokens) {
   const available = AI_PROVIDERS.filter(providerConfigured);
-  if (available.length === 0) throw new Error('No AI provider is configured. Add at least one API key in your deployment secrets.');
-  let lastErr;
+  if (available.length === 0) {
+    throw new Error('No AI provider is configured. Add GROQ_API_KEY, CEREBRAS_API_KEY or SAMBANOVA_API_KEY to your deployment secrets.');
+  }
+  const failures = [];
   for (const p of available) {
     try {
-      const resp = await fetch(p.url, {
-        method: 'POST',
-        headers: { 'Authorization': 'Bearer ' + p.key(), 'Content-Type': 'application/json' },
-        body: JSON.stringify({ model: p.model, max_tokens: maxTokens || 1200, temperature: 0.2, messages }),
-      });
-      if (!resp.ok) {
-        const e = await resp.json().catch(() => ({}));
-        throw new Error(e.error?.message || (p.name + ' returned ' + resp.status));
+      let model = await discoverModel(p);
+      try {
+        return { text: await callProvider(p, model, messages, maxTokens), provider: p.name, model };
+      } catch(err) {
+        if (!err.modelGone) throw err;
+        // Model was deprecated since we cached it — re-discover once and retry
+        delete _aiModelCache[p.name];
+        model = await discoverModel(p);
+        return { text: await callProvider(p, model, messages, maxTokens), provider: p.name, model };
       }
-      const data = await resp.json();
-      const text = data.choices?.[0]?.message?.content?.trim();
-      if (!text) throw new Error(p.name + ' returned an empty response');
-      return { text, provider: p.name };
     } catch(err) {
-      lastErr = err;
+      failures.push(p.name + ': ' + err.message);
       console.warn(p.name + ' failed, trying next provider:', err.message);
     }
   }
-  throw lastErr || new Error('All AI providers failed.');
+  throw new Error('All providers failed.\n' + failures.join('\n'));
 }
 
 /* The visibility test — identical rule to the Products list.
@@ -2670,7 +2726,7 @@ window.submitAsk = async () => {
     const { text, provider } = await askAI(messages, 1000);
     _askHistory.push({ role: 'user', content: q });
     _askHistory.push({ role: 'assistant', content: text });
-    replaceAskMessage(thinkingId, text, provider);
+    replaceAskMessage(thinkingId, text, provider + (model ? ' · ' + model : ''));
   } catch(err) {
     replaceAskMessage(thinkingId, 'Could not get an answer: ' + (err.message || 'unknown error'), null, true);
   } finally {
@@ -4267,17 +4323,22 @@ async function loadProductComments(productId) {
     }
     const comments = Object.values(snap.val()).sort((a, b) => a.createdAt - b.createdAt);
     el.innerHTML = comments.map(c => {
-      const initials = (c.userName || c.userEmail || '?')[0].toUpperCase();
+      const isSystem = c.type === 'time_extension' || c.userEmail === 'system@mixtafrica.com';
+      const initials = isSystem ? '!' : (c.userName || c.userEmail || '?')[0].toUpperCase();
       const name     = c.userName || c.userEmail.split('@')[0];
       const time     = c.createdAt ? new Date(c.createdAt).toLocaleDateString('en-GB', { day:'numeric', month:'short', hour:'2-digit', minute:'2-digit' }) : '';
       return '<div style="display:flex;gap:10px;padding:10px 0;border-bottom:1px solid #F3F3F2;">' +
-        '<div style="width:28px;height:28px;border-radius:50%;background:#FEF2F2;color:#C0282D;font-size:11px;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0;">' + initials + '</div>' +
+        '<div style="width:28px;height:28px;border-radius:50%;background:' + (isSystem ? '#FFFBEB' : '#FEF2F2') +
+          ';color:' + (isSystem ? '#D97706' : '#C0282D') +
+          ';font-size:11px;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0;">' + initials + '</div>' +
         '<div style="flex:1;min-width:0;">' +
           '<div style="display:flex;align-items:baseline;gap:8px;margin-bottom:3px;">' +
             '<span style="font-size:12px;font-weight:600;color:#1A1A1A;">' + name + '</span>' +
             '<span style="font-size:10px;color:#9CA3AF;">' + time + '</span>' +
           '</div>' +
-          '<div style="font-size:12px;color:#374151;line-height:1.6;word-break:break-word;">' + (c.text || '') + '</div>' +
+          '<div style="font-size:12px;color:#374151;line-height:1.6;word-break:break-word;white-space:pre-wrap;">' +
+            String(c.text || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/\*\*(.+?)\*\*/g,'<strong>$1</strong>') +
+          '</div>' +
         '</div>' +
       '</div>';
     }).join('');
@@ -5359,6 +5420,19 @@ function renderReports(el) {
         <button class="btn-outline" onclick="sendMyTodoNow()" style="width:100%;margin-top:8px;">Send me my task list now</button>
         <div id="schedule-result" style="display:none;margin-top:10px;"></div>
         ` : '<p style="font-size:12px;color:var(--text-muted);">Only admins can change the email schedule.</p>'}
+      </div>
+    </div>
+
+    <div class="panel" style="margin-top:16px;">
+      <div class="panel-header"><span class="panel-title">AI providers</span></div>
+      <div class="panel-body">
+        <p style="font-size:13px;color:var(--text-mid);line-height:1.7;margin-bottom:12px;">
+          The Ask feature tries Groq, then Cerebras, then SambaNova. Model IDs are discovered
+          at runtime, so a provider deprecating a model does not break anything.
+          Run this to see exactly which models each key can reach.
+        </p>
+        <button class="btn-outline" id="ai-diag-btn" style="width:100%;font-size:12px;" onclick="runAIDiagnostic()">Test AI providers</button>
+        <div id="ai-diag-result" style="display:none;margin-top:12px;"></div>
       </div>
     </div>
 
@@ -8190,40 +8264,25 @@ window.quickSetStatus = async (productId, taskId, newStatus, btn) => {
 
 /* ══ AI EMAIL SYSTEM ════════════════════════════════════════ */
 
-/* ── Groq AI draft generation ────────────────────────────── */
+/* ── AI draft generation ──────────────────────────────────
+   Routes through the same askAI() path as the Ask feature, so it
+   inherits runtime model discovery and provider failover. Previously
+   this pinned GROQ_MODEL to a single hardcoded ID, which broke
+   silently when Groq deprecated it. ───────────────────────────── */
 async function generateAIDraft(prompt) {
-  try {
-    const resp = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Authorization': 'Bearer ' + GROQ_API_KEY,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        model:       GROQ_MODEL,
-        max_tokens:  800,
-        temperature: 0.7,
-        messages: [
-          {
-            role: 'system',
-            content: `You are an expert real estate professional at Mixta Africa writing internal emails.
+  const system = `You are an expert real estate professional at Mixta Africa writing internal emails.
 Write concise, professional emails in a direct business tone.
 Do not use filler phrases. Do not add "I hope this finds you well."
 Write only the email body — no subject line, no salutation unless requested.
-Use specific product details provided. Be concrete about responsibilities and deadlines.`,
-          },
-          { role: 'user', content: prompt },
-        ],
-      }),
-    });
-    if (!resp.ok) {
-      const err = await resp.json();
-      throw new Error(err.error?.message || 'Groq API error ' + resp.status);
-    }
-    const data = await resp.json();
-    return data.choices?.[0]?.message?.content?.trim() || '';
+Use specific product details provided. Be concrete about responsibilities and deadlines.`;
+  try {
+    const { text } = await askAI([
+      { role: 'system', content: system },
+      { role: 'user',   content: prompt },
+    ], 800);
+    return text || '';
   } catch(e) {
-    console.error('Groq draft failed:', e);
+    console.error('AI draft failed:', e);
     throw e;
   }
 }
@@ -8751,6 +8810,58 @@ window.sendMyTodoNow = async () => {
   } catch(e) { showToast('Could not reach GAS backend', 'error'); }
 };
 
+window.runAIDiagnostic = async () => {
+  const btn = document.getElementById('ai-diag-btn');
+  const out = document.getElementById('ai-diag-result');
+  if (btn) { btn.disabled = true; btn.textContent = 'Testing...'; }
+  if (out) { out.style.display = 'block'; out.innerHTML = '<div style="font-size:12px;color:var(--text-muted);">Querying each provider...</div>'; }
+
+  const rows = [];
+  for (const p of AI_PROVIDERS) {
+    if (!providerConfigured(p)) {
+      rows.push({ name: p.name, state: 'nokey', detail: 'No API key set in deployment secrets' });
+      continue;
+    }
+    try {
+      const resp = await fetch(p.base + '/models', { headers: { 'Authorization': 'Bearer ' + p.key() } });
+      if (!resp.ok) {
+        rows.push({ name: p.name, state: 'fail', detail: 'HTTP ' + resp.status + (resp.status === 401 ? ' — key rejected' : '') });
+        continue;
+      }
+      const data = await resp.json();
+      const ids  = (data.data || []).map(m => m.id).filter(Boolean);
+      delete _aiModelCache[p.name];
+      let chosen = '(none)';
+      try { chosen = await discoverModel(p); } catch(e) {}
+      rows.push({ name: p.name, state: 'ok', chosen, count: ids.length, sample: ids.slice(0, 6) });
+    } catch(err) {
+      rows.push({ name: p.name, state: 'fail', detail: err.message });
+    }
+  }
+
+  const colour = { ok: '#16A34A', fail: '#C0282D', nokey: '#9CA3AF' };
+  const label  = { ok: 'REACHABLE', fail: 'FAILED', nokey: 'NOT CONFIGURED' };
+  out.innerHTML = rows.map(r =>
+    '<div style="border:1px solid var(--border);border-left:3px solid ' + colour[r.state] +
+      ';border-radius:8px;padding:10px 14px;margin-bottom:8px;">' +
+      '<div style="display:flex;align-items:center;gap:8px;margin-bottom:' + (r.state === 'ok' ? '5px' : '0') + ';">' +
+        '<span style="font-size:12px;font-weight:700;color:var(--text);">' + r.name + '</span>' +
+        '<span style="font-size:9px;font-weight:700;color:' + colour[r.state] + ';background:' + colour[r.state] + '15;padding:1px 7px;border-radius:8px;">' + label[r.state] + '</span>' +
+      '</div>' +
+      (r.state === 'ok'
+        ? '<div style="font-size:11px;color:var(--text);">Will use: <strong>' + r.chosen + '</strong></div>' +
+          '<div style="font-size:10px;color:#9CA3AF;margin-top:2px;">' + r.count + ' models available · ' + r.sample.join(', ') + (r.count > 6 ? ' …' : '') + '</div>'
+        : '<div style="font-size:11px;color:#6B7280;">' + (r.detail || '') + '</div>') +
+    '</div>'
+  ).join('');
+
+  const anyOk = rows.some(r => r.state === 'ok');
+  out.innerHTML += '<div style="font-size:11px;color:' + (anyOk ? '#16A34A' : '#C0282D') + ';font-weight:500;margin-top:4px;">' +
+    (anyOk ? 'Ask is working — at least one provider is reachable.' : 'Ask will not work until at least one provider is reachable.') + '</div>';
+
+  if (btn) { btn.disabled = false; btn.textContent = 'Test AI providers'; }
+};
+
 window.saveEmailSchedule = async () => {
   const alertHour = parseInt(document.getElementById('alert-hour-sel')?.value || '7');
   const todoHour  = parseInt(document.getElementById('todo-hour-sel')?.value  || '8');
@@ -8939,6 +9050,7 @@ window.__npd_init({
   addStandaloneTask:       window.addStandaloneTask,
   showImportScreen:        window.showImportScreen,
   cycleTaskVisibility:     window.cycleTaskVisibility,
+  runAIDiagnostic:         window.runAIDiagnostic,
   clearTaskAck:            window.clearTaskAck,
   lockAllTasksToPrivate:   window.lockAllTasksToPrivate,
   openAllTasksToDept:      window.openAllTasksToDept,
