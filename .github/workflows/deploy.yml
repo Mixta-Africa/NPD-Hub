@@ -49,7 +49,9 @@ jobs:
           sed -i "s|__GAS_ENDPOINT__|${{ secrets.GAS_ENDPOINT }}|g"                               index.html
           sed -i "s|__SUPER_ADMIN_HASH__|${{ secrets.SUPER_ADMIN_HASH }}|g"                       index.html
           sed -i "s|__GROQ_API_KEY__|${{ secrets.GROQ_API_KEY }}|g"                               index.html
-          if grep -q "__FIREBASE_\|__GAS_\|__GROQ_\|__SUPER_" index.html; then
+          sed -i "s|__CEREBRAS_API_KEY__|${{ secrets.CEREBRAS_API_KEY }}|g"                       index.html
+          sed -i "s|__SAMBANOVA_API_KEY__|${{ secrets.SAMBANOVA_API_KEY }}|g"                     index.html
+          if grep -q "__FIREBASE_\|__GAS_\|__GROQ_\|__SUPER_\|__CEREBRAS_\|__SAMBANOVA_" index.html; then
             echo "ERROR: Some placeholders were not replaced — check GitHub Secrets"
             exit 1
           fi
