@@ -1883,7 +1883,7 @@ function renderProductCard(p) {
         <div class="pcf-header-left">
           <div class="pcf-health-dot ${healthCls}" title="${healthTip}"></div>
           <div>
-            <div class="pcf-name-row"><span class="pcf-name">${p.name}</span>${typeBadge}${slipHtml}${atRiskBadge}${countdownChip}</div>
+            <div class="pcf-name-row"><span class="pcf-name">${p.name}</span>${typeBadge}${accessBadge(p)}${slipHtml}${atRiskBadge}${countdownChip}</div>
             ${(p.itemType === 'project' && canViewBudget(p) && (p.budget || p.spend)) ? `
               <div style="margin-top:6px;">
                 <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--text-muted);margin-bottom:3px;">
@@ -2583,6 +2583,56 @@ function canViewBudget(prod) {
   if (currentRole === 'admin' || isSuperAdmin) return true;
   if (!currentUser || !prod) return false;
   return prod.ownerId === sanitiseEmail(currentUser.email);
+}
+
+/* Product-level access summary.
+   Derived from the SAME rules canUserSeeProduct() enforces, so the badge can
+   never disagree with reality: owner + admins always; anyone in sharedWith;
+   anyone whose department owns a task on it. */
+function getProductAccessSummary(p) {
+  const shared = Object.keys(p.sharedWith || {});
+  const depts  = [];
+  getProductTasks(p).forEach(t => {
+    const owners = (t.owners && t.owners.length) ? t.owners
+      : [{ dept: t.ownerDept || '', email: t.ownerEmail || '' }];
+    owners.forEach(o => { if (o.dept && !depts.includes(o.dept)) depts.push(o.dept); });
+  });
+  const total = shared.length + depts.length;
+  if (total === 0) {
+    return { level: 'private', label: 'Private', color: '#C0282D',
+             detail: 'Only you and admins can see this' };
+  }
+  const bits = [];
+  if (depts.length)  bits.push(depts.join(', '));
+  if (shared.length) bits.push(shared.length + ' individual' + (shared.length !== 1 ? 's' : ''));
+  return { level: 'shared', label: 'Shared', color: '#D97706',
+           detail: 'Visible to: ' + bits.join(' + '), count: total };
+}
+
+/* Compact visibility marker for dense rows (tracker, kanban).
+   Read-only — changing visibility stays in the product modal so there is
+   one place that writes it. */
+function taskVisMarker(task) {
+  const v = getTaskVisibility(task);
+  const m = TASK_VISIBILITY[v];
+  const paths = {
+    private:    '<rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0110 0v4"/>',
+    department: '<path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87"/>',
+    public:     '<circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 014 10 15.3 15.3 0 01-4 10 15.3 15.3 0 01-4-10 15.3 15.3 0 014-10z"/>',
+  };
+  return '<span title="' + m.label + ' — ' + m.desc + '" style="display:inline-flex;vertical-align:-2px;margin-right:5px;color:' + m.color + ';">' +
+    '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">' +
+    paths[v] + '</svg></span>';
+}
+
+function accessBadge(p) {
+  const a = getProductAccessSummary(p);
+  const icon = a.level === 'private'
+    ? '<svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="vertical-align:-1px;margin-right:3px;"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg>'
+    : '<svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="vertical-align:-1px;margin-right:3px;"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87"/></svg>';
+  return '<span title="' + a.detail + '" style="font-size:10px;font-weight:700;color:' + a.color +
+    ';background:' + a.color + '15;padding:2px 8px;border-radius:10px;letter-spacing:.03em;">' +
+    icon + a.label.toUpperCase() + (a.count ? ' · ' + a.count : '') + '</span>';
 }
 
 function canUserSeeProduct(p, userKey) {
@@ -3819,7 +3869,7 @@ function buildProductDetail(p, tab) {
 
   const tabHtml =
     '<div class="pdt-header">' +
-    '<div class="pdt-meta">' + lChip + typeChip +
+    '<div class="pdt-meta">' + lChip + typeChip + accessBadge(p) +
       '<span class="pdt-owner-chip">' +
         '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 3.6-7 8-7s8 3 8 7"/></svg>' +
         (p.ownerName || 'Unassigned') +
@@ -4955,7 +5005,7 @@ function renderTrackerTable(prod, filter) {
     return `<tr class="tracker-row${isComplete?' tracker-row-done':isDelayed?' tracker-row-delayed':''}${isBlocked?' tracker-row-blocked':''}">
       <td class="tracker-num">${i+1}</td>
       <td class="tracker-pillar">
-        <div class="tracker-pillar-name">${taskLocked ? ICON.lock + ' ' : ''}${pl.title||pl.name||'Untitled'}</div>
+        <div class="tracker-pillar-name">${taskVisMarker(pl)}${taskLocked ? ICON.lock + ' ' : ''}${pl.title||pl.name||'Untitled'}</div>
         <div class="tracker-pillar-owner">${pl.owner||''}</div>
         ${blockedLabel}
       </td>
@@ -7605,7 +7655,7 @@ function renderKanban(prod) {
                ondragstart="kbDragStart(event,'${t.id}')"
                ondragover="event.preventDefault()"
                ondrop="kbDrop(event,'${prod.id}','${col.id}')">
-        <div class="kb-card-title">${isLocked ? ICON.lock + ' ' : ''}${t.title||t.name||'Untitled'}</div>
+        <div class="kb-card-title">${taskVisMarker(t)}${isLocked ? ICON.lock + ' ' : ''}${t.title||t.name||'Untitled'}</div>
         <div class="kb-card-meta">
           ${t.owner ? `<span class="kb-card-owner">${t.owner}</span>` : ''}
           ${deadlineChip}
