@@ -1955,6 +1955,7 @@ function renderProductCard(p) {
         ${canEdit(p) ? `<button class="btn-secondary-sm" onclick="convertItemType('${p.id}','${p.itemType||'product'}')" style="font-size:10px;" title="Switch between Product and Project"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:middle;margin-right:3px;"><path d="M17 1l4 4-4 4"/><path d="M3 11V9a4 4 0 014-4h14"/><path d="M7 23l-4-4 4-4"/><path d="M21 13v2a4 4 0 01-4 4H3"/></svg>${(p.itemType||'product')==='project'?'To Product':'To Project'}</button>` : ''}
         ${canEdit(p) ? `<button class="btn-secondary-sm" onclick="showShareModal('${p.id}')">Share</button>` : ''}
         ${getProductAccess(p) === 'owner' || currentRole === 'admin' ? `<button class="btn-secondary-sm" onclick="showHandoverModal('${p.id}')">Handover</button>` : ''}
+        <button class="btn-secondary-sm" onclick="exportProjectTracker('${p.id}')">Export</button>
         <button class="btn-secondary-sm" onclick="showProductActivity('${p.id}')">Activity</button>
       </div>
     </div>`;
@@ -2908,6 +2909,7 @@ async function loadProjectDashboard(productId) {
         '<div style="display:flex;gap:8px;flex-wrap:wrap;">' +
           (canEdit(p) ? '<button class="btn-primary" onclick="showQuickUpdate(\'' + p.id + '\')">' + ICON.bolt + ' Update</button>' : '') +
           (canEdit(p) ? '<button class="btn-secondary-sm" onclick="showAddTaskToProduct(\'' + p.id + '\')">+ Task</button>' : '') +
+          '<button class="btn-secondary-sm" onclick="exportProjectTracker(\'' + p.id + '\')">Export tracker</button>' +
           '<button class="btn-secondary-sm" onclick="viewProduct(\'' + p.id + '\')">Full detail</button>' +
         '</div>' +
       '</div>' +
@@ -2988,6 +2990,90 @@ function buildPdDeptBlock(dept, list, today, p) {
 window.scrollToDept = () => {
   const el = document.getElementById('pd-departments');
   if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+};
+
+/* ══════════════════════════════════════════════════════════════
+   EXPORT TRACKER
+   Filters to what the REQUESTER can see before anything leaves the
+   browser. GAS receives an already-safe list, so the export can never
+   contain a task the person could not open in the Hub.
+   ══════════════════════════════════════════════════════════════ */
+window.exportProjectTracker = async (productId) => {
+  const p = productListCache[productId];
+  if (!p) { showToast('Item not loaded — open it first', 'error'); return; }
+
+  const visible = getProductTasks(p).filter(t => canViewTask(t, p));
+  if (visible.length === 0) {
+    showToast('No tasks visible to you on this item', 'error');
+    return;
+  }
+
+  const hiddenCount = getProductTasks(p).length - visible.length;
+  const rows = visible.map(t => {
+    const owners = (t.owners && t.owners.length) ? t.owners
+      : (t.owner ? [{ dept: t.ownerDept || '', email: t.ownerEmail || '', nameCache: t.owner }] : []);
+    return {
+      title:    t.title || 'Untitled',
+      owner:    owners.length ? owners.map(o => ownerLabel(o)).join(', ') : 'Unassigned',
+      dept:     owners.map(o => o.dept).filter(Boolean).join(', '),
+      deadline: t.deadline ? formatDate(t.deadline) : '',
+      status:   resolveTaskStatus(t),
+      notes:    t.notes || '',
+    };
+  });
+
+  showToast('Building tracker…', 'info');
+  try {
+    const res = await callGAS('exportProjectTracker', {
+      productName: p.name,
+      itemType:    p.itemType || 'product',
+      ownerName:   p.ownerName || '',
+      launchDate:  p.launchDate ? formatDate(p.launchDate) : '',
+      generatedBy: currentPreferredName || currentUser.displayName || currentUser.email,
+      tasks:       rows,
+    });
+    if (!res.ok) { showToast('Export failed: ' + (res.error || 'unknown'), 'error'); return; }
+    showExportResult(p.name, res, hiddenCount);
+    await logEmailSent(productId, {
+      type: 'export', subject: 'Tracker exported — ' + p.name,
+      to: [], cc: [], taskTitles: [rows.length + ' rows'],
+    });
+  } catch(e) {
+    showToast('Could not reach the backend', 'error');
+  }
+};
+
+function showExportResult(name, res, hiddenCount) {
+  const overlay = document.createElement('div');
+  overlay.id = 'export-overlay';
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.45);z-index:9000;display:flex;align-items:center;justify-content:center;padding:20px;';
+  overlay.innerHTML =
+    '<div style="background:#fff;border-radius:14px;padding:30px;max-width:460px;width:100%;">' +
+      '<div style="width:46px;height:46px;border-radius:11px;background:#F0FDF4;display:flex;align-items:center;justify-content:center;margin-bottom:14px;">' +
+        '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#16A34A" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 11-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>' +
+      '</div>' +
+      '<div style="font-size:16px;font-weight:700;color:#1A1A1A;margin-bottom:5px;">Tracker ready</div>' +
+      '<div style="font-size:12px;color:#6B7280;line-height:1.7;margin-bottom:6px;">' +
+        name + ' — ' + res.rows + ' task' + (res.rows !== 1 ? 's' : '') + ', status colour-coded.' +
+      '</div>' +
+      (hiddenCount > 0
+        ? '<div style="font-size:11px;color:#D97706;background:#FFFBEB;border:1px solid #FDE68A;border-radius:7px;padding:8px 11px;margin-bottom:14px;line-height:1.6;">' +
+            hiddenCount + ' private task' + (hiddenCount !== 1 ? 's were' : ' was') + ' excluded — you can only export what you can see.' +
+          '</div>'
+        : '<div style="height:8px;"></div>') +
+      '<div style="display:flex;flex-direction:column;gap:8px;">' +
+        '<a href="' + res.url + '" target="_blank" class="btn-primary" style="text-align:center;text-decoration:none;padding:11px;">Open in Google Sheets</a>' +
+        '<a href="' + res.xlsxUrl + '" class="btn-outline" style="text-align:center;text-decoration:none;padding:11px;font-size:12px;">Download as Excel</a>' +
+        '<a href="' + res.pdfUrl + '" target="_blank" class="btn-outline" style="text-align:center;text-decoration:none;padding:11px;font-size:12px;">Download as PDF</a>' +
+        '<button class="btn-outline" style="padding:11px;font-size:12px;" onclick="copyExportLink(\'' + res.url + '\')">Copy link to share</button>' +
+      '</div>' +
+      '<button class="btn-link-sm" style="margin-top:14px;width:100%;text-align:center;" onclick="document.getElementById(\'export-overlay\').remove()">Close</button>' +
+    '</div>';
+  document.body.appendChild(overlay);
+}
+
+window.copyExportLink = (url) => {
+  navigator.clipboard.writeText(url).then(() => showToast('Link copied', 'success'));
 };
 
 function canUserSeeProduct(p, userKey) {
@@ -9469,6 +9555,8 @@ window.__npd_init({
   dashNavToTracker:        window.dashNavToTracker,
   openDrill:               window.openDrill,
   openProjectDashboard:    window.openProjectDashboard,
+  exportProjectTracker:    window.exportProjectTracker,
+  copyExportLink:          window.copyExportLink,
   openTaskFromDrill:       window.openTaskFromDrill,
   scrollToDept:            window.scrollToDept,
   showReminderModal:       window.showReminderModal,
