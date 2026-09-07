@@ -59,6 +59,278 @@ function installDailyTrigger() {
   Logger.log('Daily trigger installed: dailyDeadlineCheck fires every day at 7am WAT');
 }
 
+/* ══════════════════════════════════════════════════════════════
+   OWNER → EMAIL RESOLUTION
+   Single source of truth for "who should receive an alert about
+   this task". Reads task.owners[] (multi-dept) first, then the
+   legacy task.owner string, then falls back to product-level
+   recipients. This is what makes reassignment actually route mail.
+   ══════════════════════════════════════════════════════════════ */
+/* Sender identity.
+   Apps Script always sends from the script owner's mailbox — that cannot
+   be changed without domain-wide delegation. What we CAN control is the
+   display name and the reply-to address, so a reminder sent by Ada reads
+   as "Ada Obi (NPD Hub)" and replies go back to Ada, not the script owner. */
+/* Email visibility log.
+   Every send — automated or user-initiated — writes a record so the
+   product owner can see what left the system without being CC'd on
+   everything. Surfaced in the product modal's Comms tab and on the
+   dashboard. Failures here never block the send. */
+function logEmailSent(productId, record) {
+  if (!productId) return;
+  try {
+    var authParam = '?auth=' + FIREBASE_DB_SECRET;
+    var id = 'em_' + Date.now() + '_' + Math.floor(Math.random() * 1000);
+    record.id = id;
+    record.sentAt = record.sentAt || Date.now();
+    UrlFetchApp.fetch(
+      FIREBASE_DB_URL + '/emailLog/' + productId + '/' + id + '.json' + authParam,
+      { method: 'put', contentType: 'application/json',
+        payload: JSON.stringify(record), muteHttpExceptions: true }
+    );
+  } catch(e) {
+    Logger.log('logEmailSent failed: ' + e.message);
+  }
+}
+
+function buildSenderOpts(body, htmlBody) {
+  var opts = { htmlBody: htmlBody };
+  var who  = body && (body.sentByName || body.senderName);
+  var mail = body && (body.sentByEmail || body.senderEmail);
+  opts.name = who ? who + ' (NPD Hub)' : SENDER_NAME;
+  if (mail && mail.indexOf('@') > -1) opts.replyTo = mail;
+  return opts;
+}
+
+function getStakeholderIndex(authParam) {
+  // Fetch stakeholders ONCE and build lookup maps. Never call inside a loop.
+  var byName = {}, byDept = {};
+  try {
+    var raw = JSON.parse(UrlFetchApp.fetch(
+      FIREBASE_DB_URL + '/config/stakeholders.json' + authParam,
+      { muteHttpExceptions: true }
+    ).getContentText());
+    var arr = raw ? (Array.isArray(raw) ? raw : Object.values(raw)) : [];
+    arr.forEach(function(s) {
+      if (!s || !s.email || s.enabled === false) return;
+      if (s.name) byName[String(s.name).trim().toLowerCase()] = s.email;
+      if (s.dept) {
+        if (!byDept[s.dept]) byDept[s.dept] = [];
+        byDept[s.dept].push({ email: s.email, isDeptEmail: !!s.isDeptEmail });
+      }
+    });
+  } catch(e) {
+    Logger.log('getStakeholderIndex failed: ' + e.message);
+  }
+  return { byName: byName, byDept: byDept };
+}
+
+/* Mirrors the frontend rule: an unset visibility field means PRIVATE.
+   Private tasks are never named in a batched product-wide thread reply —
+   they send as individual emails to their own owners instead. */
+function isTaskPrivate(task) {
+  var v = task && task.visibility;
+  return !(v === 'public' || v === 'department' || v === 'restricted');
+}
+
+function isPrivateAlert_(a) {
+  var v = a && a.visibility;
+  return !(v === 'public' || v === 'department' || v === 'restricted');
+}
+
+function resolveTaskRecipients(task, index, productFallback) {
+  var emails = [];
+  var push = function(e) { if (e && emails.indexOf(e) < 0) emails.push(e); };
+
+  // Normalise owners into a uniform array
+  var owners = [];
+  if (task.owners && task.owners.length > 0) {
+    owners = task.owners;
+  } else if (task.ownerEmail || task.owner) {
+    owners = [{ dept: task.ownerDept || '', email: task.ownerEmail || '', individual: task.owner || '' }];
+  }
+
+  owners.forEach(function(o) {
+    var dept = (o.dept || '').trim();
+
+    // 1. CANONICAL: owner carries an email — no name matching involved
+    if (o.email && o.email.indexOf('@') > -1) { push(o.email); return; }
+
+    // 2. LEGACY fallback for rows not yet migrated
+    var ind = (o.individual || o.nameCache || '').trim();
+    if (ind && index.byName[ind.toLowerCase()]) { push(index.byName[ind.toLowerCase()]); return; }
+    if (ind && ind.indexOf('@') > -1) { push(ind); return; }
+
+    // 3. Whole-department assignment → dept alias, or every member
+    var target = dept || ind;
+    if (target && index.byDept[target]) {
+      var alias = index.byDept[target].filter(function(m) { return m.isDeptEmail; });
+      if (alias.length > 0) alias.forEach(function(m) { push(m.email); });
+      else index.byDept[target].forEach(function(m) { push(m.email); });
+    }
+  });
+
+  // Only fall back to the product owner when the task has no resolvable owner
+  if (emails.length === 0 && productFallback && productFallback.length > 0) {
+    productFallback.forEach(push);
+  }
+  return emails;
+}
+
+/* ══════════════════════════════════════════════════════════════
+   MIGRATION: name-based owners → canonical email identity
+
+   RUN ORDER — do not skip step 1:
+     1. migrateOwnersToEmail_DRYRUN()  → prints the resolution table,
+                                          writes NOTHING. Read the log.
+     2. migrateOwnersToEmail_APPLY()   → writes only after you've read it.
+
+   Anything under UNRESOLVED needs a human decision. The migration will
+   never guess: unresolved owners are left exactly as they are, so the
+   legacy name-matching fallback keeps them working until you fix them.
+   ══════════════════════════════════════════════════════════════ */
+function migrateOwnersToEmail_DRYRUN() { return runOwnerMigration_(true); }
+function migrateOwnersToEmail_APPLY()  { return runOwnerMigration_(false); }
+
+function runOwnerMigration_(dryRun) {
+  var authParam = '?auth=' + FIREBASE_DB_SECRET;
+  var index     = getStakeholderIndex(authParam);
+  var products  = JSON.parse(UrlFetchApp.fetch(
+    FIREBASE_DB_URL + '/products.json' + authParam, { muteHttpExceptions: true }
+  ).getContentText()) || {};
+
+  var resolved = [], unresolved = [], alreadyOk = 0, writes = 0;
+
+  Object.keys(products).forEach(function(pid) {
+    var prod  = products[pid];
+    var tasks = prod.tasks || {};
+    Object.keys(tasks).forEach(function(tid) {
+      var task = tasks[tid];
+
+      // Build the legacy owner list for this task
+      var legacy = [];
+      if (task.owners && task.owners.length > 0) legacy = task.owners;
+      else if (task.owner) legacy = [{ dept: task.ownerDept || '', individual: task.owner }];
+      if (legacy.length === 0) return;
+
+      var migrated = [], changed = false;
+
+      legacy.forEach(function(o) {
+        if (o.email && o.email.indexOf('@') > -1) {   // already canonical
+          migrated.push(o); alreadyOk++; return;
+        }
+        var name = (o.individual || o.nameCache || '').trim();
+        var dept = (o.dept || '').trim();
+
+        var email = '';
+        var matchKind = 'exact';
+        if (name && index.byName[name.toLowerCase()]) {
+          email = index.byName[name.toLowerCase()];
+        } else if (name && name.indexOf('@') > -1) {
+          email = name;
+        } else if (name && !index.byDept[name]) {
+          // Partial match — accepted ONLY when exactly one directory entry
+          // matches on a shared word of 3+ characters. Two or more candidates
+          // means we cannot tell them apart, so we decline rather than guess.
+          //
+          // Guarded by !index.byDept[name]: if the owner field holds a
+          // DEPARTMENT name it must stay a department assignment, otherwise a
+          // bare "MCC" would partial-match the "MCC Team" alias and be stored
+          // as an individual — which breaks the privacy gate's department
+          // check and hides that department's own tasks from its members.
+          var words = name.toLowerCase().split(/[\s.,]+/).filter(function(w) { return w.length > 2; });
+          if (words.length > 0) {
+            var cands = [];
+            Object.keys(index.byName).forEach(function(n) {
+              var nWords = n.split(/[\s.,]+/);
+              var shares = words.some(function(w) {
+                return nWords.some(function(nw) { return nw === w; });
+              });
+              if (shares && cands.indexOf(index.byName[n]) < 0) cands.push(index.byName[n]);
+            });
+            if (cands.length === 1) { email = cands[0]; matchKind = 'partial'; }
+            else if (cands.length > 1) { matchKind = 'ambiguous:' + cands.length; }
+          }
+        }
+
+        if (email) {
+          migrated.push({ dept: dept, email: email, nameCache: name });
+          resolved.push(prod.name + ' | ' + (task.title || tid) + ' | "' + name + '" -> ' + email +
+                        (matchKind === 'partial' ? '   [PARTIAL MATCH — verify]' : ''));
+          changed = true;
+        } else if (dept && index.byDept[dept]) {
+          // Whole-department assignment with the dept field already set
+          migrated.push({ dept: dept, email: '', nameCache: name });
+          alreadyOk++;
+        } else if (!dept && name && index.byDept[name]) {
+          // The owner field holds a DEPARTMENT name with no dept field set.
+          // The runtime resolver already handles this (target = dept || ind),
+          // so these route correctly today — but normalise them so the dept
+          // lives in the right field and the legacy path is no longer needed.
+          migrated.push({ dept: name, email: '', nameCache: '' });
+          resolved.push(prod.name + ' | ' + (task.title || tid) + ' | "' + name + '" -> department "' + name + '"');
+          changed = true;
+        } else {
+          migrated.push(o);   // leave untouched — legacy fallback still handles it
+          unresolved.push(prod.name + ' | ' + (task.title || tid) + ' | "' + name + '" (dept: "' + dept + '")' +
+                          (matchKind.indexOf('ambiguous') === 0
+                            ? '  — ' + matchKind.split(':')[1] + ' possible matches, too ambiguous to pick'
+                            : ''));
+        }
+      });
+
+      if (!changed) return;
+      writes++;
+      if (dryRun) return;
+
+      var first = migrated[0] || {};
+      var base  = FIREBASE_DB_URL + '/products/' + pid + '/tasks/' + tid;
+      UrlFetchApp.fetch(base + '/owners.json' + authParam,
+        { method: 'put', contentType: 'application/json', payload: JSON.stringify(migrated), muteHttpExceptions: true });
+      UrlFetchApp.fetch(base + '/ownerEmail.json' + authParam,
+        { method: 'put', contentType: 'application/json', payload: JSON.stringify(first.email || ''), muteHttpExceptions: true });
+    });
+  });
+
+  Logger.log('═══════════════════════════════════════════');
+  Logger.log(dryRun ? 'DRY RUN — nothing was written' : 'APPLIED — ' + writes + ' task(s) updated');
+  Logger.log('Already canonical : ' + alreadyOk);
+  Logger.log('Resolved          : ' + resolved.length);
+  Logger.log('UNRESOLVED        : ' + unresolved.length);
+  Logger.log('═══════════════════════════════════════════');
+  if (resolved.length) {
+    Logger.log('--- RESOLVED ---');
+    resolved.forEach(function(r) { Logger.log('  ' + r); });
+  }
+  if (unresolved.length) {
+    Logger.log('--- UNRESOLVED (left untouched — they still work via legacy name matching) ---');
+    unresolved.forEach(function(u) { Logger.log('  ' + u); });
+    // Suggest close matches so the fix is obvious rather than guesswork.
+    Logger.log('');
+    Logger.log('--- SUGGESTIONS (NOT applied — confirm before acting) ---');
+    var seen = {};
+    unresolved.forEach(function(u) {
+      var m = u.match(/\| "([^"]*)"/);
+      if (!m || !m[1] || seen[m[1]]) return;
+      seen[m[1]] = true;
+      var needle = m[1].toLowerCase();
+      var hits = [];
+      Object.keys(index.byName).forEach(function(n) {
+        // match on any shared word of 3+ chars
+        var words = needle.split(/[\s.]+/).filter(function(w) { return w.length > 2; });
+        if (words.some(function(w) { return n.indexOf(w) > -1; })) {
+          hits.push(index.byName[n] + '  (' + n + ')');
+        }
+      });
+      Logger.log('  "' + m[1] + '" -> ' + (hits.length ? hits.join('  |  ') : 'no close match in the directory'));
+    });
+    Logger.log('');
+    Logger.log('  To fix: add the person in Circuit Box > People, or reassign the task in the UI.');
+    Logger.log('  Re-run this dry run afterwards. Nothing breaks in the meantime.');
+  }
+  return { dryRun: dryRun, resolved: resolved.length, unresolved: unresolved.length, writes: writes };
+}
+
 function dailyDeadlineCheck() {
   if (!FIREBASE_DB_URL) {
     Logger.log('FIREBASE_DB_URL not set — open gas-backend.js and set it at the top');
@@ -82,19 +354,18 @@ function dailyDeadlineCheck() {
   var users    = JSON.parse(usersResp.getContentText())    || {};
   var alerts   = [];
 
+  var stakeIndex = getStakeholderIndex(authParam);
+
   Object.values(products).forEach(function(prod) {
     if (prod.status === 'archived') return;
     if (prod.alertsEnabled === false) return;
 
-    // Determine recipient
-    var deptEmails = [];
+    // Product-level fallback ONLY — used when a task has no resolvable owner
+    var productFallback = [];
     if (prod.alertRecipients && prod.alertRecipients.length > 0) {
-      deptEmails = prod.alertRecipients;
+      productFallback = prod.alertRecipients;
     } else if (prod.ownerId && users[prod.ownerId] && users[prod.ownerId].email) {
-      deptEmails = [users[prod.ownerId].email];
-    } else {
-      Logger.log('No recipient for ' + prod.name + ' — skipping');
-      return;
+      productFallback = [users[prod.ownerId].email];
     }
 
     // Get tasks — handle both new tasks{} and legacy pillars{}
@@ -142,13 +413,30 @@ function dailyDeadlineCheck() {
         : isDelayed  ? 'delayed'
         : 'warning';
 
+      // Resolve recipients from the TASK's owners — this is what makes
+      // reassignment actually change who gets the email.
+      var taskRecipients = resolveTaskRecipients(task, stakeIndex, productFallback);
+      if (taskRecipients.length === 0) {
+        Logger.log('No recipient for task "' + (task.title || task.id) + '" in ' + prod.name + ' — skipping');
+        return;
+      }
+
+      // Display label: show every owner, not just the first
+      var ownerLabel = '';
+      if (task.owners && task.owners.length > 0) {
+        ownerLabel = task.owners.map(function(o) { return o.individual || o.dept; }).join(', ');
+      } else {
+        ownerLabel = task.owner || '';
+      }
+
       alerts.push({
         productName: prod.name,
         productId:   prod.id,
         pillarName:  task.title || task.name || 'Unknown task',
         pillarId:    task.id,
-        ownerDept:   task.owner || '',
-        deptEmails:  deptEmails,
+        ownerDept:   ownerLabel,
+        deptEmails:  taskRecipients,
+        visibility:  task.visibility || 'private',
         daysUntil:   diff,
         daysOverdue: daysOverdue,
         deadline:    task.deadline || null,
@@ -184,7 +472,14 @@ function dailyDeadlineCheck() {
     if (threadId) {
       try {
         var thread = GmailApp.getThreadById(threadId);
-        if (thread) {
+        // Private tasks never go into the shared thread — strip them out and
+    // let them fall through to the individual-email path below.
+    var privateAlerts = prodAlerts.filter(isPrivateAlert_);
+    prodAlerts        = prodAlerts.filter(function(a) { return !isPrivateAlert_(a); });
+    if (privateAlerts.length > 0) {
+      Logger.log(privateAlerts.length + ' private task alert(s) excluded from thread reply for ' + productId);
+    }
+    if (thread && prodAlerts.length > 0) {
           // Build tabular alert email for thread reply
           var today2 = new Date();
           var dateStr = Utilities.formatDate(today2, 'Africa/Lagos', 'EEEE, dd MMMM yyyy');
@@ -248,6 +543,13 @@ function dailyDeadlineCheck() {
           if (allRecips.length > 0) replyOpts.to = allRecips.join(',');
           thread.reply('', replyOpts);
           totalSent += allRecips.length;
+          logEmailSent(productId, {
+            type: 'deadline_alert', trigger: 'automated',
+            subject: 'Deadline alert — ' + (prod ? prod.name : productId),
+            to: allRecips, cc: [],
+            taskTitles: prodAlerts.map(function(a) { return a.pillarName; }),
+            sentBy: 'NPD Hub (automated daily check)',
+          });
           Logger.log('Thread reply: ' + (prod.name || productId) + ' -> ' + allRecips.length + ' recipients');
           return;
         }
@@ -307,28 +609,67 @@ function dailyTodoCheck() {
   // Build a per-user task map
   var userTasks = {}; // { email: { overdue:[], dueSoon:[], onTrack:[] } }
 
+  // Fetch stakeholders ONCE — not once per task
+  var stakeIndex = getStakeholderIndex(authParam);
+
+  var fileTask = function(email, entry) {
+    if (!userTasks[email]) userTasks[email] = { overdue: [], dueSoon: [], onTrack: [] };
+    if (entry.daysUntil !== null && entry.daysUntil < 0)       userTasks[email].overdue.push(entry);
+    else if (entry.daysUntil !== null && entry.daysUntil <= 7) userTasks[email].dueSoon.push(entry);
+    else                                                        userTasks[email].onTrack.push(entry);
+  };
+
   Object.values(products).forEach(function(prod) {
     if (prod.status === 'archived') return;
     var tasks = Object.values(prod.tasks || prod.pillars || {});
     tasks.forEach(function(task) {
       if ((task.status || task.taskStatus) === 'complete') return;
-      var ownerEmail = '';
-      // Try to match task owner to a stakeholder email
-      var STAKEDB = JSON.parse(UrlFetchApp.fetch(FIREBASE_DB_URL + '/config/stakeholders.json' + authParam, { muteHttpExceptions: true }).getContentText());
-      var stakeArr = STAKEDB ? (Array.isArray(STAKEDB) ? STAKEDB : Object.values(STAKEDB)) : [];
-      var matched = stakeArr.find(function(s) { return s.name === (task.owner || '') || s.dept === (task.owner || ''); });
-      if (matched) ownerEmail = matched.email;
-      if (!ownerEmail) return;
-      if (!userTasks[ownerEmail]) userTasks[ownerEmail] = { overdue: [], dueSoon: [], onTrack: [], productName: prod.name };
+      // Skip empty placeholder rows — no title and no deadline means nothing to chase
+      if (!task.title && !task.name && !task.deadline) return;
+
+      // Multi-owner aware: every assigned party gets the task on their list
+      var recipients = resolveTaskRecipients(task, stakeIndex, []);
+      if (recipients.length === 0) return;
+
       var d = task.deadline ? new Date(task.deadline) : null;
       if (d) d.setHours(0,0,0,0);
       var daysUntil = d ? Math.round((d - today) / 86400000) : null;
-      var entry = { title: task.title || task.name || 'Untitled', product: prod.name, deadline: task.deadline, daysUntil: daysUntil, status: task.status || task.taskStatus || '' };
-      if (daysUntil !== null && daysUntil < 0) userTasks[ownerEmail].overdue.push(entry);
-      else if (daysUntil !== null && daysUntil <= 7) userTasks[ownerEmail].dueSoon.push(entry);
-      else userTasks[ownerEmail].onTrack.push(entry);
+      var entry = {
+        title: task.title || task.name || 'Untitled',
+        product: prod.name,
+        deadline: task.deadline,
+        daysUntil: daysUntil,
+        status: task.status || task.taskStatus || '',
+      };
+      recipients.forEach(function(email) { fileTask(email, entry); });
     });
   });
+
+  // Standalone personal tasks — the built-in to-do list
+  try {
+    var standalone = JSON.parse(UrlFetchApp.fetch(
+      FIREBASE_DB_URL + '/standaloneTasks.json' + authParam,
+      { muteHttpExceptions: true }
+    ).getContentText()) || {};
+    Object.keys(standalone).forEach(function(userKey) {
+      var bucket = standalone[userKey] || {};
+      Object.values(bucket).forEach(function(task) {
+        if (!task || task.status === 'complete' || !task.ownerEmail) return;
+        var d = task.deadline ? new Date(task.deadline) : null;
+        if (d) d.setHours(0,0,0,0);
+        var daysUntil = d ? Math.round((d - today) / 86400000) : null;
+        fileTask(task.ownerEmail, {
+          title: task.title || 'Untitled',
+          product: 'Personal',
+          deadline: task.deadline,
+          daysUntil: daysUntil,
+          status: task.status || '',
+        });
+      });
+    });
+  } catch(e) {
+    Logger.log('Standalone task fetch failed: ' + e.message);
+  }
 
   var digestType = isWeekly ? 'Weekly' : 'Daily';
   Object.keys(userTasks).forEach(function(email) {
@@ -358,6 +699,7 @@ function sendTodoDigest(body) {
       var tasks = Object.values(prod.tasks || prod.pillars || {});
       tasks.forEach(function(task) {
         if ((task.status || task.taskStatus) === 'complete') return;
+        if (!task.title && !task.name && !task.deadline) return; // skip empty placeholders
         var d = task.deadline ? new Date(task.deadline) : null;
         if (d) d.setHours(0,0,0,0);
         var daysUntil = d ? Math.round((d - today) / 86400000) : null;
@@ -579,6 +921,7 @@ function doPost(e) {
       case 'replyToThread':         result = replyToThread(body);                break;
       case 'getThreadSubject':      result = getThreadSubject(body);             break;
       case 'gccoGenerateLink':      result = gccoGenerateLink(body);             break;
+      case 'exportProjectTracker':  result = exportProjectTracker(body);         break;
       case 'sendTodoDigest':        result = sendTodoDigest(body);              break;
       case 'ping':                  result = { ok: true, message: 'NPD Hub GAS v2.1 is live.', ts: new Date().toISOString() }; break;
       default:                      result = { ok: false, error: 'Unknown action: ' + action };
@@ -592,6 +935,143 @@ function doPost(e) {
     return ContentService
       .createTextOutput(JSON.stringify({ ok: false, error: err.message }))
       .setMimeType(ContentService.MimeType.JSON);
+  }
+}
+
+/* ══════════════════════════════════════════════════════════════
+   PROJECT TRACKER EXPORT
+
+   Builds a formatted, shareable Google Sheet for one project.
+
+   PRIVACY: this function never reads Firebase for tasks. The caller
+   sends a pre-filtered list containing only what THAT user is allowed
+   to see (canViewTask runs in the browser, where the user identity
+   exists). GAS cannot widen the set because it never sees the rest.
+   ══════════════════════════════════════════════════════════════ */
+function exportProjectTracker(body) {
+  try {
+    var name    = body.productName || 'Untitled';
+    var tasks   = body.tasks || [];
+    var isProj  = (body.itemType || 'product') === 'project';
+    var stamp   = Utilities.formatDate(new Date(), 'Africa/Lagos', 'dd MMM yyyy');
+    var fileName = name + ' — Tracker — ' + stamp;
+
+    var ss = SpreadsheetApp.create(fileName);
+    var sh = ss.getActiveSheet();
+    sh.setName('Tracker');
+
+    // ── Title block ──────────────────────────────────────────
+    sh.getRange('A1').setValue(name);
+    sh.getRange('A1:G1').merge()
+      .setFontSize(16).setFontWeight('bold').setFontColor('#FFFFFF')
+      .setBackground('#C0282D').setVerticalAlignment('middle');
+    sh.setRowHeight(1, 38);
+
+    var meta = (isProj ? 'Project' : 'Product') +
+      '   |   ' + (isProj ? 'Target completion' : 'Target launch') + ': ' + (body.launchDate || 'not set') +
+      '   |   Owner: ' + (body.ownerName || 'unassigned') +
+      '   |   Generated ' + stamp + ' by ' + (body.generatedBy || '');
+    sh.getRange('A2').setValue(meta);
+    sh.getRange('A2:G2').merge()
+      .setFontSize(9).setFontColor('#6B6B67').setBackground('#F8F8F7')
+      .setVerticalAlignment('middle');
+    sh.setRowHeight(2, 26);
+
+    // ── Summary counts ───────────────────────────────────────
+    var counts = { complete: 0, delayed: 0, overdue: 0, 'due-soon': 0, 'on-track': 0 };
+    tasks.forEach(function(t) { if (counts[t.status] !== undefined) counts[t.status]++; });
+    var pct = tasks.length ? Math.round((counts.complete / tasks.length) * 100) : 0;
+    sh.getRange('A3').setValue(
+      tasks.length + ' tasks   |   ' + pct + '% complete   |   ' +
+      counts.complete + ' done, ' + counts['on-track'] + ' on track, ' +
+      counts['due-soon'] + ' due soon, ' + (counts.overdue + counts.delayed) + ' need action'
+    );
+    sh.getRange('A3:G3').merge().setFontSize(9).setFontColor('#1A1A18').setFontWeight('bold');
+    sh.setRowHeight(3, 22);
+
+    // ── Header row ───────────────────────────────────────────
+    var headers = ['#', 'Task', 'Owner', 'Department', 'Deadline', 'Status', 'Notes'];
+    sh.getRange(5, 1, 1, headers.length).setValues([headers])
+      .setFontWeight('bold').setFontColor('#FFFFFF').setBackground('#1A1A18')
+      .setFontSize(10).setVerticalAlignment('middle');
+    sh.setRowHeight(5, 28);
+
+    // ── Rows ─────────────────────────────────────────────────
+    var STATUS_LABEL = {
+      complete:   'Complete',   delayed:  'Delayed',  overdue: 'Overdue',
+      'due-soon': 'Due Soon',   'on-track': 'On Track',
+    };
+    var STATUS_BG = {
+      complete:   ['#EFF6FF', '#2563EB'],
+      delayed:    ['#FEF2F2', '#C0282D'],
+      overdue:    ['#FEF2F2', '#C0282D'],
+      'due-soon': ['#FFFBEB', '#D97706'],
+      'on-track': ['#F0FDF4', '#16A34A'],
+    };
+
+    if (tasks.length > 0) {
+      var rows = tasks.map(function(t, i) {
+        return [
+          i + 1,
+          t.title    || 'Untitled',
+          t.owner    || 'Unassigned',
+          t.dept     || '',
+          t.deadline || 'No date',
+          STATUS_LABEL[t.status] || 'On Track',
+          t.notes    || '',
+        ];
+      });
+      sh.getRange(6, 1, rows.length, headers.length).setValues(rows)
+        .setFontSize(10).setVerticalAlignment('top').setWrap(true);
+
+      // Colour the status cell per row
+      tasks.forEach(function(t, i) {
+        var pair = STATUS_BG[t.status] || STATUS_BG['on-track'];
+        sh.getRange(6 + i, 6)
+          .setBackground(pair[0]).setFontColor(pair[1])
+          .setFontWeight('bold').setHorizontalAlignment('center');
+      });
+
+      // Banding on the task rows only
+      sh.getRange(6, 1, rows.length, headers.length)
+        .setBorder(true, true, true, true, true, true, '#E5E4E0', SpreadsheetApp.BorderStyle.SOLID);
+    } else {
+      sh.getRange(6, 1).setValue('No tasks visible to you on this item.')
+        .setFontColor('#9A9A96').setFontStyle('italic');
+    }
+
+    // ── Layout ───────────────────────────────────────────────
+    sh.setColumnWidth(1, 40);   sh.setColumnWidth(2, 340);
+    sh.setColumnWidth(3, 150);  sh.setColumnWidth(4, 120);
+    sh.setColumnWidth(5, 100);  sh.setColumnWidth(6, 100);
+    sh.setColumnWidth(7, 260);
+    sh.setFrozenRows(5);
+    sh.getRange(1, 1, 3, headers.length).setHorizontalAlignment('left');
+
+    // Footer note
+    var footRow = 6 + Math.max(tasks.length, 1) + 1;
+    sh.getRange(footRow, 1).setValue(
+      'Generated from the Mixta Africa NPD Hub on ' + stamp +
+      '. Shows only items visible to ' + (body.generatedBy || 'the requester') + '.'
+    );
+    sh.getRange(footRow, 1, 1, headers.length).merge()
+      .setFontSize(8).setFontColor('#9A9A96').setFontStyle('italic');
+
+    // Anyone with the link can view — it is a point-in-time snapshot
+    var file = DriveApp.getFileById(ss.getId());
+    file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+
+    logEvent('Tracker exported', name, tasks.length + ' rows');
+    return {
+      ok: true,
+      url: ss.getUrl(),
+      xlsxUrl: 'https://docs.google.com/spreadsheets/d/' + ss.getId() + '/export?format=xlsx',
+      pdfUrl:  'https://docs.google.com/spreadsheets/d/' + ss.getId() + '/export?format=pdf&portrait=false&fitw=true&gridlines=false',
+      rows: tasks.length,
+    };
+  } catch(err) {
+    Logger.log('exportProjectTracker error: ' + err.message);
+    return { ok: false, error: err.message };
   }
 }
 
@@ -657,6 +1137,24 @@ function doGet(e) {
           user: email, userName: email.split('@')[0], timestamp: Date.now(),
         }),
       });
+
+      // If more time was requested, drop a visible comment on the product so
+      // the owner sees it on the dashboard, not just in the activity log.
+      if (ackType === 'needs_more_time') {
+        var commentId = 'c_time_' + Date.now();
+        UrlFetchApp.fetch(FIREBASE_DB_URL + '/products/' + productId + '/comments/' + commentId + '.json' + authParam, {
+          method: 'put', contentType: 'application/json', muteHttpExceptions: true,
+          payload: JSON.stringify({
+            id: commentId,
+            text: '**Time Extension Requested**\n' + email.split('@')[0] +
+                  ' has requested more time to complete their assigned task. Please review the timeline and reach out to them.',
+            userEmail: 'system@mixtafrica.com',
+            userName:  'System Alert',
+            type:      'time_extension',
+            createdAt: Date.now(),
+          }),
+        });
+      }
 
       var title   = ackType === 'needs_more_time' ? 'Request received' : 'Alert acknowledged';
       var msg     = ackType === 'needs_more_time'
@@ -1006,6 +1504,12 @@ function checkAndSendDeadlineAlerts(body) {
             var html = buildAlertEmail(alertWithRecipient);
             GmailApp.sendEmail(email, alertSubject, '', { htmlBody: html, name: SENDER_NAME });
             sent++;
+            logEmailSent(alert.productId, {
+              type: 'deadline_alert', trigger: body.testMode ? 'test' : 'automated',
+              subject: alertSubject, to: [email], cc: [],
+              taskTitles: [alert.pillarName], taskId: alert.pillarId,
+              sentBy: 'NPD Hub (automated)',
+            });
           } catch(e) {
             errors.push(email + ': ' + e.message);
             Logger.log('Alert email failed for ' + email + ': ' + e.message);
@@ -1053,7 +1557,13 @@ function buildAlertEmail(alert) {
     : alert.daysUntil === 0 ? 'Due today'
     : alert.daysUntil + 'd remaining';
 
-  var baseUrl = ScriptApp.getService().getUrl();
+  // getUrl() can return the editor URL in some execution contexts, which
+  // produces dead acknowledge links. Guard and fall back to the /exec form.
+  var baseUrl;
+  try { baseUrl = ScriptApp.getService().getUrl(); } catch(e) { baseUrl = ''; }
+  if (!baseUrl || baseUrl.indexOf('/edit') !== -1 || baseUrl.indexOf('/d/') !== -1) {
+    baseUrl = 'https://script.google.com/macros/s/' + ScriptApp.getScriptId() + '/exec';
+  }
   var ackUrl  = baseUrl + '?action=ack&p=' + encodeURIComponent(alert.productId || '') +
     '&t=' + encodeURIComponent(alert.taskId || '') +
     '&type=acknowledged&email=' + encodeURIComponent(alert.recipientEmail || '');
@@ -1134,7 +1644,7 @@ function sendProgressReport(body) {
     var effectiveRecipients = resolveRecipients(recipients, body.testMode);
     effectiveRecipients.forEach(function(email) {
       try {
-        GmailApp.sendEmail(email, subject, '', { htmlBody: htmlBody, name: SENDER_NAME });
+        GmailApp.sendEmail(email, subject, '', buildSenderOpts(body, htmlBody));
         sent++;
       } catch(e) {
         errors.push(email + ': ' + e.message);
@@ -1475,7 +1985,7 @@ function sendDeadlineReminder(body) {
     var sent = 0, errors = [];
     recipients.forEach(function(email) {
       try {
-        GmailApp.sendEmail(email, subject, '', { htmlBody: htmlBody, name: SENDER_NAME });
+        GmailApp.sendEmail(email, subject, '', buildSenderOpts(body, htmlBody));
         sent++;
       } catch(e) {
         errors.push(email + ': ' + e.message);
@@ -1517,8 +2027,8 @@ function sendComposedEmail(body) {
         '<div style="color:white;font-size:11px;letter-spacing:.1em;text-transform:uppercase;margin-bottom:3px;">Mixta Africa — NPD Hub</div>' +
         '<div style="color:white;font-size:18px;font-weight:700;">' + (productName || subject) + '</div>' +
       '</div>' +
-      '<div style="padding:26px 28px;font-size:14px;color:#1a1a18;line-height:1.8;white-space:pre-wrap;">' +
-        emailBody.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>') +
+      '<div style="padding:26px 28px;font-size:14px;color:#1a1a18;line-height:1.8;">' +
+        parseMarkdownToEmailHtml(emailBody) +
       '</div>' +
       (folderUrl ? '<div style="padding:0 28px 24px;"><a href="' + folderUrl + '" style="display:inline-block;background:#C0282D;color:white;padding:10px 24px;border-radius:6px;text-decoration:none;font-weight:600;font-size:13px;">Open Drive Folder</a></div>' : '') +
       '<div style="background:#f8f8f7;padding:12px 28px;border-top:1px solid #e5e4e0;font-size:11px;color:#9a9a96;">Mixta Africa NPD Hub &nbsp;·&nbsp; Sent via Email Composer</div>' +
@@ -1527,11 +2037,10 @@ function sendComposedEmail(body) {
     var sent = 0, errors = [];
     to.forEach(function(email) {
       try {
-        GmailApp.sendEmail(email, finalSubject, emailBody, {
-          htmlBody: htmlBody,
-          name:     SENDER_NAME,
-          cc:       cc.join(','),
-        });
+        GmailApp.sendEmail(email, finalSubject, emailBody, Object.assign(
+          buildSenderOpts(body, htmlBody),
+          { cc: cc.join(',') }
+        ));
         sent++;
       } catch(e) {
         errors.push(email + ': ' + e.message);
@@ -1580,7 +2089,7 @@ function replyToThread(body) {
     var cc  = testMode ? [] : (ccEmails || []);
 
     var htmlBody = buildThreadReplyHTML(emailBody, productName, subject);
-    var replyOpts = { htmlBody: htmlBody, name: SENDER_NAME };
+    var replyOpts = buildSenderOpts(body, htmlBody);
     if (to.length > 0) replyOpts.to = to.join(',');
     if (cc.length > 0) replyOpts.cc = cc.join(',');
 
@@ -1997,4 +2506,65 @@ function test_fullEndToEnd() {
   Logger.log('Emails sent: ' + result.sent);
   Logger.log('Errors: ' + JSON.stringify(result.errors));
   Logger.log('✅ Check inbox at ' + TEST_EMAIL_OVERRIDE);
+}
+
+
+/* ─────────────────────────────────────────────────────────────
+   MARKDOWN → EMAIL HTML
+   Converts Markdown pipe tables into styled HTML tables so an
+   AI-drafted tracker renders as a real table rather than raw pipes.
+   Also handles **bold**. Ported from the live script.
+   ───────────────────────────────────────────────────────────── */
+function parseMarkdownToEmailHtml(text) {
+  if (!text) return '';
+
+  var lines       = text.split('\n');
+  var inTable     = false;
+  var tableHtml   = '';
+  var resultLines = [];
+
+  for (var i = 0; i < lines.length; i++) {
+    var line = lines[i].trim();
+
+    if (line.charAt(0) === '|' && line.charAt(line.length - 1) === '|') {
+      if (!inTable) {
+        inTable   = true;
+        tableHtml = '<table style="width:100%;border-collapse:collapse;margin:16px 0;border:1px solid #e5e4e0;">';
+      }
+      // Skip the |---|---| delimiter row
+      if (line.match(/^\|[\s\-|]+\|$/)) continue;
+
+      var cells    = line.split('|').slice(1, -1);
+      var isHeader = tableHtml.indexOf('<thead>') === -1;
+
+      if (isHeader) {
+        tableHtml += '<thead style="background:#1a1a18;color:#fff;"><tr>';
+        cells.forEach(function(c) {
+          tableHtml += '<th style="padding:8px 12px;text-align:left;font-size:11px;text-transform:uppercase;letter-spacing:.05em;">' + c.trim() + '</th>';
+        });
+        tableHtml += '</tr></thead><tbody>';
+      } else {
+        tableHtml += '<tr style="border-bottom:1px solid #e5e4e0;">';
+        cells.forEach(function(c) {
+          tableHtml += '<td style="padding:10px 12px;font-size:13px;color:#1a1a18;">' + c.trim() + '</td>';
+        });
+        tableHtml += '</tr>';
+      }
+    } else {
+      if (inTable) {
+        inTable = false;
+        tableHtml += '</tbody></table>';
+        resultLines.push(tableHtml);
+        tableHtml = '';
+      }
+      resultLines.push(line);
+    }
+  }
+  if (inTable) {
+    tableHtml += '</tbody></table>';
+    resultLines.push(tableHtml);
+  }
+
+  var html = resultLines.join('<br>');
+  return html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
 }
