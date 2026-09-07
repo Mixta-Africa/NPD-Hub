@@ -1114,22 +1114,22 @@ function renderDashboard(el) {
         '<button class="btn-primary" onclick="loadView(\'products\')">+ New</button>' +
       '</div>' +
       '<div class="stats-row">' +
-        '<div class="stat-card stat-card-link dash-stat-card" onclick="openDrill(\'active\')" style="border-top:3px solid var(--red);">' +
+        '<div class="stat-card stat-card-link dash-stat-card" onclick="openDrill(\\'active\\')" style="border-top:3px solid var(--red);">' +
           '<div class="stat-label">Active items</div>' +
           '<div class="stat-value" id="stat-active">—</div>' +
           '<div class="stat-nav-hint" id="stat-slip" style="color:var(--red);font-weight:500;min-height:16px;"></div>' +
         '</div>' +
-        '<div class="stat-card stat-card-link dash-stat-card" onclick="dashNavToTracker(\'ontrack\')" style="border-top:3px solid var(--green);">' +
+        '<div class="stat-card stat-card-link dash-stat-card" onclick="openDrill(\\'ontrack\\')" style="border-top:3px solid var(--green);">' +
           '<div class="stat-label">On Track</div>' +
           '<div class="stat-value green" id="stat-ontrack">—</div>' +
-          '<div class="stat-nav-hint" id="stat-ontrack-hint" style="min-height:16px;">View tracker →</div>' +
+          '<div class="stat-nav-hint" id="stat-ontrack-hint" style="min-height:16px;">See the tasks →</div>' +
         '</div>' +
-        '<div class="stat-card stat-card-link dash-stat-card" onclick="dashNavToTracker(\'overdue\')" style="border-top:3px solid var(--red);">' +
+        '<div class="stat-card stat-card-link dash-stat-card" onclick="openDrill(\\'overdue\\')" style="border-top:3px solid var(--red);">' +
           '<div class="stat-label">Overdue</div>' +
           '<div class="stat-value red" id="stat-overdue">—</div>' +
           '<div class="stat-nav-hint">See what is overdue →</div>' +
         '</div>' +
-        '<div class="stat-card stat-card-link dash-stat-card" onclick="openDrill(\'week\')" style="border-top:3px solid var(--amber);">' +
+        '<div class="stat-card stat-card-link dash-stat-card" onclick="openDrill(\\'week\\')" style="border-top:3px solid var(--amber);">' +
           '<div class="stat-label">Due This Week</div>' +
           '<div class="stat-value amber" id="stat-week">—</div>' +
           '<div class="stat-nav-hint">See the tasks →</div>' +
@@ -1248,7 +1248,7 @@ function _updateDashboardUI(list) {
     }
     document.getElementById('stat-ontrack').textContent = ontrack || '0';
     const hintEl = document.getElementById('stat-ontrack-hint');
-    if (hintEl) hintEl.textContent = activeTaskCount > 0 ? ontrack + ' of ' + activeTaskCount + ' active tasks → tracker' : 'View tracker →';
+    if (hintEl) hintEl.textContent = activeTaskCount > 0 ? ontrack + ' of ' + activeTaskCount + ' active tasks → see tasks' : 'See the tasks →';
     document.getElementById('stat-overdue').textContent = overdue || '0';
     document.getElementById('stat-week').textContent    = thisWeek || '0';
 
@@ -4548,6 +4548,12 @@ function buildPillarDetail(p) {
       ? '<div style="font-size:10px;color:var(--blue);margin-top:4px;">→ Spun out: ' + (task.spunOutName || task.spunOutTo) + '</div>'
       : '';
 
+    const isFirst = i === 0;
+    const isLast = i === tasks.length - 1;
+    const moveUpBtn = canEdit(p) && !isFirst ? '<button onclick="moveProductTask(\\'' + p.id + '\\', \\'' + task.id + '\\', -1)" style="background:none;border:1px solid var(--border);border-radius:6px;padding:3px 8px;font-size:10px;color:var(--text-muted);cursor:pointer;font-family:Poppins,sans-serif;margin-left:6px;" title="Move Up">↑</button>' : '';
+    const moveDownBtn = canEdit(p) && !isLast ? '<button onclick="moveProductTask(\\'' + p.id + '\\', \\'' + task.id + '\\', 1)" style="background:none;border:1px solid var(--border);border-radius:6px;padding:3px 8px;font-size:10px;color:var(--text-muted);cursor:pointer;font-family:Poppins,sans-serif;margin-left:6px;" title="Move Down">↓</button>' : '';
+    const deleteBtn = canEdit(p) ? '<button onclick="deleteProductTask(\\'' + p.id + '\\', \\'' + task.id + '\\')" style="background:none;border:1px solid var(--border);border-radius:6px;padding:3px 8px;font-size:10px;color:var(--red);cursor:pointer;font-family:Poppins,sans-serif;margin-left:6px;" title="Delete Task">✕</button>' : '';
+
     return '<div class="pillar-detail-row' + (isBlocked ? ' pillar-row-blocked' : '') + '">' +
       '<div class="pillar-detail-num">' + (i + 1) + '</div>' +
       '<div class="pillar-detail-body">' +
@@ -4561,7 +4567,7 @@ function buildPillarDetail(p) {
         blockedHint + spinLink +
       '</div>' +
       '<div style="display:flex;align-items:center;gap:4px;">' +
-        statusEl + reassignBtn + spinOutBtn +
+        statusEl + reassignBtn + spinOutBtn + moveUpBtn + moveDownBtn + deleteBtn +
       '</div>' +
     '</div>';
   }).join('');
@@ -4577,6 +4583,64 @@ function buildPillarDetail(p) {
     '<div class="form-actions">' + addTaskBtn + editBtn + '<button class="btn-outline" onclick="closeProductModal()">Close</button></div>';
 }
 
+  window.deleteProductTask = async (productId, taskId) => {
+  if (!confirm("Delete this task? This cannot be undone.")) return;
+  try {
+    const prod = productListCache[productId];
+    const isNewFormat = !!prod.tasks?.[taskId];
+    const path = isNewFormat ? 'tasks/' + taskId : 'pillars/' + taskId;
+
+    await set(ref(db, 'products/' + productId + '/' + path), null);
+
+    if (isNewFormat) delete prod.tasks[taskId];
+    else delete prod.pillars[taskId];
+
+    showToast("Task deleted", "success");
+    const body = document.getElementById('product-detail-body');
+    if (body) body.innerHTML = buildPillarDetail(prod);
+  } catch(e) {
+    showToast("Failed to delete task: " + e.message, "error");
+  }
+};
+
+window.moveProductTask = async (productId, taskId, direction) => {
+  try {
+    const prod = productListCache[productId];
+    const tasks = getProductTasks(prod);
+    const idx = tasks.findIndex(t => t.id === taskId);
+    if (idx === -1 || idx + direction < 0 || idx + direction >= tasks.length) return;
+
+    const targetIdx = idx + direction;
+
+    // Set order property sequentially before swapping
+    const updates = {};
+    tasks.forEach((t, i) => {
+      t.order = i;
+      const p = prod.tasks?.[t.id] ? 'tasks/' + t.id + '/order' : 'pillars/' + t.id + '/order';
+      updates[p] = i;
+    });
+
+    // Swap the order of the two adjacent tasks
+    const tempOrder = tasks[idx].order;
+    tasks[idx].order = tasks[targetIdx].order;
+    tasks[targetIdx].order = tempOrder;
+
+    const path1 = prod.tasks?.[tasks[idx].id] ? 'tasks/' + tasks[idx].id + '/order' : 'pillars/' + tasks[idx].id + '/order';
+    const path2 = prod.tasks?.[tasks[targetIdx].id] ? 'tasks/' + tasks[targetIdx].id + '/order' : 'pillars/' + tasks[targetIdx].id + '/order';
+    updates[path1] = tasks[idx].order;
+    updates[path2] = tasks[targetIdx].order;
+
+    // Send the changes to Firebase
+    for (const p in updates) {
+      await set(ref(db, 'products/' + productId + '/' + p), updates[p]);
+    }
+
+    const body = document.getElementById('product-detail-body');
+    if (body) body.innerHTML = buildPillarDetail(prod);
+  } catch(e) {
+    showToast("Failed to move task: " + e.message, "error");
+  }
+};
 /* ══ TASK REASSIGNMENT ══════════════════════════════════════ */
 window.showReassignTask = async (productId, taskId) => {
   const prod = productListCache[productId];
