@@ -2909,6 +2909,7 @@ async function loadProjectDashboard(productId) {
         '<div style="display:flex;gap:8px;flex-wrap:wrap;">' +
           (canEdit(p) ? '<button class="btn-primary" onclick="showQuickUpdate(\'' + p.id + '\')">' + ICON.bolt + ' Update</button>' : '') +
           (canEdit(p) ? '<button class="btn-secondary-sm" onclick="showAddTaskToProduct(\'' + p.id + '\')">+ Task</button>' : '') +
+          (canEdit(p) ? '<button class="btn-secondary-sm" onclick="syncProjectSheet(\'' + p.id + '\')">Live sheet</button>' : '') +
           '<button class="btn-secondary-sm" onclick="exportProjectTracker(\'' + p.id + '\')">Export tracker</button>' +
           '<button class="btn-secondary-sm" onclick="viewProduct(\'' + p.id + '\')">Full detail</button>' +
         '</div>' +
@@ -3075,6 +3076,63 @@ function showExportResult(name, res, hiddenCount) {
 window.copyExportLink = (url) => {
   navigator.clipboard.writeText(url).then(() => showToast('Link copied', 'success'));
 };
+
+/* ══════════════════════════════════════════════════════════════
+   LIVE PROJECT SHEET
+   Push the item's syncable tasks to its Google Sheet. Private tasks
+   are excluded server-side too, so this is belt and braces.
+   ══════════════════════════════════════════════════════════════ */
+async function pushSheetIfLinked(productId) {
+  try {
+    const snap = await get(ref(db, 'config/projectSheets/' + productId));
+    if (!snap.exists()) return;          // no sheet yet — nothing to keep in step
+    await callGAS('syncProjectToSheet', { productId });
+  } catch(e) { console.warn('background sheet push skipped:', e); }
+}
+
+window.syncProjectSheet = async (productId) => {
+  const p = productListCache[productId];
+  showToast('Syncing to Google Sheets…', 'info');
+  try {
+    const res = await callGAS('syncProjectToSheet', { productId });
+    if (!res.ok) { showToast('Sync failed: ' + (res.error || 'unknown'), 'error'); return; }
+    showSheetSyncResult(p ? p.name : 'Item', res);
+  } catch(e) {
+    showToast('Could not reach the backend', 'error');
+  }
+};
+
+function showSheetSyncResult(name, res) {
+  const overlay = document.createElement('div');
+  overlay.id = 'sheetsync-overlay';
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.45);z-index:9000;display:flex;align-items:center;justify-content:center;padding:20px;';
+  overlay.innerHTML =
+    '<div style="background:#fff;border-radius:14px;padding:30px;max-width:470px;width:100%;">' +
+      '<div style="width:46px;height:46px;border-radius:11px;background:#F0FDF4;display:flex;align-items:center;justify-content:center;margin-bottom:14px;">' +
+        '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#16A34A" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 11-6.22-8.56"/><polyline points="21 3 21 9 15 9"/></svg>' +
+      '</div>' +
+      '<div style="font-size:16px;font-weight:700;color:#1A1A1A;margin-bottom:5px;">Live sheet updated</div>' +
+      '<div style="font-size:12px;color:#6B7280;line-height:1.7;margin-bottom:10px;">' +
+        name + ' — ' + res.synced + ' task' + (res.synced !== 1 ? 's' : '') + ' in the sheet.' +
+      '</div>' +
+      (res.skippedPrivate > 0
+        ? '<div style="font-size:11px;color:#D97706;background:#FFFBEB;border:1px solid #FDE68A;border-radius:7px;padding:8px 11px;margin-bottom:12px;line-height:1.6;">' +
+            res.skippedPrivate + ' private task' + (res.skippedPrivate !== 1 ? 's were' : ' was') +
+            ' kept out of the sheet. Private tasks never leave the Hub.' +
+          '</div>'
+        : '') +
+      '<div style="font-size:11px;color:#6B7280;background:#F8F8F7;border-radius:7px;padding:9px 11px;margin-bottom:14px;line-height:1.6;">' +
+        'Edit <strong>Task</strong>, <strong>Deadline</strong>, <strong>Status</strong> or <strong>Notes</strong> in the sheet and it flows back within 10 minutes. ' +
+        'Owner and Department stay managed here.' +
+      '</div>' +
+      '<div style="display:flex;flex-direction:column;gap:8px;">' +
+        '<a href="' + res.url + '" target="_blank" class="btn-primary" style="text-align:center;text-decoration:none;padding:11px;">Open the live sheet</a>' +
+        '<button class="btn-outline" style="padding:11px;font-size:12px;" onclick="copyExportLink(\'' + res.url + '\')">Copy link</button>' +
+      '</div>' +
+      '<button class="btn-link-sm" style="margin-top:14px;width:100%;text-align:center;" onclick="document.getElementById(\'sheetsync-overlay\').remove()">Close</button>' +
+    '</div>';
+  document.body.appendChild(overlay);
+}
 
 function canUserSeeProduct(p, userKey) {
   if (currentRole === 'admin') return true;
@@ -3889,6 +3947,8 @@ window.addTaskToProduct = async (productId) => {
   closeProductModal();
   await logActivity(productId, 'task_added', 'New task added: ' + title,
     'Owners: ' + (owners.map(o => ownerLabel(o)).join(', ') || 'Unassigned'));
+  // Keep the live sheet current if this item already has one
+  pushSheetIfLinked(productId);
   showToast('Task added.', 'success');
   if (currentView === 'tracker') renderTrackerTable(productListCache[productId], null);
 };
@@ -9556,6 +9616,7 @@ window.__npd_init({
   openDrill:               window.openDrill,
   openProjectDashboard:    window.openProjectDashboard,
   exportProjectTracker:    window.exportProjectTracker,
+  syncProjectSheet:        window.syncProjectSheet,
   copyExportLink:          window.copyExportLink,
   openTaskFromDrill:       window.openTaskFromDrill,
   scrollToDept:            window.scrollToDept,
