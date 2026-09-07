@@ -528,6 +528,25 @@ function showApp() {
   document.getElementById('screen-denied').style.display   = 'none';
   document.getElementById('screen-app').style.display      = 'flex';
 
+  // Ensure global floating refresh button exists
+  if (!document.getElementById('global-refresh-btn')) {
+    const btn = document.createElement('button');
+    btn.id = 'global-refresh-btn';
+    btn.innerHTML = ICON.refresh;
+    btn.title = "Refresh current view";
+    btn.style.cssText = 'position:fixed;bottom:24px;right:24px;width:48px;height:48px;border-radius:50%;background:#C0282D;color:#fff;border:none;box-shadow:0 4px 12px rgba(192,40,45,0.3);display:flex;align-items:center;justify-content:center;cursor:pointer;z-index:9000;transition:all 0.2s;';
+    btn.onmouseover = () => btn.style.transform = 'scale(1.08)';
+    btn.onmouseout = () => btn.style.transform = 'scale(1)';
+    btn.onclick = () => {
+      btn.innerHTML = '<span class="spinner-sm"></span>';
+      setTimeout(() => { 
+        loadView(currentView); 
+        btn.innerHTML = ICON.refresh; 
+      }, 600);
+    };
+    document.body.appendChild(btn);
+  }
+
   // Populate user info in sidebar
   document.getElementById('user-name').textContent  = currentUser.displayName || currentUser.email.split('@')[0];
   document.getElementById('user-email').textContent = currentUser.email;
@@ -2870,99 +2889,107 @@ async function loadProjectDashboard(productId) {
   const body = document.getElementById('pd-body');
   if (!body) return;
   try {
-    const snap = await get(ref(db, 'products/' + productId));
-    if (!snap.exists()) { body.innerHTML = '<div class="loading-row muted" style="padding:24px;">Item not found.</div>'; return; }
-    const p = snap.val();
-    productListCache[productId] = p;
+    // Upgraded from a one-time get() to a real-time onValue() listener
+    const unsub = onValue(ref(db, 'products/' + productId), snap => {
+      if (!snap.exists()) { body.innerHTML = '<div class="loading-row muted" style="padding:24px;">Item not found.</div>'; return; }
+      const p = snap.val();
+      productListCache[productId] = p;
 
-    const userKey = sanitiseEmail(currentUser.email);
-    if (!canUserSeeProduct(p, userKey)) {
-      body.innerHTML = '<div class="panel"><div class="empty-state" style="padding:48px 24px;">' +
-        '<h3 style="font-size:15px;font-weight:600;margin-bottom:6px;">No access</h3>' +
-        '<p style="font-size:13px;color:var(--text-muted);">You do not have access to this item.</p>' +
-        '<button class="btn-outline" style="margin-top:12px;" onclick="loadView(\'products\')">← Back</button>' +
-        '</div></div>';
-      return;
-    }
+      const userKey = sanitiseEmail(currentUser.email);
+      if (!canUserSeeProduct(p, userKey)) {
+        body.innerHTML = '<div class="panel"><div class="empty-state" style="padding:48px 24px;">' +
+          '<h3 style="font-size:15px;font-weight:600;margin-bottom:6px;">No access</h3>' +
+          '<p style="font-size:13px;color:var(--text-muted);">You do not have access to this item.</p>' +
+          '<button class="btn-outline" style="margin-top:12px;" onclick="loadView(\'products\')">← Back</button>' +
+          '</div></div>';
+        return;
+      }
 
-    const tasks   = getProductTasks(p).filter(t => canViewTask(t, p));
-    const today   = new Date(); today.setHours(0,0,0,0);
-    const done    = tasks.filter(t => resolveTaskStatus(t) === 'complete').length;
-    const overdue = tasks.filter(t => ['overdue','delayed'].includes(resolveTaskStatus(t))).length;
-    const onTrack = tasks.filter(t => { const e = resolveTaskStatus(t); return t.deadline && (e === 'on-track' || e === 'due-soon'); }).length;
-    const pct     = tasks.length ? Math.round((done / tasks.length) * 100) : 0;
-    const isProject = (p.itemType || 'product') === 'project';
-    const launch  = p.launchDate ? new Date(p.launchDate) : null;
-    if (launch) launch.setHours(0,0,0,0);
-    const days = launch ? Math.round((launch - today) / 86400000) : null;
+      const tasks   = getProductTasks(p).filter(t => canViewTask(t, p));
+      const today   = new Date(); today.setHours(0,0,0,0);
+      
+      // We pass `p` into resolveTaskStatus here to ensure 'Blocked' tasks are accounted for globally
+      const done    = tasks.filter(t => resolveTaskStatus(t, p) === 'complete').length;
+      const delayed = tasks.filter(t => ['overdue','delayed'].includes(resolveTaskStatus(t, p))).length;
+      const blocked = tasks.filter(t => resolveTaskStatus(t, p) === 'blocked').length;
+      const onTrack = Math.max(0, tasks.length - done - delayed - blocked);
+      const pct     = tasks.length ? Math.round((done / tasks.length) * 100) : 0;
+      
+      const isProject = (p.itemType || 'product') === 'project';
+      const launch  = p.launchDate ? new Date(p.launchDate) : null;
+      if (launch) launch.setHours(0,0,0,0);
+      const days = launch ? Math.round((launch - today) / 86400000) : null;
 
-    // Group tasks by department — the Departments section
-    const byDept = {};
-    tasks.forEach(t => {
-      const owners = (t.owners && t.owners.length) ? t.owners
-        : [{ dept: t.ownerDept || '', email: t.ownerEmail || '', nameCache: t.owner || '' }];
-      const seen = [];
-      owners.forEach(o => {
-        const key = o.dept || ownerLabel(o) || 'Unassigned';
-        if (seen.includes(key)) return;
-        seen.push(key);
-        (byDept[key] = byDept[key] || []).push(t);
+      const byDept = {};
+      tasks.forEach(t => {
+        const owners = (t.owners && t.owners.length) ? t.owners
+          : [{ dept: t.ownerDept || '', email: t.ownerEmail || '', nameCache: t.owner || '' }];
+        const seen = [];
+        owners.forEach(o => {
+          const key = o.dept || ownerLabel(o) || 'Unassigned';
+          if (seen.includes(key)) return;
+          seen.push(key);
+          (byDept[key] = byDept[key] || []).push(t);
+        });
       });
+
+      const statCard = (label, val, color, filterHint) =>
+        '<div class="stat-card dash-stat-card" style="border-top:3px solid ' + color + ';' + (filterHint ? 'cursor:pointer;' : '') + '"' +
+          (filterHint ? ' onclick="scrollToDept()"' : '') + '>' +
+          '<div class="stat-label">' + label + '</div>' +
+          '<div class="stat-value" style="color:' + color + ';">' + val + '</div>' +
+        '</div>';
+
+      body.innerHTML =
+        '<div class="view-header">' +
+          '<div>' +
+            '<button class="btn-link-sm" style="margin-bottom:6px;" onclick="loadView(\'products\')">← All products &amp; projects</button>' +
+            '<h1 class="view-title" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">' + p.name +
+              (isProject
+                ? '<span style="font-size:10px;font-weight:700;color:#2563EB;background:#EFF6FF;padding:3px 9px;border-radius:10px;">PROJECT</span>'
+                : '<span style="font-size:10px;font-weight:700;color:#C0282D;background:#FEF2F2;padding:3px 9px;border-radius:10px;">PRODUCT</span>') +
+              accessBadge(p) +
+            '</h1>' +
+            '<p class="view-subtitle">' +
+              (isProject ? 'Target completion' : 'Target launch') + ': ' + (p.launchDate ? formatDate(p.launchDate) : 'not set') +
+              (days !== null ? (days < 0 ? ' · ' + Math.abs(days) + 'd overdue' : ' · ' + days + 'd to go') : '') +
+              ' · Owner ' + (p.ownerName || 'unassigned') +
+            '</p>' +
+          '</div>' +
+          '<div style="display:flex;gap:8px;flex-wrap:wrap;">' +
+            (canEdit(p) ? '<button class="btn-primary" onclick="showQuickUpdate(\'' + p.id + '\')">' + ICON.bolt + ' Update</button>' : '') +
+            (canEdit(p) ? '<button class="btn-secondary-sm" onclick="showAddTaskToProduct(\'' + p.id + '\')">+ Task</button>' : '') +
+            (canEdit(p) ? '<button class="btn-secondary-sm" onclick="syncProjectSheet(\'' + p.id + '\')">Live sheet</button>' : '') +
+            '<button class="btn-secondary-sm" onclick="exportProjectTracker(\'' + p.id + '\')">Export tracker</button>' +
+            '<button class="btn-secondary-sm" onclick="viewProduct(\'' + p.id + '\')">Full detail</button>' +
+          '</div>' +
+        '</div>' +
+
+        '<div class="stats-row">' +
+          statCard('Progress',  pct + '%',      pct >= 75 ? 'var(--green)' : pct >= 40 ? 'var(--amber)' : 'var(--red)') +
+          statCard('Complete',  done,           'var(--green)') +
+          statCard('On track',  onTrack,        'var(--green)') +
+          statCard('Needs action', delayed,     delayed > 0 ? 'var(--red)' : 'var(--green)') +
+        '</div>' +
+
+        ((isProject && canViewBudget(p) && (p.budget || p.spend)) ? buildPdBudget(p) : '') +
+
+        '<div class="panel" id="pd-departments">' +
+          '<div class="panel-header">' +
+            '<span class="panel-title">By department</span>' +
+            '<span style="font-size:11px;color:var(--text-muted);">' + Object.keys(byDept).length + ' involved</span>' +
+          '</div>' +
+          (Object.keys(byDept).length === 0
+            ? '<div style="padding:18px;font-size:12px;color:#9CA3AF;">No tasks yet. Add one to get started.</div>'
+            : Object.entries(byDept)
+                .sort((a, b) => b[1].length - a[1].length)
+                .map(([dept, list]) => buildPdDeptBlock(dept, list, today, p))
+                .join('')) +
+        '</div>';
     });
-
-    const statCard = (label, val, color, filterHint) =>
-      '<div class="stat-card dash-stat-card" style="border-top:3px solid ' + color + ';' + (filterHint ? 'cursor:pointer;' : '') + '"' +
-        (filterHint ? ' onclick="scrollToDept()"' : '') + '>' +
-        '<div class="stat-label">' + label + '</div>' +
-        '<div class="stat-value" style="color:' + color + ';">' + val + '</div>' +
-      '</div>';
-
-    body.innerHTML =
-      '<div class="view-header">' +
-        '<div>' +
-          '<button class="btn-link-sm" style="margin-bottom:6px;" onclick="loadView(\'products\')">← All products &amp; projects</button>' +
-          '<h1 class="view-title" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">' + p.name +
-            (isProject
-              ? '<span style="font-size:10px;font-weight:700;color:#2563EB;background:#EFF6FF;padding:3px 9px;border-radius:10px;">PROJECT</span>'
-              : '<span style="font-size:10px;font-weight:700;color:#C0282D;background:#FEF2F2;padding:3px 9px;border-radius:10px;">PRODUCT</span>') +
-            accessBadge(p) +
-          '</h1>' +
-          '<p class="view-subtitle">' +
-            (isProject ? 'Target completion' : 'Target launch') + ': ' + (p.launchDate ? formatDate(p.launchDate) : 'not set') +
-            (days !== null ? (days < 0 ? ' · ' + Math.abs(days) + 'd overdue' : ' · ' + days + 'd to go') : '') +
-            ' · Owner ' + (p.ownerName || 'unassigned') +
-          '</p>' +
-        '</div>' +
-        '<div style="display:flex;gap:8px;flex-wrap:wrap;">' +
-          (canEdit(p) ? '<button class="btn-primary" onclick="showQuickUpdate(\'' + p.id + '\')">' + ICON.bolt + ' Update</button>' : '') +
-          (canEdit(p) ? '<button class="btn-secondary-sm" onclick="showAddTaskToProduct(\'' + p.id + '\')">+ Task</button>' : '') +
-          (canEdit(p) ? '<button class="btn-secondary-sm" onclick="syncProjectSheet(\'' + p.id + '\')">Live sheet</button>' : '') +
-          '<button class="btn-secondary-sm" onclick="exportProjectTracker(\'' + p.id + '\')">Export tracker</button>' +
-          '<button class="btn-secondary-sm" onclick="viewProduct(\'' + p.id + '\')">Full detail</button>' +
-        '</div>' +
-      '</div>' +
-
-      '<div class="stats-row">' +
-        statCard('Progress',  pct + '%',      pct >= 75 ? 'var(--green)' : pct >= 40 ? 'var(--amber)' : 'var(--red)') +
-        statCard('Complete',  done,           'var(--green)') +
-        statCard('On track',  onTrack,        'var(--green)') +
-        statCard('Needs action', overdue,     overdue > 0 ? 'var(--red)' : 'var(--green)') +
-      '</div>' +
-
-      ((isProject && canViewBudget(p) && (p.budget || p.spend)) ? buildPdBudget(p) : '') +
-
-      '<div class="panel" id="pd-departments">' +
-        '<div class="panel-header">' +
-          '<span class="panel-title">By department</span>' +
-          '<span style="font-size:11px;color:var(--text-muted);">' + Object.keys(byDept).length + ' involved</span>' +
-        '</div>' +
-        (Object.keys(byDept).length === 0
-          ? '<div style="padding:18px;font-size:12px;color:#9CA3AF;">No tasks yet. Add one to get started.</div>'
-          : Object.entries(byDept)
-              .sort((a, b) => b[1].length - a[1].length)
-              .map(([dept, list]) => buildPdDeptBlock(dept, list, today, p))
-              .join('')) +
-      '</div>';
+    
+    // Register the listener so it safely unmounts when you change pages
+    registerListener('project_dash', unsub);
   } catch(e) {
     console.warn('loadProjectDashboard failed:', e);
     body.innerHTML = '<div class="loading-row muted" style="padding:24px;">Could not load this item.</div>';
