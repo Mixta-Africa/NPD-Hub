@@ -623,6 +623,24 @@ window.dismissWelcome = (dest) => {
 
 /* ─── NAVIGATION ─── */
 window.loadView = (view) => {
+  // Parameterised views — drill:<filter> and project:<id>
+  if (typeof view === 'string' && view.indexOf(':') > -1) {
+    teardownAllListeners();
+    currentView = view;
+    const [kind, arg] = [view.slice(0, view.indexOf(':')), view.slice(view.indexOf(':') + 1)];
+    document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+    const navFor = kind === 'project' ? 'products' : 'dashboard';
+    const navEl  = document.querySelector('.nav-item[data-view="' + navFor + '"]');
+    if (navEl) navEl.classList.add('active');
+    const titleEl = document.getElementById('page-title');
+    if (titleEl) titleEl.textContent = kind === 'project' ? 'Project' : (DRILL_META[arg]?.title || 'Details');
+    const content = document.getElementById('main-content');
+    if (!content) return;
+    if (kind === 'drill')   renderDrilldown(content, arg);
+    if (kind === 'project') renderProjectDashboard(content, arg);
+    return;
+  }
+
   // Tear down previous view's real-time listeners before switching
   teardownAllListeners();
   currentView = view;
@@ -1096,8 +1114,8 @@ function renderDashboard(el) {
         '<button class="btn-primary" onclick="loadView(\'products\')">+ New</button>' +
       '</div>' +
       '<div class="stats-row">' +
-        '<div class="stat-card stat-card-link dash-stat-card" onclick="loadView(\'products\')" style="border-top:3px solid var(--red);">' +
-          '<div class="stat-label">Active Products</div>' +
+        '<div class="stat-card stat-card-link dash-stat-card" onclick="openDrill(\'active\')" style="border-top:3px solid var(--red);">' +
+          '<div class="stat-label">Active items</div>' +
           '<div class="stat-value" id="stat-active">—</div>' +
           '<div class="stat-nav-hint" id="stat-slip" style="color:var(--red);font-weight:500;min-height:16px;"></div>' +
         '</div>' +
@@ -1109,12 +1127,12 @@ function renderDashboard(el) {
         '<div class="stat-card stat-card-link dash-stat-card" onclick="dashNavToTracker(\'overdue\')" style="border-top:3px solid var(--red);">' +
           '<div class="stat-label">Overdue</div>' +
           '<div class="stat-value red" id="stat-overdue">—</div>' +
-          '<div class="stat-nav-hint">View tracker →</div>' +
+          '<div class="stat-nav-hint">See what is overdue →</div>' +
         '</div>' +
-        '<div class="stat-card stat-card-link dash-stat-card" onclick="loadView(\'calendar\')" style="border-top:3px solid var(--amber);">' +
+        '<div class="stat-card stat-card-link dash-stat-card" onclick="openDrill(\'week\')" style="border-top:3px solid var(--amber);">' +
           '<div class="stat-label">Due This Week</div>' +
           '<div class="stat-value amber" id="stat-week">—</div>' +
-          '<div class="stat-nav-hint">View calendar →</div>' +
+          '<div class="stat-nav-hint">See the tasks →</div>' +
         '</div>' +
       '</div>' +
       '<div class="two-col">' +
@@ -1257,7 +1275,7 @@ function _updateDashboardUI(list) {
           : daysLeft === 0 ? '<span style="font-size:10px;font-weight:600;color:var(--red);background:#FEF2F2;padding:2px 7px;border-radius:10px;">Today</span>'
           : daysLeft <= 14 ? '<span style="font-size:10px;font-weight:600;color:var(--amber);background:#FFFBEB;padding:2px 7px;border-radius:10px;">' + daysLeft + 'd left</span>'
           : '<span style="font-size:10px;color:var(--text-muted);">' + formatDate(p.launchDate) + '</span>';
-        return '<div class="dash-product-row" onclick="viewProduct(\'' + p.id + '\')">' +
+        return '<div class="dash-product-row" onclick="openProjectDashboard(\'' + p.id + '\')">' +
           '<div style="width:8px;height:8px;border-radius:50%;background:' + healthColor + ';flex-shrink:0;margin-top:2px;"></div>' +
           '<div style="flex:1;min-width:0;">' +
             '<div class="dash-product-name">' + p.name + '</div>' +
@@ -1885,7 +1903,7 @@ function renderProductCard(p) {
         <div class="pcf-header-left">
           <div class="pcf-health-dot ${healthCls}" title="${healthTip}"></div>
           <div>
-            <div class="pcf-name-row"><span class="pcf-name">${p.name}</span>${typeBadge}${accessBadge(p)}${slipHtml}${atRiskBadge}${countdownChip}</div>
+            <div class="pcf-name-row"><span class="pcf-name" style="cursor:pointer;" title="Open dashboard" onclick="openProjectDashboard('${p.id}')">${p.name}</span>${typeBadge}${accessBadge(p)}${slipHtml}${atRiskBadge}${countdownChip}</div>
             ${(p.itemType === 'project' && canViewBudget(p) && (p.budget || p.spend)) ? `
               <div style="margin-top:6px;">
                 <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--text-muted);margin-bottom:3px;">
@@ -1928,6 +1946,7 @@ function renderProductCard(p) {
       </div>
 
       <div class="pcf-actions">
+        <button class="btn-secondary-sm" onclick="openProjectDashboard('${p.id}')">Dashboard</button>
         <button class="btn-secondary-sm" onclick="viewProduct('${p.id}')">Tasks</button>
         ${canEdit(p) ? `<button class="btn-primary-sm" onclick="showQuickUpdate('${p.id}')">${ICON.bolt} Update</button>` : ''}
         ${canEdit(p) ? `<button class="btn-secondary-sm" onclick="showWeeklyLog('${p.id}')">Log</button>` : ''}
@@ -2636,6 +2655,340 @@ function accessBadge(p) {
     ';background:' + a.color + '15;padding:2px 8px;border-radius:10px;letter-spacing:.03em;">' +
     icon + a.label.toUpperCase() + (a.count ? ' · ' + a.count : '') + '</span>';
 }
+
+/* ══════════════════════════════════════════════════════════════
+   DRILL-DOWN — clicking any dashboard tile shows the actual items
+   behind that number, grouped by product/project, with every row
+   clickable straight through to the item. No manual re-selection.
+   ══════════════════════════════════════════════════════════════ */
+const DRILL_META = {
+  overdue:  { title: 'Overdue & delayed',  sub: 'Everything past its deadline or explicitly marked delayed', color: '#C0282D' },
+  ontrack:  { title: 'On track',           sub: 'Active tasks with a deadline that are running to plan',      color: '#16A34A' },
+  week:     { title: 'Due this week',      sub: 'Tasks with a deadline in the next 7 days',                   color: '#D97706' },
+  atrisk:   { title: 'At risk',            sub: 'Items launching within 21 days with 2+ delayed or overdue tasks', color: '#D97706' },
+  active:   { title: 'Active items',       sub: 'Every product and project you can see',                      color: '#C0282D' },
+};
+
+window.dashNavToTracker = (filter) => { loadView('drill:' + filter); };
+window.openDrill        = (filter) => { loadView('drill:' + filter); };
+
+function renderDrilldown(el, filter) {
+  const meta = DRILL_META[filter] || DRILL_META.overdue;
+  el.innerHTML =
+    '<div class="view-header">' +
+      '<div>' +
+        '<button class="btn-link-sm" style="margin-bottom:6px;" onclick="loadView(\'dashboard\')">← Back to dashboard</button>' +
+        '<h1 class="view-title">' + meta.title + '</h1>' +
+        '<p class="view-subtitle">' + meta.sub + '</p>' +
+      '</div>' +
+    '</div>' +
+    '<div id="drill-body"><div class="loading-row" style="padding:32px;">Loading...</div></div>';
+  loadDrilldown(filter);
+}
+
+async function loadDrilldown(filter) {
+  const body = document.getElementById('drill-body');
+  if (!body) return;
+  try {
+    const snap    = await get(ref(db, 'products'));
+    const userKey = sanitiseEmail(currentUser.email);
+    const today   = new Date(); today.setHours(0,0,0,0);
+    const weekEnd = new Date(today); weekEnd.setDate(weekEnd.getDate() + 7);
+
+    const visible = Object.values(snap.val() || {})
+      .filter(p => p.status !== 'archived' && canUserSeeProduct(p, userKey));
+
+    // At-risk operates on whole items, not tasks
+    if (filter === 'atrisk' || filter === 'active') {
+      const items = visible.filter(p => {
+        if (filter === 'active') return true;
+        const tasks  = getProductTasks(p).filter(t => canViewTask(t, p));
+        const issues = tasks.filter(t => ['overdue','delayed'].includes(resolveTaskStatus(t))).length;
+        const launch = p.launchDate ? new Date(p.launchDate) : null;
+        if (launch) launch.setHours(0,0,0,0);
+        const days = launch ? Math.round((launch - today) / 86400000) : null;
+        return issues >= 2 && days !== null && days >= 0 && days <= 21;
+      });
+      body.innerHTML = items.length
+        ? '<div style="display:flex;flex-direction:column;gap:10px;">' + items.map(p => drillItemCard(p, today)).join('') + '</div>'
+        : drillEmpty(filter);
+      return;
+    }
+
+    // Task-level filters — group matching tasks under their parent item
+    const groups = [];
+    visible.forEach(p => {
+      const matched = getProductTasks(p).filter(t => {
+        if (!canViewTask(t, p)) return false;
+        const eff = resolveTaskStatus(t);
+        if (filter === 'overdue') return eff === 'overdue' || eff === 'delayed';
+        if (filter === 'ontrack') return !!t.deadline && (eff === 'on-track' || eff === 'due-soon');
+        if (filter === 'week') {
+          if (!t.deadline || eff === 'complete') return false;
+          const d = new Date(t.deadline); d.setHours(0,0,0,0);
+          return d >= today && d <= weekEnd;
+        }
+        return false;
+      });
+      if (matched.length) groups.push({ p, tasks: matched });
+    });
+
+    if (groups.length === 0) { body.innerHTML = drillEmpty(filter); return; }
+
+    // Busiest first — the thing needing attention leads
+    groups.sort((a, b) => b.tasks.length - a.tasks.length);
+    const total = groups.reduce((n, g) => n + g.tasks.length, 0);
+
+    body.innerHTML =
+      '<div style="font-size:12px;color:var(--text-muted);margin-bottom:12px;">' +
+        total + ' task' + (total !== 1 ? 's' : '') + ' across ' + groups.length + ' item' + (groups.length !== 1 ? 's' : '') +
+      '</div>' +
+      '<div style="display:flex;flex-direction:column;gap:12px;">' +
+        groups.map(g => drillGroup(g, today, filter)).join('') +
+      '</div>';
+  } catch(e) {
+    console.warn('loadDrilldown failed:', e);
+    body.innerHTML = '<div class="loading-row muted" style="padding:24px;">Could not load. Try refreshing.</div>';
+  }
+}
+
+function drillEmpty(filter) {
+  const m = DRILL_META[filter] || {};
+  return '<div class="panel"><div class="empty-state" style="padding:48px 24px;">' +
+    '<div style="margin-bottom:12px;"><svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#16A34A" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 11-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg></div>' +
+    '<h3 style="font-size:15px;font-weight:600;color:var(--text);margin-bottom:6px;">Nothing here</h3>' +
+    '<p style="font-size:13px;color:var(--text-muted);">No items match "' + (m.title || filter) + '" right now.</p>' +
+    '</div></div>';
+}
+
+function drillItemCard(p, today) {
+  const tasks  = getProductTasks(p).filter(t => canViewTask(t, p));
+  const done   = tasks.filter(t => resolveTaskStatus(t) === 'complete').length;
+  const issues = tasks.filter(t => ['overdue','delayed'].includes(resolveTaskStatus(t))).length;
+  const pct    = tasks.length ? Math.round((done / tasks.length) * 100) : 0;
+  const launch = p.launchDate ? new Date(p.launchDate) : null;
+  if (launch) launch.setHours(0,0,0,0);
+  const days = launch ? Math.round((launch - today) / 86400000) : null;
+  return '<div style="background:#fff;border:1px solid var(--border);border-left:3px solid #D97706;border-radius:10px;padding:14px 16px;cursor:pointer;" onclick="openProjectDashboard(\'' + p.id + '\')">' +
+    '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px;">' +
+      '<span style="font-size:13px;font-weight:700;color:var(--text);">' + p.name + '</span>' +
+      ((p.itemType || 'product') === 'project'
+        ? '<span style="font-size:9px;font-weight:700;color:#2563EB;background:#EFF6FF;padding:1px 7px;border-radius:8px;">PROJECT</span>'
+        : '<span style="font-size:9px;font-weight:700;color:#C0282D;background:#FEF2F2;padding:1px 7px;border-radius:8px;">PRODUCT</span>') +
+      (days !== null ? '<span style="font-size:11px;color:' + (days < 0 ? 'var(--red)' : 'var(--amber)') + ';">' +
+        (days < 0 ? Math.abs(days) + 'd overdue' : days + 'd to launch') + '</span>' : '') +
+    '</div>' +
+    '<div style="font-size:11px;color:var(--text-muted);">' + issues + ' overdue or delayed · ' + pct + '% complete · owner ' + (p.ownerName || 'unassigned') + '</div>' +
+  '</div>';
+}
+
+function drillGroup(g, today, filter) {
+  const p = g.p;
+  const isProject = (p.itemType || 'product') === 'project';
+  const rows = g.tasks.map(t => {
+    const eff = resolveTaskStatus(t);
+    const m   = STATUS_META[eff] || STATUS_META['on-track'];
+    let due = 'No date';
+    if (t.deadline) {
+      const d = new Date(t.deadline); d.setHours(0,0,0,0);
+      const diff = Math.round((d - today) / 86400000);
+      due = diff < 0 ? Math.abs(diff) + 'd overdue' : diff === 0 ? 'Today' : diff === 1 ? 'Tomorrow' : formatDate(t.deadline);
+    }
+    const owners = (t.owners && t.owners.length) ? t.owners
+      : (t.owner ? [{ dept: t.ownerDept || '', email: t.ownerEmail || '', nameCache: t.owner }] : []);
+    const who = owners.length ? owners.map(o => ownerLabel(o)).join(', ') : 'Unassigned';
+    return '<div style="display:flex;align-items:center;gap:10px;padding:9px 16px;border-top:1px solid #F3F3F2;cursor:pointer;" ' +
+        'onclick="event.stopPropagation();openTaskFromDrill(\'' + p.id + '\',\'' + t.id + '\')">' +
+      taskVisMarker(t) +
+      '<div style="flex:1;min-width:0;">' +
+        '<div style="font-size:12px;font-weight:500;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + (t.title || 'Untitled') + '</div>' +
+        '<div style="font-size:10px;color:var(--text-muted);">' + who + '</div>' +
+      '</div>' +
+      '<span style="font-size:11px;color:' + m.color + ';white-space:nowrap;">' + due + '</span>' +
+      '<span style="font-size:9px;font-weight:700;color:' + m.color + ';background:' + m.color + '15;padding:2px 7px;border-radius:8px;white-space:nowrap;">' + m.label.toUpperCase() + '</span>' +
+    '</div>';
+  }).join('');
+
+  return '<div style="background:#fff;border:1px solid var(--border);border-radius:10px;overflow:hidden;">' +
+    '<div style="padding:12px 16px;display:flex;align-items:center;gap:8px;cursor:pointer;background:#FAFAF9;" ' +
+        'onclick="openProjectDashboard(\'' + p.id + '\')">' +
+      '<span style="font-size:13px;font-weight:700;color:var(--text);">' + p.name + '</span>' +
+      (isProject
+        ? '<span style="font-size:9px;font-weight:700;color:#2563EB;background:#EFF6FF;padding:1px 7px;border-radius:8px;">PROJECT</span>'
+        : '<span style="font-size:9px;font-weight:700;color:#C0282D;background:#FEF2F2;padding:1px 7px;border-radius:8px;">PRODUCT</span>') +
+      '<span style="font-size:11px;color:var(--text-muted);margin-left:auto;">' + g.tasks.length + ' task' + (g.tasks.length !== 1 ? 's' : '') + ' →</span>' +
+    '</div>' + rows +
+  '</div>';
+}
+
+window.openTaskFromDrill = (productId, taskId) => {
+  openProjectDashboard(productId);
+};
+
+/* ══════════════════════════════════════════════════════════════
+   PROJECT DASHBOARD — each item gets its own view rather than a
+   modal, so it can be navigated to and away from like any page.
+   Two sections, mirroring the Projects Tracker: Overview and
+   Departments.
+   ══════════════════════════════════════════════════════════════ */
+window.openProjectDashboard = (productId) => { loadView('project:' + productId); };
+
+function renderProjectDashboard(el, productId) {
+  el.innerHTML = '<div id="pd-body"><div class="loading-row" style="padding:32px;">Loading...</div></div>';
+  loadProjectDashboard(productId);
+}
+
+async function loadProjectDashboard(productId) {
+  const body = document.getElementById('pd-body');
+  if (!body) return;
+  try {
+    const snap = await get(ref(db, 'products/' + productId));
+    if (!snap.exists()) { body.innerHTML = '<div class="loading-row muted" style="padding:24px;">Item not found.</div>'; return; }
+    const p = snap.val();
+    productListCache[productId] = p;
+
+    const userKey = sanitiseEmail(currentUser.email);
+    if (!canUserSeeProduct(p, userKey)) {
+      body.innerHTML = '<div class="panel"><div class="empty-state" style="padding:48px 24px;">' +
+        '<h3 style="font-size:15px;font-weight:600;margin-bottom:6px;">No access</h3>' +
+        '<p style="font-size:13px;color:var(--text-muted);">You do not have access to this item.</p>' +
+        '<button class="btn-outline" style="margin-top:12px;" onclick="loadView(\'products\')">← Back</button>' +
+        '</div></div>';
+      return;
+    }
+
+    const tasks   = getProductTasks(p).filter(t => canViewTask(t, p));
+    const today   = new Date(); today.setHours(0,0,0,0);
+    const done    = tasks.filter(t => resolveTaskStatus(t) === 'complete').length;
+    const overdue = tasks.filter(t => ['overdue','delayed'].includes(resolveTaskStatus(t))).length;
+    const onTrack = tasks.filter(t => { const e = resolveTaskStatus(t); return t.deadline && (e === 'on-track' || e === 'due-soon'); }).length;
+    const pct     = tasks.length ? Math.round((done / tasks.length) * 100) : 0;
+    const isProject = (p.itemType || 'product') === 'project';
+    const launch  = p.launchDate ? new Date(p.launchDate) : null;
+    if (launch) launch.setHours(0,0,0,0);
+    const days = launch ? Math.round((launch - today) / 86400000) : null;
+
+    // Group tasks by department — the Departments section
+    const byDept = {};
+    tasks.forEach(t => {
+      const owners = (t.owners && t.owners.length) ? t.owners
+        : [{ dept: t.ownerDept || '', email: t.ownerEmail || '', nameCache: t.owner || '' }];
+      const seen = [];
+      owners.forEach(o => {
+        const key = o.dept || ownerLabel(o) || 'Unassigned';
+        if (seen.includes(key)) return;
+        seen.push(key);
+        (byDept[key] = byDept[key] || []).push(t);
+      });
+    });
+
+    const statCard = (label, val, color, filterHint) =>
+      '<div class="stat-card dash-stat-card" style="border-top:3px solid ' + color + ';' + (filterHint ? 'cursor:pointer;' : '') + '"' +
+        (filterHint ? ' onclick="scrollToDept()"' : '') + '>' +
+        '<div class="stat-label">' + label + '</div>' +
+        '<div class="stat-value" style="color:' + color + ';">' + val + '</div>' +
+      '</div>';
+
+    body.innerHTML =
+      '<div class="view-header">' +
+        '<div>' +
+          '<button class="btn-link-sm" style="margin-bottom:6px;" onclick="loadView(\'products\')">← All products &amp; projects</button>' +
+          '<h1 class="view-title" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">' + p.name +
+            (isProject
+              ? '<span style="font-size:10px;font-weight:700;color:#2563EB;background:#EFF6FF;padding:3px 9px;border-radius:10px;">PROJECT</span>'
+              : '<span style="font-size:10px;font-weight:700;color:#C0282D;background:#FEF2F2;padding:3px 9px;border-radius:10px;">PRODUCT</span>') +
+            accessBadge(p) +
+          '</h1>' +
+          '<p class="view-subtitle">' +
+            (isProject ? 'Target completion' : 'Target launch') + ': ' + (p.launchDate ? formatDate(p.launchDate) : 'not set') +
+            (days !== null ? (days < 0 ? ' · ' + Math.abs(days) + 'd overdue' : ' · ' + days + 'd to go') : '') +
+            ' · Owner ' + (p.ownerName || 'unassigned') +
+          '</p>' +
+        '</div>' +
+        '<div style="display:flex;gap:8px;flex-wrap:wrap;">' +
+          (canEdit(p) ? '<button class="btn-primary" onclick="showQuickUpdate(\'' + p.id + '\')">' + ICON.bolt + ' Update</button>' : '') +
+          (canEdit(p) ? '<button class="btn-secondary-sm" onclick="showAddTaskToProduct(\'' + p.id + '\')">+ Task</button>' : '') +
+          '<button class="btn-secondary-sm" onclick="viewProduct(\'' + p.id + '\')">Full detail</button>' +
+        '</div>' +
+      '</div>' +
+
+      '<div class="stats-row">' +
+        statCard('Progress',  pct + '%',      pct >= 75 ? 'var(--green)' : pct >= 40 ? 'var(--amber)' : 'var(--red)') +
+        statCard('Complete',  done,           'var(--green)') +
+        statCard('On track',  onTrack,        'var(--green)') +
+        statCard('Needs action', overdue,     overdue > 0 ? 'var(--red)' : 'var(--green)') +
+      '</div>' +
+
+      ((isProject && canViewBudget(p) && (p.budget || p.spend)) ? buildPdBudget(p) : '') +
+
+      '<div class="panel" id="pd-departments">' +
+        '<div class="panel-header">' +
+          '<span class="panel-title">By department</span>' +
+          '<span style="font-size:11px;color:var(--text-muted);">' + Object.keys(byDept).length + ' involved</span>' +
+        '</div>' +
+        (Object.keys(byDept).length === 0
+          ? '<div style="padding:18px;font-size:12px;color:#9CA3AF;">No tasks yet. Add one to get started.</div>'
+          : Object.entries(byDept)
+              .sort((a, b) => b[1].length - a[1].length)
+              .map(([dept, list]) => buildPdDeptBlock(dept, list, today, p))
+              .join('')) +
+      '</div>';
+  } catch(e) {
+    console.warn('loadProjectDashboard failed:', e);
+    body.innerHTML = '<div class="loading-row muted" style="padding:24px;">Could not load this item.</div>';
+  }
+}
+
+function buildPdBudget(p) {
+  const b = Number(p.budget || 0), sp = Number(p.spend || 0);
+  const over = sp > b, pct = b > 0 ? Math.min(100, (sp / b) * 100) : 0;
+  return '<div class="panel" style="margin-bottom:16px;">' +
+    '<div class="panel-header"><span class="panel-title">Budget</span>' +
+      '<span style="font-size:11px;color:' + (over ? 'var(--red)' : 'var(--text-muted)') + ';">' +
+        (over ? 'Over by ₦' + (sp - b).toLocaleString() : '₦' + (b - sp).toLocaleString() + ' remaining') + '</span></div>' +
+    '<div class="panel-body">' +
+      '<div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:6px;">' +
+        '<span>Budget ₦' + b.toLocaleString() + '</span>' +
+        '<span style="color:' + (over ? 'var(--red)' : 'var(--text)') + ';">Spent ₦' + sp.toLocaleString() + '</span>' +
+      '</div>' +
+      '<div style="height:6px;background:#F0F0EE;border-radius:3px;overflow:hidden;">' +
+        '<div style="height:6px;width:' + pct + '%;background:' + (over ? 'var(--red)' : 'var(--blue)') + ';border-radius:3px;"></div>' +
+      '</div>' +
+    '</div></div>';
+}
+
+function buildPdDeptBlock(dept, list, today, p) {
+  const issues = list.filter(t => ['overdue','delayed'].includes(resolveTaskStatus(t))).length;
+  const done   = list.filter(t => resolveTaskStatus(t) === 'complete').length;
+  const rows = list.map(t => {
+    const eff = resolveTaskStatus(t);
+    const m   = STATUS_META[eff] || STATUS_META['on-track'];
+    let due = 'No date';
+    if (t.deadline) {
+      const d = new Date(t.deadline); d.setHours(0,0,0,0);
+      const diff = Math.round((d - today) / 86400000);
+      due = diff < 0 ? Math.abs(diff) + 'd overdue' : diff === 0 ? 'Today' : formatDate(t.deadline);
+    }
+    return '<div style="display:flex;align-items:center;gap:10px;padding:8px 18px;border-top:1px solid #F3F3F2;">' +
+      taskVisMarker(t) +
+      '<div style="flex:1;min-width:0;font-size:12px;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + (t.title || 'Untitled') + '</div>' +
+      '<span style="font-size:11px;color:' + m.color + ';white-space:nowrap;">' + due + '</span>' +
+      '<span style="font-size:9px;font-weight:700;color:' + m.color + ';background:' + m.color + '15;padding:2px 7px;border-radius:8px;">' + m.label.toUpperCase() + '</span>' +
+    '</div>';
+  }).join('');
+  return '<div style="border-top:1px solid var(--border);">' +
+    '<div style="padding:10px 18px;display:flex;align-items:center;gap:8px;background:#FAFAF9;">' +
+      '<span style="font-size:12px;font-weight:700;color:var(--text);">' + dept + '</span>' +
+      '<span style="font-size:10px;color:var(--text-muted);">' + done + '/' + list.length + ' done</span>' +
+      (issues > 0 ? '<span style="font-size:10px;font-weight:700;color:var(--red);background:#FEF2F2;padding:1px 7px;border-radius:8px;">' + issues + ' need action</span>' : '') +
+    '</div>' + rows +
+  '</div>';
+}
+
+window.scrollToDept = () => {
+  const el = document.getElementById('pd-departments');
+  if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+};
 
 function canUserSeeProduct(p, userKey) {
   if (currentRole === 'admin') return true;
@@ -9114,6 +9467,10 @@ window.__npd_init({
   saToggleRole:            window.saToggleRole,
   saToggleProductStatus:   window.saToggleProductStatus,
   dashNavToTracker:        window.dashNavToTracker,
+  openDrill:               window.openDrill,
+  openProjectDashboard:    window.openProjectDashboard,
+  openTaskFromDrill:       window.openTaskFromDrill,
+  scrollToDept:            window.scrollToDept,
   showReminderModal:       window.showReminderModal,
   sendReminder:            window.sendReminder,
   setCalView:              window.setCalView,
