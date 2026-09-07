@@ -1961,6 +1961,25 @@ function renderProductCard(p) {
     </div>`;
 }
 
+function ensureProductModal() {
+  let modal = document.getElementById('create-product-modal');
+  if (!modal) {
+    modal = document.createElement('div');
+    modal.id = 'create-product-modal';
+    modal.className = 'modal-overlay';
+    modal.style.display = 'none';
+    modal.innerHTML = `
+      <div class="modal-box">
+        <div class="modal-header">
+          <span class="modal-title" id="modal-title-text"></span>
+          <button class="modal-close" onclick="closeProductModal()">✕</button>
+        </div>
+        <div class="modal-body" id="modal-body-content"></div>
+      </div>`;
+    document.body.appendChild(modal);
+  }
+}
+  
 /* ── CREATE / EDIT PRODUCT MODAL ── */
 window.showCreateProduct = () => {
   _pendingItemType = 'product';
@@ -3847,6 +3866,7 @@ function buildOwnerField(p) {
 }
 
 window.showAddTaskToProduct = (productId) => {
+  ensureProductModal();
   const prod = productListCache[productId];
   if (!prod) return;
   const firstDept = getDepts()[0] || '';
@@ -3877,6 +3897,11 @@ window.showAddTaskToProduct = (productId) => {
   document.getElementById('create-product-modal').style.display = 'flex';
   // track owners in closure
   window._atOwners = [];
+};
+window.updateAddTaskIndividuals = () => {
+  const dept = document.getElementById('at-dept')?.value || '';
+  const sel  = document.getElementById('at-owner');
+  if (sel) sel.innerHTML = buildOwnerIndividualOptions(dept, '');
 };
 
 window.addNewTaskOwnerChip = () => {
@@ -4322,6 +4347,7 @@ window.confirmAndLaunchGAS = async () => {
 
 /* ── VIEW PRODUCT DETAIL ── */
 window.viewProduct = (id) => {
+  ensureProductModal();
   const p = productListCache[id];
   if (!p) return;
   document.getElementById('modal-title-text').textContent = p.name;
