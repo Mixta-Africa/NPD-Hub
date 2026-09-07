@@ -571,6 +571,19 @@ function showApp() {
   // Load all app config, templates, and team members
   loadAppConfig().then(() => seedConfigToFirebase());
   loadTemplatesAndConfig();
+  // --- DAILY BACKGROUND PING TEST ---
+  if (currentRole === 'admin') {
+    const todayStr = new Date().toISOString().split('T')[0];
+    get(ref(db, 'config/last_auto_ping')).then(snap => {
+      if (!snap.exists() || snap.val() !== todayStr) {
+        console.log("Initiating daily background ping test...");
+        // Delay by 5 seconds so it doesn't slow down the initial dashboard load
+        setTimeout(() => { 
+          if (window.runComprehensivePingTest) window.runComprehensivePingTest(true); 
+        }, 5000);
+      }
+    }).catch(()=>console.warn("Ping test check failed."));
+  }
   const userKey = sanitiseEmail(currentUser.email);
   get(ref(db, `users/${userKey}`)).then(snap => {
     if (!snap.exists()) {
@@ -7307,6 +7320,101 @@ async function loadSATab(tab) {
   }
 }
 
+/* ── TAB: HEALTH & PING TEST ──────────────────────────────── */
+window.renderSAHealth = async (el) => {
+  el.innerHTML = `
+    <div class="panel">
+      <div class="panel-header"><span class="panel-title">Synthetic Ping Test & Health Check</span></div>
+      <div class="panel-body">
+        <p style="font-size:13px;color:var(--text-mid);margin-bottom:16px;line-height:1.6;">
+          Tests Database Read/Write, Google Apps Script connectivity, Email dispatch, and AI Provider availability.
+          Runs automatically in the background once a day when an admin logs in.
+        </p>
+        <button class="btn-primary" id="ping-btn" onclick="runComprehensivePingTest()" style="width:100%;">Run Diagnostic & Email Summary</button>
+        <div id="ping-results" style="margin-top:16px;font-size:12px;display:flex;flex-direction:column;gap:8px;"></div>
+      </div>
+    </div>`;
+};
+
+window.runComprehensivePingTest = async (isBackground = false) => {
+  const btn = document.getElementById('ping-btn');
+  const res = document.getElementById('ping-results');
+  
+  if (btn && !isBackground) { btn.disabled = true; btn.textContent = 'Running diagnostics...'; }
+  if (res && !isBackground) res.innerHTML = '<div class="loading-row">Initiating ping sequence...</div>';
+
+  const results = [];
+  let allPassed = true;
+
+  const logRes = (name, ok, msg) => {
+    results.push({name, ok, msg});
+    if (!ok) allPassed = false;
+    if (res && !isBackground) {
+      res.innerHTML += `<div style="padding:10px;border-radius:6px;background:${ok?'#F0FDF4':'#FEF2F2'};color:${ok?'#16A34A':'#C0282D'}; border: 1px solid ${ok?'#BBF7D0':'#FECACA'};"><strong>${name}:</strong> ${msg}</div>`;
+    }
+  };
+
+  if (res && !isBackground) res.innerHTML = '';
+
+  // 1. Test Firebase Read
+  try {
+    const snap = await get(ref(db, 'config/system'));
+    logRes('Database Read', snap.exists(), 'Successfully fetched system configuration.');
+  } catch(e) { logRes('Database Read', false, e.message); }
+
+  // 2. Test Firebase Write
+  try {
+    await set(ref(db, 'sa_log/last_ping'), Date.now());
+    logRes('Database Write', true, 'Successfully wrote to audit log.');
+  } catch(e) { logRes('Database Write', false, e.message); }
+
+  // 3. Test GAS Endpoint Configuration
+  try {
+    if (!GAS_ENDPOINT || GAS_ENDPOINT.includes('__')) throw new Error('GAS_ENDPOINT is not configured or still contains placeholder text.');
+    logRes('GAS Configuration', true, 'Endpoint URL is present.');
+  } catch(e) { logRes('GAS Configuration', false, e.message); }
+
+  // 4. Test AI Providers
+  const aiAvailable = AI_PROVIDERS.filter(providerConfigured);
+  if (aiAvailable.length === 0) {
+    logRes('AI Providers', false, 'No API keys configured.');
+  } else {
+    try {
+      const model = await discoverModel(aiAvailable[0]);
+      logRes('AI Engine', true, `Successfully reached ${aiAvailable[0].name} API and resolved model: ${model}.`);
+    } catch(e) {
+      logRes('AI Engine', false, e.message);
+    }
+  }
+
+  // 5. Build Summary and Send Email via GAS
+  const summaryText = results.map(r => `[${r.ok ? 'PASS' : 'FAIL'}] ${r.name}: ${r.msg}`).join('<br><br>');
+  const subject = `[${allPassed ? 'OK' : 'ALERT'}] NPD Hub Daily Health Check`;
+  
+  try {
+    await callGAS('sendComposedEmail', {
+      subject: subject,
+      body: `<h3 style="color:${allPassed ? '#16A34A' : '#C0282D'};">Daily System Diagnostic</h3>
+             <p>Triggered by: ${currentUser.email}</p>
+             <div style="font-family:monospace;background:#F8F8F7;padding:12px;border-radius:8px;">${summaryText}</div>`,
+      toEmails: [currentUser.email], // Sends the report directly to the admin who triggered it
+      ccEmails: [],
+      testMode: false,
+      sentByName: 'System Diagnostic',
+      sentByEmail: currentUser.email,
+    });
+    logRes('Email Dispatch', true, `Diagnostic report successfully queued for ${currentUser.email}.`);
+  } catch(e) {
+    logRes('Email Dispatch', false, 'Failed to connect to GAS to send email: ' + e.message);
+  }
+
+  if (btn && !isBackground) { btn.disabled = false; btn.textContent = 'Run Diagnostic & Email Summary'; }
+  
+  // Record today's date so the background job doesn't run twice in one day
+  const todayStr = new Date().toISOString().split('T')[0];
+  await set(ref(db, 'config/last_auto_ping'), todayStr);
+};
+  
 /* ── TAB: PEOPLE (Department Directory) ─────────────────── */
 async function renderSAPeople(el) {
   // Always re-fetch departments so new ones added in Departments tab appear immediately
