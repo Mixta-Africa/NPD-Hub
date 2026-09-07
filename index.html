@@ -1051,11 +1051,22 @@ function getPillarStatus(deadline) {
 }
 
 // Full task status — always prefer this over getPillarStatus when you have the task object
-// Returns: 'complete' | 'delayed' | 'overdue' | 'due-soon' | 'on-track'
-function getTaskEffectiveStatus(task) {
+// Returns: 'complete' | 'delayed' | 'overdue' | 'due-soon' | 'blocked' | 'on-track'
+function getTaskEffectiveStatus(task, prod) {
   const s = task.status || task.taskStatus || 'on-track';
   if (s === 'complete') return 'complete';
   if (s === 'delayed')  return 'delayed';   // explicit delay always wins
+
+  // GLOBAL BLOCKED CHECK: Cross-reference predecessors safely
+  if (prod && task.predecessors && task.predecessors.length > 0) {
+    const allTasks = getProductTasks(prod);
+    const isBlocked = task.predecessors.some(pid => {
+      const pred = allTasks.find(t => t.id === pid);
+      return pred && pred.status !== 'complete';
+    });
+    if (isBlocked) return 'blocked';
+  }
+
   if (!task.deadline)   return 'on-track';
   const today = new Date(); today.setHours(0,0,0,0);
   const due   = new Date(task.deadline); due.setHours(0,0,0,0);
@@ -1064,13 +1075,10 @@ function getTaskEffectiveStatus(task) {
   if (diff <= 3) return 'due-soon';
   return 'on-track';
 }
-/* ── UNIFIED STATUS RESOLVER ──────────────────────────────────
-   Single source of truth for a task's effective status.
-   Priority: complete > delayed (explicit) > overdue (date) > due-soon > on-track
-   Every part of the dashboard references THIS so a change anywhere
-   propagates everywhere. ────────────────────────────────────── */
-function resolveTaskStatus(task) {
-  return getTaskEffectiveStatus(task);
+
+/* ── UNIFIED STATUS RESOLVER ────────────────────────────────── */
+function resolveTaskStatus(task, prod) {
+  return getTaskEffectiveStatus(task, prod);
 }
 
 // Colour + label lookup — used by every status pill/dot on the dashboard
@@ -1079,10 +1087,10 @@ const STATUS_META = {
   'delayed':   { label: 'Delayed',   color: 'var(--red)',   cls: 'st-delayed'   },
   'overdue':   { label: 'Overdue',   color: 'var(--red)',   cls: 'st-overdue'   },
   'due-soon':  { label: 'Due soon',  color: 'var(--amber)', cls: 'st-due-soon'  },
+  'blocked':   { label: 'Blocked',   color: '#D97706',      cls: 'st-blocked'   },
   'on-track':  { label: 'On track',  color: 'var(--green)', cls: 'st-on-track'  },
 };
-function statusMeta(task) { return STATUS_META[resolveTaskStatus(task)] || STATUS_META['on-track']; }
-
+function statusMeta(task, prod) { return STATUS_META[resolveTaskStatus(task, prod)] || STATUS_META['on-track']; }
 
 function statusLabel(s) {
   return { ontrack: 'On track', warning: 'Due soon', overdue: 'Overdue', 'no-date': 'No date set', 'complete': 'Complete', 'not-started': 'Not started', 'in-progress': 'In progress' }[s] || s;
@@ -2980,10 +2988,10 @@ function buildPdBudget(p) {
 }
 
 function buildPdDeptBlock(dept, list, today, p) {
-  const issues = list.filter(t => ['overdue','delayed'].includes(resolveTaskStatus(t))).length;
-  const done   = list.filter(t => resolveTaskStatus(t) === 'complete').length;
+  const issues = list.filter(t => ['overdue','delayed'].includes(resolveTaskStatus(t, p))).length;
+  const done   = list.filter(t => resolveTaskStatus(t, p) === 'complete').length;
   const rows = list.map(t => {
-    const eff = resolveTaskStatus(t);
+    const eff = resolveTaskStatus(t, p);
     const m   = STATUS_META[eff] || STATUS_META['on-track'];
     let due = 'No date';
     if (t.deadline) {
@@ -5539,11 +5547,13 @@ function renderTrackerTable(prod, filter) {
   // Use unified task system — privacy-gated
   const allTasks  = getProductTasks(prod).filter(t => canViewTask(t, prod));
   const total     = allTasks.length || 1;
-  const complete  = allTasks.filter(t => resolveTaskStatus(t) === 'complete').length;
+  const complete  = allTasks.filter(t => resolveTaskStatus(t, prod) === 'complete').length;
   // Unified Delayed stat
-  const delayed   = allTasks.filter(t => ['overdue','delayed'].includes(resolveTaskStatus(t))).length;
+  const delayed   = allTasks.filter(t => ['overdue','delayed'].includes(resolveTaskStatus(t, prod))).length;
+  // Blocked stat
+  const blocked   = allTasks.filter(t => resolveTaskStatus(t, prod) === 'blocked').length;
   // Unified On Track
-  const onTrack   = Math.max(0, total - complete - delayed);
+  const onTrack   = Math.max(0, total - complete - delayed - blocked);
   const pct       = Math.round((complete / total) * 100);
   const locked    = isProductLocked(prod);
 
