@@ -1089,9 +1089,11 @@ function renderDashboard(el) {
           '<h1 class="view-title">Good ' + getGreeting() + ', <span id="dash-greeting-name" onclick="editPreferredName()" title="Click to personalise your name" style="cursor:pointer;border-bottom:1px dashed var(--border);padding-bottom:1px;">' + name + '</span>.' +
             '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" stroke-width="2" style="margin-left:6px;vertical-align:middle;cursor:pointer;" onclick="editPreferredName()" title="Edit name"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>' +
           '</h1>' +
-          '<p class="view-subtitle">' + (currentRole === 'admin' ? 'Team overview — all products' : 'My products — Commercial Strategy') + '</p>' +
+          '<p class="view-subtitle">' + (currentRole === 'admin'
+            ? 'Team overview — all products and projects'
+            : 'Your products and projects' + (currentUserDept ? ' — ' + currentUserDept : '')) + '</p>' +
         '</div>' +
-        (currentRole === 'admin' ? '<button class="btn-primary" onclick="loadView(\'products\')">+ New product</button>' : '') +
+        '<button class="btn-primary" onclick="loadView(\'products\')">+ New</button>' +
       '</div>' +
       '<div class="stats-row">' +
         '<div class="stat-card stat-card-link dash-stat-card" onclick="loadView(\'products\')" style="border-top:3px solid var(--red);">' +
@@ -1237,7 +1239,7 @@ function _updateDashboardUI(list) {
     if (list.length === 0) {
       recentEl.innerHTML = '<div class="empty-state-sm">' +
         '<span class="empty-icon" style="color:var(--text-muted);">' + ICON.clipboard + '</span>' +
-        '<p>No products yet.' + (currentRole === 'admin' ? ' <button class="btn-primary-sm" onclick="loadView(\'products\')">Create one</button>' : '') + '</p>' +
+        '<p>Nothing here yet. <button class="btn-primary-sm" onclick="loadView(\'products\')">Create one</button></p>' +
         '</div>';
     } else {
       const sorted = list.sort((a,b) => b.createdAt - a.createdAt).slice(0, 4);
@@ -1724,7 +1726,7 @@ function renderProducts(el) {
         <h1 class="view-title" id="pv-title">Products &amp; Projects</h1>
         <p class="view-subtitle" id="pv-subtitle">Everything you track — active, completed, and archived</p>
       </div>
-      ${currentRole === 'admin' ? `<button class="btn-primary" onclick="showCreateProduct()">+ New</button>` : ''}
+      <button class="btn-primary" onclick="showCreateProduct()">+ New</button>
     </div>
     <div class="pv-filter-row">
       <button class="pv-filter active" data-type="all"     onclick="setProductFilter('all',this)">All <span id="pvc-all" class="pv-count"></span></button>
@@ -1795,7 +1797,7 @@ async function loadProductList() {
         (visible.length > 0 && _productFilter !== 'all'
           ? '<p>You have ' + visible.length + ' item' + (visible.length !== 1 ? 's' : '') + ' under a different type. Switch the filter above to see them.</p>'
           : '<p>Create your first one to get started.</p>') +
-        (currentRole === 'admin' ? `<button class="btn-primary" onclick="showCreateProduct()">+ New</button>` : '<p class="muted">Contact an admin to get started.</p>') +
+        `<button class="btn-primary" onclick="showCreateProduct()">+ New</button>` +
         '</div></div>';
       return;
     }
@@ -1825,7 +1827,7 @@ function renderProductCard(p) {
   const overdueHtml = overduePl > 0
     ? `<div class="pcf-meta-item"><span class="pcf-meta-label">Overdue</span><span class="pcf-meta-val red">${overduePl}</span></div>`
     : '';
-  const editBtn = currentRole === 'admin'
+  const editBtn = canEdit(p)
     ? `<button class="btn-secondary-sm" onclick="editProduct('${p.id}')">Edit dates</button>`
     : '';
   // Slip calculation
