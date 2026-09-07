@@ -3869,7 +3869,6 @@ window.showAddTaskToProduct = (productId) => {
   ensureProductModal();
   const prod = productListCache[productId];
   if (!prod) return;
-  const firstDept = getDepts()[0] || '';
   document.getElementById('modal-title-text').textContent = 'Add task — ' + prod.name;
   document.getElementById('modal-body-content').innerHTML =
     '<p style="font-size:13px;color:var(--text-mid);margin-bottom:16px;line-height:1.7;">Add a new task to this product.</p>' +
@@ -3880,10 +3879,11 @@ window.showAddTaskToProduct = (productId) => {
       '<div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:6px;" id="at-owner-chips"><span style="font-size:11px;color:#9CA3AF;">No owners yet</span></div>' +
       '<div style="display:flex;gap:6px;align-items:flex-end;">' +
         '<select id="at-dept" class="select-field" style="flex:1;" onchange="updateAddTaskIndividuals()">' +
+          '<option value="">-- Dept --</option>' +
           getDepts().map(d => '<option value="' + d + '">' + d + '</option>').join('') +
         '</select>' +
         '<select id="at-owner" class="select-field" style="flex:1;">' +
-          buildOwnerIndividualOptions(firstDept, '') +
+          '<option value="">-- Person --</option>' +
         '</select>' +
         '<button class="btn-outline" style="font-size:11px;padding:7px 10px;white-space:nowrap;" onclick="addNewTaskOwnerChip()">+ Add</button>' +
       '</div>' +
@@ -3948,8 +3948,22 @@ window.addTaskToProduct = async (productId) => {
   if (!title)    { showToast('Task name required.', 'error'); return; }
   if (!deadline) { showToast('Deadline is required.', 'error'); return; }
 
-  const owners = window._atOwners && window._atOwners.length > 0 ? window._atOwners : [];
-  const primaryOwner = owners.length > 0 ? (owners[0].nameCache || owners[0].email) : '';
+  // Auto-capture lingering dropdown selections if the user forgot to click "+ Add"
+  const dept = document.getElementById('at-dept')?.value || '';
+  const email = document.getElementById('at-owner')?.value || '';
+  const nameCache = document.getElementById('at-owner')?.selectedOptions?.[0]?.dataset?.name || '';
+  
+  if (!window._atOwners) window._atOwners = [];
+  
+  if (dept || email) {
+    if (!window._atOwners.some(o => o.email === email && o.dept === dept)) {
+      window._atOwners.push({ dept, email, nameCache });
+    }
+  }
+
+  const owners = window._atOwners;
+  // Gracefully fallback to dept name if an individual person isn't selected
+  const primaryOwner = owners.length > 0 ? (owners[0].nameCache || owners[0].dept || owners[0].email) : '';
   const primaryDept  = owners.length > 0 ? owners[0].dept : '';
   const primaryEmail = owners.length > 0 ? (owners[0].email || '') : '';
 
@@ -3977,7 +3991,6 @@ window.addTaskToProduct = async (productId) => {
   showToast('Task added.', 'success');
   if (currentView === 'tracker') renderTrackerTable(productListCache[productId], null);
 };
-
 
 window.convertItemType = async (productId, currentType) => {
   const newType = currentType === 'project' ? 'product' : 'project';
@@ -4760,7 +4773,7 @@ window.confirmReassign = async (productId, taskId) => {
     c.owners = newOwners; c.owner = toName; c.ownerEmail = toEmail; c.ownerDept = dept;
   }
 
-  showToast('Task reassigned to ' + individual, 'success');
+  showToast('Task reassigned to ' + toName, 'success');
   document.getElementById('modal-reassign-panel').innerHTML = '';
   // Refresh the tasks tab
   const body = document.getElementById('product-detail-body');
@@ -5691,6 +5704,13 @@ window.updatePillarStatus = async (productId, taskId, newStatus) => {
 
     // Re-render whichever view is currently active
     refreshActiveView(productId);
+    
+    // Re-render the open modal if it is active
+    const modalBody = document.getElementById('product-detail-body');
+    if (modalBody) {
+      modalBody.innerHTML = buildPillarDetail(prod);
+    }
+
     // Log to activity feed
     const taskObj  = tasks.find(t => t.id === taskId);
     const taskName = taskObj?.title || taskObj?.name || taskId;
