@@ -922,6 +922,7 @@ function doPost(e) {
       case 'getThreadSubject':      result = getThreadSubject(body);             break;
       case 'gccoGenerateLink':      result = gccoGenerateLink(body);             break;
       case 'exportProjectTracker':  result = exportProjectTracker(body);         break;
+      case 'syncProjectToSheet':    result = syncProjectToSheet(body);           break;
       case 'sendTodoDigest':        result = sendTodoDigest(body);              break;
       case 'ping':                  result = { ok: true, message: 'NPD Hub GAS v2.1 is live.', ts: new Date().toISOString() }; break;
       default:                      result = { ok: false, error: 'Unknown action: ' + action };
@@ -948,6 +949,275 @@ function doPost(e) {
    to see (canViewTask runs in the browser, where the user identity
    exists). GAS cannot widen the set because it never sees the rest.
    ══════════════════════════════════════════════════════════════ */
+/* ══════════════════════════════════════════════════════════════
+   PROJECT SHEET SYNC  —  Hub ⇄ Google Sheets
+
+   MODEL
+     One spreadsheet per project. Bidirectional on the operational
+     fields. Private tasks NEVER leave Firebase, so a shared sheet
+     can only ever contain rows its viewers were already entitled to.
+
+   WHY POLLING, NOT onEdit
+     Apps Script caps a script at 20 triggers. A per-spreadsheet
+     onEdit trigger would break at the 21st project. One time-based
+     poll scales to any number of sheets and — because it writes only
+     when the sheet value DIFFERS from Firebase — is idempotent, so
+     Hub→Sheet→Hub feedback loops cannot form.
+
+   COLUMNS
+     A TaskID(locked)  B Task  C Owner(locked)  D Dept(locked)
+     E Deadline  F Status  G Notes  H LastSync(locked)
+     Editable from the sheet: B, E, F, G.
+   ══════════════════════════════════════════════════════════════ */
+var SHEET_COLS   = ['TaskID', 'Task', 'Owner', 'Department', 'Deadline', 'Status', 'Notes', 'Last sync'];
+var SHEET_STATUS = ['On Track', 'Due Soon', 'Delayed', 'Overdue', 'Complete'];
+var SYNC_ROOT    = 'NPD Hub — Project Sheets';
+
+function statusToSheet(s) {
+  return ({ 'on-track':'On Track', 'due-soon':'Due Soon', delayed:'Delayed',
+            overdue:'Overdue', complete:'Complete' })[s] || 'On Track';
+}
+function statusFromSheet(s) {
+  var k = String(s || '').trim().toLowerCase();
+  return ({ 'on track':'on-track', 'due soon':'due-soon', delayed:'delayed',
+            overdue:'overdue', complete:'complete', done:'complete' })[k] || null;
+}
+
+/* Only department- and public-visibility tasks are eligible for a shared
+   sheet. Mirrors isTaskPrivate() used by the alert path. */
+function isSyncable(task) {
+  var v = task && task.visibility;
+  return v === 'public' || v === 'department' || v === 'restricted';
+}
+
+function getSheetRegistry(authParam) {
+  try {
+    return JSON.parse(UrlFetchApp.fetch(
+      FIREBASE_DB_URL + '/config/projectSheets.json' + authParam,
+      { muteHttpExceptions: true }).getContentText()) || {};
+  } catch(e) { return {}; }
+}
+
+function ensureProjectSheet(productId, productName, authParam) {
+  var reg = getSheetRegistry(authParam);
+  if (reg[productId] && reg[productId].sheetId) {
+    try { SpreadsheetApp.openById(reg[productId].sheetId); return reg[productId].sheetId; }
+    catch(e) { /* deleted — fall through and recreate */ }
+  }
+
+  var root = getOrCreateFolder(SYNC_ROOT, DriveApp.getRootFolder());
+  var ss   = SpreadsheetApp.create(productName + ' — Live Tracker');
+  DriveApp.getFileById(ss.getId()).moveTo(root);
+
+  var sh = ss.getActiveSheet();
+  sh.setName('Tasks');
+  sh.getRange(1, 1, 1, SHEET_COLS.length).setValues([SHEET_COLS])
+    .setFontWeight('bold').setFontColor('#FFFFFF').setBackground('#1A1A18').setFontSize(10);
+  sh.setFrozenRows(1);
+  sh.setColumnWidth(1, 130); sh.setColumnWidth(2, 320); sh.setColumnWidth(3, 150);
+  sh.setColumnWidth(4, 120); sh.setColumnWidth(5, 105); sh.setColumnWidth(6, 105);
+  sh.setColumnWidth(7, 280); sh.setColumnWidth(8, 140);
+
+  // Status dropdown stops free-text garbage arriving on the return path
+  sh.getRange(2, 6, 500).setDataValidation(
+    SpreadsheetApp.newDataValidation().requireValueInList(SHEET_STATUS, true)
+      .setAllowInvalid(false).build());
+
+  // Guidance row so people know which columns are live
+  sh.getRange(1, 9).setValue(
+    'Editable here: Task, Deadline, Status, Notes. Changes sync back to the NPD Hub within 10 minutes. ' +
+    'TaskID, Owner and Department are managed in the Hub. Private tasks are never shown here.');
+  sh.getRange(1, 9).setFontSize(8).setFontColor('#9A9A96');
+
+  UrlFetchApp.fetch(FIREBASE_DB_URL + '/config/projectSheets/' + productId + '.json' + authParam, {
+    method: 'put', contentType: 'application/json', muteHttpExceptions: true,
+    payload: JSON.stringify({
+      sheetId: ss.getId(), url: ss.getUrl(), productName: productName,
+      createdAt: new Date().toISOString(), lastPolledAt: 0,
+    }),
+  });
+  Logger.log('Created project sheet for ' + productName + ': ' + ss.getUrl());
+  return ss.getId();
+}
+
+/* ── FORWARD: Hub → Sheet ─────────────────────────────────── */
+function syncProjectToSheet(body) {
+  try {
+    var authParam = '?auth=' + FIREBASE_DB_SECRET;
+    var productId = body.productId;
+    if (!productId) return { ok: false, error: 'No productId' };
+
+    var prod = JSON.parse(UrlFetchApp.fetch(
+      FIREBASE_DB_URL + '/products/' + productId + '.json' + authParam,
+      { muteHttpExceptions: true }).getContentText());
+    if (!prod) return { ok: false, error: 'Product not found' };
+
+    var sheetId = ensureProjectSheet(productId, prod.name || productId, authParam);
+    var sh = SpreadsheetApp.openById(sheetId).getSheetByName('Tasks');
+
+    var tasks = Object.values(prod.tasks || {}).filter(isSyncable);
+    var stamp = Utilities.formatDate(new Date(), 'Africa/Lagos', 'dd MMM yyyy HH:mm');
+
+    // Wipe the body and rewrite — simplest correct approach at this scale
+    var last = sh.getLastRow();
+    if (last > 1) sh.getRange(2, 1, last - 1, SHEET_COLS.length).clearContent().setBackground(null);
+
+    if (tasks.length > 0) {
+      var rows = tasks.map(function(t) {
+        var owners = (t.owners && t.owners.length) ? t.owners
+          : [{ dept: t.ownerDept || '', email: t.ownerEmail || '', nameCache: t.owner || '' }];
+        return [
+          t.id,
+          t.title || 'Untitled',
+          owners.map(function(o) { return o.nameCache || o.email || o.dept || ''; }).filter(String).join(', '),
+          owners.map(function(o) { return o.dept; }).filter(String).join(', '),
+          t.deadline || '',
+          statusToSheet(t.status || 'on-track'),
+          t.notes || '',
+          stamp,
+        ];
+      });
+      sh.getRange(2, 1, rows.length, SHEET_COLS.length).setValues(rows);
+
+      // Colour the status column so the sheet reads like the Hub
+      var bg = { 'Complete':'#EFF6FF', 'Delayed':'#FEF2F2', 'Overdue':'#FEF2F2',
+                 'Due Soon':'#FFFBEB', 'On Track':'#F0FDF4' };
+      var fg = { 'Complete':'#2563EB', 'Delayed':'#C0282D', 'Overdue':'#C0282D',
+                 'Due Soon':'#D97706', 'On Track':'#16A34A' };
+      rows.forEach(function(r, i) {
+        sh.getRange(2 + i, 6).setBackground(bg[r[5]] || null).setFontColor(fg[r[5]] || null).setFontWeight('bold');
+      });
+    }
+
+    // Record the push so the very next poll does not treat our own write as a user edit
+    UrlFetchApp.fetch(FIREBASE_DB_URL + '/config/projectSheets/' + productId + '/lastPushAt.json' + authParam, {
+      method: 'put', contentType: 'application/json',
+      payload: JSON.stringify(Date.now()), muteHttpExceptions: true });
+
+    var skipped = Object.keys(prod.tasks || {}).length - tasks.length;
+    return { ok: true, url: SpreadsheetApp.openById(sheetId).getUrl(),
+             synced: tasks.length, skippedPrivate: skipped };
+  } catch(err) {
+    Logger.log('syncProjectToSheet error: ' + err.message);
+    return { ok: false, error: err.message };
+  }
+}
+
+/* ── RETURN: Sheet → Hub ──────────────────────────────────── */
+function installSheetSyncTrigger() {
+  ScriptApp.getProjectTriggers().forEach(function(t) {
+    if (t.getHandlerFunction() === 'pollSheetsToFirebase') ScriptApp.deleteTrigger(t);
+  });
+  ScriptApp.newTrigger('pollSheetsToFirebase').timeBased().everyMinutes(10).create();
+  Logger.log('Sheet sync poll installed — runs every 10 minutes');
+}
+
+function pollSheetsToFirebase() {
+  var authParam = '?auth=' + FIREBASE_DB_SECRET;
+  var reg = getSheetRegistry(authParam);
+  var ids = Object.keys(reg);
+  if (ids.length === 0) { Logger.log('No project sheets registered.'); return; }
+
+  var totalChanged = 0, sheetsScanned = 0;
+
+  ids.forEach(function(productId) {
+    var entry = reg[productId];
+    if (!entry || !entry.sheetId) return;
+    var file;
+    try { file = DriveApp.getFileById(entry.sheetId); } catch(e) {
+      Logger.log('Sheet missing for ' + productId + ' — skipping'); return;
+    }
+
+    // Cheap gate: skip sheets untouched since the last poll
+    var modified = file.getLastUpdated().getTime();
+    if (entry.lastPolledAt && modified <= entry.lastPolledAt) return;
+    sheetsScanned++;
+
+    var sh = SpreadsheetApp.openById(entry.sheetId).getSheetByName('Tasks');
+    if (!sh) return;
+    var last = sh.getLastRow();
+    if (last < 2) { markPolled_(productId, modified, authParam); return; }
+
+    var values = sh.getRange(2, 1, last - 1, SHEET_COLS.length).getValues();
+    var prod = JSON.parse(UrlFetchApp.fetch(
+      FIREBASE_DB_URL + '/products/' + productId + '.json' + authParam,
+      { muteHttpExceptions: true }).getContentText());
+    if (!prod || !prod.tasks) { markPolled_(productId, modified, authParam); return; }
+
+    values.forEach(function(row) {
+      var taskId = String(row[0] || '').trim();
+      if (!taskId) return;
+      var task = prod.tasks[taskId];
+      if (!task) return;                 // row for a deleted task — ignore
+      if (!isSyncable(task)) return;     // never accept edits to a private task
+
+      var updates = {};
+
+      // Title
+      var newTitle = String(row[1] || '').trim();
+      if (newTitle && newTitle !== (task.title || '')) updates.title = newTitle;
+
+      // Deadline — normalise whatever the cell holds to YYYY-MM-DD
+      var newDeadline = normaliseSheetDate_(row[4]);
+      if (newDeadline !== (task.deadline || '')) updates.deadline = newDeadline;
+
+      // Status
+      var newStatus = statusFromSheet(row[5]);
+      if (newStatus && newStatus !== (task.status || 'on-track')) updates.status = newStatus;
+
+      // Notes
+      var newNotes = String(row[6] || '').trim();
+      if (newNotes !== (task.notes || '')) updates.notes = newNotes;
+
+      // Value comparison means an unchanged row writes nothing — this is
+      // what makes the whole loop safe.
+      if (Object.keys(updates).length === 0) return;
+
+      Object.keys(updates).forEach(function(field) {
+        UrlFetchApp.fetch(
+          FIREBASE_DB_URL + '/products/' + productId + '/tasks/' + taskId + '/' + field + '.json' + authParam,
+          { method: 'put', contentType: 'application/json',
+            payload: JSON.stringify(updates[field]), muteHttpExceptions: true });
+      });
+
+      var actId = 'sheet_' + Date.now() + '_' + Math.floor(Math.random() * 1000);
+      UrlFetchApp.fetch(
+        FIREBASE_DB_URL + '/products/' + productId + '/activity/' + actId + '.json' + authParam,
+        { method: 'put', contentType: 'application/json', muteHttpExceptions: true,
+          payload: JSON.stringify({
+            id: actId, type: 'sheet_sync',
+            message: 'Updated from Google Sheet: ' + (task.title || taskId),
+            detail: Object.keys(updates).map(function(f) { return f + ' → ' + updates[f]; }).join(', '),
+            user: 'sheet-sync', userName: 'Google Sheet', timestamp: Date.now(),
+          }) });
+      totalChanged++;
+    });
+
+    markPolled_(productId, modified, authParam);
+  });
+
+  Logger.log('Sheet poll: ' + sheetsScanned + ' sheet(s) changed, ' + totalChanged + ' task field group(s) written back');
+}
+
+function markPolled_(productId, modified, authParam) {
+  UrlFetchApp.fetch(
+    FIREBASE_DB_URL + '/config/projectSheets/' + productId + '/lastPolledAt.json' + authParam,
+    { method: 'put', contentType: 'application/json',
+      payload: JSON.stringify(modified), muteHttpExceptions: true });
+}
+
+function normaliseSheetDate_(v) {
+  if (!v) return '';
+  if (v instanceof Date && !isNaN(v)) return Utilities.formatDate(v, 'Africa/Lagos', 'yyyy-MM-dd');
+  var s = String(v).trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+  var d = new Date(s);
+  return isNaN(d) ? '' : Utilities.formatDate(d, 'Africa/Lagos', 'yyyy-MM-dd');
+}
+
+// Manual run for testing the return path without waiting for the trigger
+function test_pollSheets() { pollSheetsToFirebase(); }
+
 function exportProjectTracker(body) {
   try {
     var name    = body.productName || 'Untitled';
