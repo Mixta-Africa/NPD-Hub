@@ -1830,24 +1830,28 @@ function renderProductCard(p) {
   const allTasks   = getProductTasks(p).filter(t => canViewTask(t, p));
   const total      = allTasks.length || 1;
   const complete   = allTasks.filter(t => resolveTaskStatus(t) === 'complete').length;
-  const overduePl  = allTasks.filter(t => {
+  
+  // UNIFIED DELAYED STAT: Captures both overdue dates and explicit dropdown delays
+  const delayed    = allTasks.filter(t => {
     const eff = resolveTaskStatus(t);
     return eff === 'overdue' || eff === 'delayed';
   }).length;
-  const delayed    = allTasks.filter(t => t.status === 'delayed').length;
+  
+  // Clean math: Everything not complete and not delayed is On Track
+  const onTrack    = Math.max(0, total - complete - delayed);
   const pct        = Math.round((complete / total) * 100);
+  
   const itemType   = p.itemType || 'product';
   const typeBadge  = itemType === 'project'
     ? '<span style="font-size:10px;font-weight:700;color:#2563EB;background:#EFF6FF;padding:2px 8px;border-radius:10px;letter-spacing:.03em;">PROJECT</span>'
     : '<span style="font-size:10px;font-weight:700;color:#C0282D;background:#FEF2F2;padding:2px 8px;border-radius:10px;letter-spacing:.03em;">PRODUCT</span>';
   const statusCls  = p.status || 'active';
   const statusLbl  = p.status === 'complete' ? 'Complete' : 'Active';
-  const overdueHtml = overduePl > 0
-    ? `<div class="pcf-meta-item"><span class="pcf-meta-label">Overdue</span><span class="pcf-meta-val red">${overduePl}</span></div>`
-    : '';
+  
   const editBtn = canEdit(p)
     ? `<button class="btn-secondary-sm" onclick="editProduct('${p.id}')">Edit dates</button>`
     : '';
+
   // Slip calculation
   const slipHtml = (() => {
     if (!p.baselineLaunchDate || p.baselineLaunchDate === p.launchDate) return '';
@@ -1864,9 +1868,9 @@ function renderProductCard(p) {
   if (launch) launch.setHours(0,0,0,0);
   const daysToLaunch = launch ? Math.round((launch - today2) / 86400000) : null;
 
-  // At-risk: 2+ delayed/overdue tasks AND launch within 21 days
+  // At-risk: 2+ delayed tasks AND launch within 21 days
   const atRisk = daysToLaunch !== null && daysToLaunch >= 0 && daysToLaunch <= 21
-    && (delayed + overduePl) >= 2;
+    && delayed >= 2;
 
   const launchBadge = daysToLaunch === null ? `<span class="pcf-launch-badge pcf-launch-grey">${formatDate(p.launchDate)}</span>`
     : daysToLaunch < 0   ? `<span class="pcf-launch-badge pcf-launch-red">${Math.abs(daysToLaunch)}d overdue</span>`
@@ -1881,7 +1885,6 @@ function renderProductCard(p) {
       '</span>'
     : '';
 
-  // Live countdown chip — updates every second for last 3 days
   const countdownId = 'cd-' + p.id;
   let countdownChip = '';
   if (daysToLaunch !== null && daysToLaunch >= 0 && daysToLaunch <= 3) {
@@ -1889,13 +1892,11 @@ function renderProductCard(p) {
     setTimeout(() => startCountdown(countdownId, p.launchDate), 100);
   }
 
-  const healthCls = overduePl > 0 ? 'pcf-health-red'
-                  : delayed > 0   ? 'pcf-health-amber'
-                  : pct === 100   ? 'pcf-health-done'
+  const healthCls = delayed > 0 ? 'pcf-health-red'
+                  : pct === 100 ? 'pcf-health-done'
                   : 'pcf-health-green';
-  const healthTip = overduePl > 0 ? `${overduePl} overdue`
-                  : delayed > 0   ? `${delayed} delayed`
-                  : pct === 100   ? 'Complete' : 'On track';
+  const healthTip = delayed > 0 ? `${delayed} delayed`
+                  : pct === 100 ? 'Complete' : 'On track';
 
   return `
     <div class="product-card-full">
@@ -1933,9 +1934,8 @@ function renderProductCard(p) {
       <div class="pcf-stats">
         <div class="pcf-stat"><span class="pcf-stat-val green">${complete}</span><span class="pcf-stat-lbl">done</span></div>
         <div class="pcf-stat-div"></div>
-        <div class="pcf-stat"><span class="pcf-stat-val">${Math.max(0,total-complete-delayed-overduePl)}</span><span class="pcf-stat-lbl">on track</span></div>
-        ${delayed > 0 ? `<div class="pcf-stat-div"></div><div class="pcf-stat"><span class="pcf-stat-val amber">${delayed}</span><span class="pcf-stat-lbl">delayed</span></div>` : ''}
-        ${overduePl > 0 ? `<div class="pcf-stat-div"></div><div class="pcf-stat"><span class="pcf-stat-val red">${overduePl}</span><span class="pcf-stat-lbl">overdue</span></div>` : ''}
+        <div class="pcf-stat"><span class="pcf-stat-val">${onTrack}</span><span class="pcf-stat-lbl">on track</span></div>
+        ${delayed > 0 ? `<div class="pcf-stat-div"></div><div class="pcf-stat"><span class="pcf-stat-val red">${delayed}</span><span class="pcf-stat-lbl">delayed</span></div>` : ''}
         <div class="pcf-stat-spacer"></div>
         <span class="pcf-owner-chip">
           <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 3.6-7 8-7s8 3 8 7"/></svg>
@@ -3869,6 +3869,12 @@ window.showAddTaskToProduct = (productId) => {
   ensureProductModal();
   const prod = productListCache[productId];
   if (!prod) return;
+  const firstDept = getDepts()[0] || '';
+  
+  // 1. Fetch existing tasks to populate the dependency dropdown
+  const tasks = getProductTasks(prod);
+  const predOptions = tasks.map(t => '<option value="' + t.id + '">' + (t.title || t.name || 'Untitled') + '</option>').join('');
+
   document.getElementById('modal-title-text').textContent = 'Add task — ' + prod.name;
   document.getElementById('modal-body-content').innerHTML =
     '<p style="font-size:13px;color:var(--text-mid);margin-bottom:16px;line-height:1.7;">Add a new task to this product.</p>' +
@@ -3888,7 +3894,15 @@ window.showAddTaskToProduct = (productId) => {
         '<button class="btn-outline" style="font-size:11px;padding:7px 10px;white-space:nowrap;" onclick="addNewTaskOwnerChip()">+ Add</button>' +
       '</div>' +
     '</div>' +
-    '<div class="form-row"><label class="form-label">Deadline <span class="req">*</span></label>' +
+    // 2. Add the Depends on dropdown
+    '<div class="form-row"><label class="form-label">Depends on <span class="form-hint">— hold Ctrl/Cmd for multiple</span></label>' +
+      '<select id="at-preds" class="select-field" multiple style="height:60px;font-size:12px;">' +
+        '<option value="" disabled style="color:var(--text-muted);">No dependency</option>' +
+        predOptions +
+      '</select>' +
+    '</div>' +
+    // 3. Make the deadline visually optional
+    '<div class="form-row"><label class="form-label">Deadline <span class="form-hint">— optional if task depends on another</span></label>' +
       '<input type="date" id="at-deadline" class="input-field"/></div>' +
     '<div class="form-actions">' +
       '<button class="btn-outline" onclick="closeProductModal()">Cancel</button>' +
@@ -3945,8 +3959,18 @@ window.removeAtOwner = (i) => {
 window.addTaskToProduct = async (productId) => {
   const title    = document.getElementById('at-title')?.value.trim();
   const deadline = document.getElementById('at-deadline')?.value || '';
-  if (!title)    { showToast('Task name required.', 'error'); return; }
-  if (!deadline) { showToast('Deadline is required.', 'error'); return; }
+  
+  // 1. Capture selected dependencies
+  const predSelect = document.getElementById('at-preds');
+  const predecessors = predSelect ? Array.from(predSelect.selectedOptions).map(o => o.value).filter(v => v) : [];
+  
+  if (!title) { showToast('Task name required.', 'error'); return; }
+  
+  // 2. Only enforce deadline if NO predecessors are selected
+  if (!deadline && predecessors.length === 0) { 
+    showToast('Deadline is required if no dependency is set.', 'error'); 
+    return; 
+  }
 
   // Auto-capture lingering dropdown selections if the user forgot to click "+ Add"
   const dept = document.getElementById('at-dept')?.value || '';
@@ -3973,7 +3997,7 @@ window.addTaskToProduct = async (productId) => {
   const task   = {
     id: taskId, title,
     owner: primaryOwner, ownerDept: primaryDept, ownerEmail: primaryEmail, owners,
-    deadline, status: 'on-track', predecessors: [], locked: false,
+    deadline, status: 'on-track', predecessors, locked: false, // <-- 3. Injected predecessors array here
     pillarId: null, order: tasks.length, kanbanCol: 'todo',
     createdAt: Date.now(), createdBy: currentUser.email,
   };
@@ -5515,13 +5539,12 @@ function renderTrackerTable(prod, filter) {
   // Use unified task system — privacy-gated
   const allTasks  = getProductTasks(prod).filter(t => canViewTask(t, prod));
   const total     = allTasks.length || 1;
-  const complete  = allTasks.filter(t => t.status === 'complete').length;
-  const delayed   = allTasks.filter(t => t.status === 'delayed').length;
-  const onTrack   = allTasks.filter(t => t.status === 'on-track' || t.status === 'in-progress' || t.status === 'not-started').length;
+  const complete  = allTasks.filter(t => resolveTaskStatus(t) === 'complete').length;
+  // Unified Delayed stat
+  const delayed   = allTasks.filter(t => ['overdue','delayed'].includes(resolveTaskStatus(t))).length;
+  // Unified On Track
+  const onTrack   = Math.max(0, total - complete - delayed);
   const pct       = Math.round((complete / total) * 100);
-  const overdue   = allTasks.filter(t => {
-    return t.deadline && t.status !== 'complete' && getPillarStatus(t.deadline) === 'overdue';
-  }).length;
   const locked    = isProductLocked(prod);
 
   const rows = allTasks.map((pl, i) => {
@@ -5621,7 +5644,8 @@ function renderTrackerTable(prod, filter) {
 
   const overdueHtml = overdue > 0 ? `<span style="color:var(--red)">${overdue} overdue</span>` : '0 overdue';
   // critCount must be declared before body.innerHTML uses it in the template literal
-  const criticalIds = computeCriticalPath(allTasks);
+  // critCount must be declared before body.innerHTML uses it in the template literal
+  const criticalIds = typeof computeCriticalPath === 'function' ? computeCriticalPath(allTasks) : new Set();
   const critCount   = criticalIds.size;
   body.innerHTML = `
     <div class="tracker-summary">
@@ -5634,13 +5658,12 @@ function renderTrackerTable(prod, filter) {
       </div>
       <div class="tracker-progress-wrap">
         <div class="tracker-progress-fill" style="width:${pct}%"></div>
-        <div class="tracker-progress-delayed" style="width:${Math.round((delayed/PILLARS.length)*100)}%;left:${pct}%"></div>
+        <div class="tracker-progress-delayed" style="width:${Math.round((delayed/total)*100)}%;left:${pct}%"></div>
       </div>
       <div class="tracker-stats-row">
         <span class="tracker-stat tracker-stat-green"><span class="tracker-stat-num">${complete}</span> Complete</span>
         <span class="tracker-stat tracker-stat-blue"><span class="tracker-stat-num">${onTrack}</span> On Track</span>
         <span class="tracker-stat tracker-stat-red"><span class="tracker-stat-num">${delayed}</span> Delayed</span>
-        ${overdue > 0 ? '<span class="tracker-stat tracker-stat-grey"><span class="tracker-stat-num">'+overdue+'</span> Deadline overdue</span>' : ''}
       </div>
     </div>
     <div class="panel" style="overflow:auto;">
