@@ -2041,8 +2041,14 @@ function renderProductCard(p) {
 
   const countdownId = 'cd-' + p.id;
   let countdownChip = '';
-  if (daysToLaunch !== null && daysToLaunch >= 0 && daysToLaunch <= 3) {
-    countdownChip = '<span id="' + countdownId + '" style="font-size:10px;font-weight:700;color:#C0282D;background:#FEF2F2;padding:2px 8px;border-radius:10px;letter-spacing:.02em;"></span>';
+  // Removed the daysToLaunch <= 3 restriction. Now applies to all active future projects.
+  if (daysToLaunch !== null && daysToLaunch >= 0 && p.status !== 'complete') {
+    // Dynamic styling: Red if urgent (<= 3 days), calm gray otherwise
+    const isUrgent = daysToLaunch <= 3;
+    const cdColor = isUrgent ? '#C0282D' : '#6B7280';
+    const cdBg = isUrgent ? '#FEF2F2' : '#F3F4F6';
+    
+    countdownChip = `<span id="${countdownId}" style="font-size:10px;font-weight:700;color:${cdColor};background:${cdBg};padding:2px 8px;border-radius:10px;letter-spacing:.02em;margin-left:4px;"></span>`;
     setTimeout(() => startCountdown(countdownId, p.launchDate), 100);
   }
 
@@ -7009,10 +7015,15 @@ function startCountdown(elId, launchDateStr) {
       clearInterval(_countdownTimers[elId]);
       return;
     }
-    const h = Math.floor(diff / 3600000);
+    
+    // Upgraded Math: Days, Hours, Minutes, Seconds
+    const d = Math.floor(diff / 86400000);
+    const h = Math.floor((diff % 86400000) / 3600000);
     const m = Math.floor((diff % 3600000) / 60000);
     const s = Math.floor((diff % 60000) / 1000);
-    el.textContent = h + 'h ' + m + 'm ' + s + 's';
+    
+    // Display format: Only show days if there is 1 or more
+    el.textContent = (d > 0 ? d + 'd ' : '') + h + 'h ' + m + 'm ' + s + 's';
   };
   update();
   _countdownTimers[elId] = setInterval(update, 1000);
