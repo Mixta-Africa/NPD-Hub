@@ -19,6 +19,17 @@
 <!-- SheetJS — Excel/CSV parsing for the task importer -->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 
+<!-- Mermaid.js — For visual dependency mapping -->
+<script src="https://cdn.jsdelivr.net/npm/mermaid@9.4.3/dist/mermaid.min.js"></script>
+<script>
+  // Initialize Mermaid safely
+  document.addEventListener('DOMContentLoaded', () => {
+    if (window.mermaid) {
+      mermaid.initialize({ startOnLoad: false, securityLevel: 'loose', theme: 'base' });
+    }
+  });
+</script>
+
 <!-- Safe global stubs — ensures onclick handlers work before module loads -->
 <script>
 (function() {
@@ -1110,6 +1121,51 @@ async function callGAS(action, payload) {
 
 
 /* ── STATUS HELPERS ── */
+  
+  // ── DEPENDENCY MAP GENERATOR ───────────────────────────────────
+function generateDependencyMap(tasks, prod) {
+  let graph = "graph LR\n"; // Left-to-Right orientation
+  let hasEdges = false;
+
+  tasks.forEach(t => {
+    const eff = resolveTaskStatus(t, prod);
+    
+    // Assign colors based on exact status
+    let stroke = '#16A34A', fill = '#F0FDF4'; // default: on-track
+    if (eff === 'complete') { stroke = '#2563EB'; fill = '#EFF6FF'; }
+    else if (eff === 'delayed' || eff === 'overdue') { stroke = '#C0282D'; fill = '#FEF2F2'; }
+    else if (eff === 'due-soon') { stroke = '#D97706'; fill = '#FFFBEB'; }
+    else if (eff === 'blocked') { stroke = '#D97706'; fill = '#FFFBEB'; }
+
+    // Clean title to prevent Mermaid syntax errors
+    const safeTitle = (t.title || 'Untitled').replace(/["|{}\[\]()><]/g, '').trim();
+    
+    // Create the node (Blocked tasks get a distinct shape)
+    const nodeDef = eff === 'blocked' ? `>"${safeTitle}"]` : `("${safeTitle}")`;
+    graph += `  ${t.id}${nodeDef}\n`;
+    
+    // Apply styling
+    graph += `  style ${t.id} fill:${fill},stroke:${stroke},stroke-width:2px,color:#1A1A1A\n`;
+    if (eff === 'blocked') {
+      graph += `  style ${t.id} stroke-dasharray: 5 5\n`; // Dashed border for blocked tasks
+    }
+
+    // Draw the connection arrows
+    if (t.predecessors && t.predecessors.length > 0) {
+      t.predecessors.forEach(predId => {
+        // Only draw arrow if the predecessor actually exists in this project
+        if (tasks.find(x => x.id === predId)) {
+          graph += `  ${predId} --> ${t.id}\n`;
+          hasEdges = true;
+        }
+      });
+    }
+  });
+
+  // Only return the graph if dependencies exist (prevents showing a bunch of floating, unconnected boxes)
+  return hasEdges ? graph : null; 
+}
+  
   // ── SMART FORECAST ENGINE ──────────────────────────────────────
 function computeProjectPrediction(prod) {
   // Privacy gate: the forecast surfaces bottleneck TASK TITLES, so it must be
@@ -3187,6 +3243,24 @@ async function loadProjectDashboard(productId) {
           statCard('On track',  onTrack,        'var(--green)') +
           statCard('Needs action', delayed,     delayed > 0 ? 'var(--red)' : 'var(--green)') +
         '</div>' +
+        
+        // --- INJECT DEPENDENCY MAP ---
+        (function() {
+          const mapSyntax = generateDependencyMap(tasks, p);
+          if (!mapSyntax) return '';
+          return `
+            <div class="panel" style="margin-bottom:16px;">
+              <div class="panel-header">
+                <span class="panel-title">Dependency Map</span>
+                <span style="font-size:11px;color:var(--text-muted);">Visualizes critical paths and task relationships</span>
+              </div>
+              <div class="panel-body" style="overflow-x:auto; background:#FAFAF9; border-radius:8px;">
+                <div class="mermaid" style="text-align:center;">
+                  ${mapSyntax}
+                </div>
+              </div>
+            </div>`;
+        })() +
 
         ((isProject && canViewBudget(p) && (p.budget || p.spend)) ? buildPdBudget(p) : '') +
 
@@ -3206,6 +3280,14 @@ async function loadProjectDashboard(productId) {
     
     // Register the listener so it safely unmounts when you change pages
     registerListener('project_dash', unsub);
+    // Render the SVG flowcharts
+    setTimeout(() => {
+      if (window.mermaid) {
+        try {
+          mermaid.init(undefined, document.querySelectorAll('.mermaid'));
+        } catch(e) { console.warn('Mermaid render failed:', e); }
+      }
+    }, 100);
   } catch(e) {
     console.warn('loadProjectDashboard failed:', e);
     body.innerHTML = '<div class="loading-row muted" style="padding:24px;">Could not load this item.</div>';
