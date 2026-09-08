@@ -1340,9 +1340,20 @@ function generateId() {
 }
 
 /* ── DASHBOARD ── */
+/* ── DASHBOARD ── */
+window.adminViewMode = window.adminViewMode || 'org'; // Default state
+
 function renderDashboard(el) {
   loadPreferredName().then(() => {
     const name = currentPreferredName;
+    
+    // UX: The admin toggle switch
+    const adminToggle = currentRole === 'admin' ? `
+      <div style="display:flex;background:#F0F0EE;padding:4px;border-radius:8px;width:fit-content;margin-top:12px;">
+        <button id="view-mode-personal" onclick="setAdminViewMode('personal')" style="padding:6px 16px;border:none;border-radius:6px;font-size:12px;font-weight:600;font-family:Poppins,sans-serif;cursor:pointer; transition:all 0.2s; ${window.adminViewMode === 'personal' ? 'background:#fff;color:var(--text);box-shadow:0 1px 3px rgba(0,0,0,0.1);' : 'background:transparent;color:var(--text-muted);'}">My View</button>
+        <button id="view-mode-org" onclick="setAdminViewMode('org')" style="padding:6px 16px;border:none;border-radius:6px;font-size:12px;font-weight:600;font-family:Poppins,sans-serif;cursor:pointer; transition:all 0.2s; ${window.adminViewMode === 'org' ? 'background:#fff;color:var(--text);box-shadow:0 1px 3px rgba(0,0,0,0.1);' : 'background:transparent;color:var(--text-muted);'}">Org View</button>
+      </div>` : '';
+
     el.innerHTML =
       '<div class="view-header">' +
         '<div>' +
@@ -1352,6 +1363,7 @@ function renderDashboard(el) {
           '<p class="view-subtitle">' + (currentRole === 'admin'
             ? 'Team overview — all products and projects'
             : 'Your products and projects' + (currentUserDept ? ' — ' + currentUserDept : '')) + '</p>' +
+          adminToggle +
         '</div>' +
         '<button class="btn-primary" onclick="loadView(\'products\')">+ New</button>' +
       '</div>' +
@@ -1405,21 +1417,66 @@ function renderDashboard(el) {
   });
 }
 
+window.setAdminViewMode = (mode) => {
+  window.adminViewMode = mode;
+  // Visually swap the toggle buttons
+  const btnP = document.getElementById('view-mode-personal');
+  const btnO = document.getElementById('view-mode-org');
+  if (btnP && btnO) {
+    if (mode === 'personal') {
+      btnP.style.background = '#fff'; btnP.style.color = 'var(--text)'; btnP.style.boxShadow = '0 1px 3px rgba(0,0,0,0.1)';
+      btnO.style.background = 'transparent'; btnO.style.color = 'var(--text-muted)'; btnO.style.boxShadow = 'none';
+    } else {
+      btnO.style.background = '#fff'; btnO.style.color = 'var(--text)'; btnO.style.boxShadow = '0 1px 3px rgba(0,0,0,0.1)';
+      btnP.style.background = 'transparent'; btnP.style.color = 'var(--text-muted)'; btnP.style.boxShadow = 'none';
+    }
+  }
+  // Instantly re-render the dashboard without fetching from Firebase again
+  refreshDashboardUI();
+};
+
+function refreshDashboardUI() {
+  if (!window._dashRawProducts) return;
+  const products = window._dashRawProducts;
+  const userKey  = sanitiseEmail(currentUser.email);
+  
+  const list = Object.values(products).filter(p => {
+    if (p.status === 'archived') return false;
+    
+    // 1. Admin "Org View": Show absolutely everything
+    if (currentRole === 'admin' && window.adminViewMode === 'org') return true;
+    
+    // 2. "My View" (or standard Member view):
+    if (p.ownerId === userKey) return true;
+    if (p.sharedWith && p.sharedWith[userKey]) return true;
+    
+    // 3. Deep Task Inspection: Am I or my department assigned to any task here?
+    if (currentUserDept) {
+      const tasks = getProductTasks(p);
+      const isMyTask = tasks.some(t => {
+        const owners = (t.owners && t.owners.length) ? t.owners : [{ dept: t.ownerDept || '', email: t.ownerEmail || '' }];
+        return owners.some(o => 
+          (o.dept && o.dept.toLowerCase() === currentUserDept.toLowerCase()) ||
+          (o.email && o.email.toLowerCase() === (currentUser.email || '').toLowerCase())
+        );
+      });
+      if (isMyTask) return true;
+    }
+    
+    return false;
+  });
+  
+  _updateDashboardUI(list);
+}
+
 async function loadDashboardStats() {
   try {
-    // Real-time listener — auto-updates dashboard when any product changes
-    const userKey  = sanitiseEmail(currentUser.email);
+    // Real-time listener — stores raw data in memory and triggers the smart filter
     const unsub = onValue(ref(db, 'products'), snap => {
-      const products = snap.val() || {};
-      const list     = Object.values(products).filter(p => {
-        if (p.status === 'archived') return false;
-        if (currentRole === 'admin') return true;
-        if (p.ownerId === userKey) return true;
-        if (p.sharedWith?.[userKey]) return true;
-        return false;
-      });
-      _updateDashboardUI(list);
+      window._dashRawProducts = snap.val() || {};
+      refreshDashboardUI();
     }, { onlyOnce: false });
+    
     registerListener('dashboard', unsub);
   } catch(e) { console.warn('Stats load failed:', e); }
 }
