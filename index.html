@@ -2126,6 +2126,7 @@ function renderProducts(el) {
       <button class="pv-filter active" data-type="all"     onclick="setProductFilter('all',this)">All <span id="pvc-all" class="pv-count"></span></button>
       <button class="pv-filter"        data-type="product" onclick="setProductFilter('product',this)">Products <span id="pvc-product" class="pv-count"></span></button>
       <button class="pv-filter"        data-type="project" onclick="setProductFilter('project',this)">Projects <span id="pvc-project" class="pv-count"></span></button>
+      <button class="pv-filter"        data-type="archived" onclick="setProductFilter('archived',this)">Archived <span id="pvc-archived" class="pv-count"></span></button>
     </div>
     <div id="product-list-area"><div class="loading-row" style="padding:24px;">Loading...</div></div>
     <div id="create-product-modal" class="modal-overlay" style="display:none;">
@@ -2148,12 +2149,11 @@ window.setProductFilter = (type, btn) => {
   if (btn) btn.classList.add('active');
   const t = document.getElementById('pv-title');
   const sub = document.getElementById('pv-subtitle');
-  if (t) t.textContent = type === 'project' ? 'Projects' : type === 'product' ? 'Products' : 'Products & Projects';
-  if (sub) sub.textContent = type === 'project'
-    ? 'Internal projects and workstreams — active, completed, and archived'
-    : type === 'product'
-      ? 'Product launches — active, completed, and archived'
-      : 'Everything you track — active, completed, and archived';
+  if (t) t.textContent = type === 'project' ? 'Projects' : type === 'product' ? 'Products' : type === 'archived' ? 'Archived Items' : 'Products & Projects';
+  if (sub) sub.textContent = type === 'project' ? 'Internal projects and workstreams' 
+    : type === 'product' ? 'Active product launches' 
+    : type === 'archived' ? 'Historical items hidden from active tracking'
+    : 'Everything you track';
   loadProductList();
 };
 
@@ -2170,7 +2170,14 @@ async function loadProductList() {
     // "admin sees everything" with no mode check. Never re-inline this logic;
     // if access needs to change, change canUserSeeProduct and nothing else.
     const visible  = Object.values(products)
-      .filter(p => p.status !== 'archived' && canUserSeeProduct(p, userKey))
+      .filter(p => {
+        // Enforce Archive toggle
+        if (_productFilter === 'archived' && p.status !== 'archived') return false;
+        if (_productFilter !== 'archived' && p.status === 'archived') return false;
+        
+        // Enforce Visibility Rules
+        return canUserSeeProduct(p, userKey);
+      })
       .sort((a,b) => b.createdAt - a.createdAt);
 
     // Live counts on the filter tabs, computed BEFORE the type filter applies
@@ -2178,6 +2185,7 @@ async function loadProductList() {
     const nProject = visible.filter(p => (p.itemType || 'product') === 'project').length;
     const setCount = (id, n) => { const e = document.getElementById(id); if (e) e.textContent = n; };
     setCount('pvc-all', visible.length); setCount('pvc-product', nProduct); setCount('pvc-project', nProject);
+    setCount('pvc-archived', Object.values(products).filter(p => p.status === 'archived' && canUserSeeProduct(p, userKey)).length);
 
     const list = _productFilter === 'all'
       ? visible
@@ -4357,6 +4365,10 @@ function buildEditProductForm(p) {
         <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-right:4px;vertical-align:middle;"><path d="M17 1l4 4-4 4"/><path d="M3 11V9a4 4 0 014-4h14M7 23l-4-4 4-4"/><path d="M21 13v2a4 4 0 01-4 4H3"/></svg>
         ${convertLabel}
       </button>
+      
+      ${canEdit(p) && p.status !== 'archived' ? `<button class="btn-outline" style="color:var(--amber);border-color:var(--amber);margin-right:auto;" onclick="archiveProduct('${p.id}')">Archive</button>` : ''}
+      ${isSuperAdmin ? `<button class="btn-outline" style="color:var(--red);border-color:var(--red);margin-right:auto;" onclick="saDeleteProject('${p.id}', '${p.name.replace(/'/g, "\\'")}')">Wipe</button>` : ''}
+      
       <button class="btn-outline" onclick="closeProductModal()">Cancel</button>
       <button class="btn-primary" onclick="saveProduct('${p.id}')">Save changes</button>
     </div>`;
@@ -10467,7 +10479,67 @@ window.exportMermaidMap = (productId, format) => {
     img.src = url;
   }
 };
+/* ══ ARCHIVE & SUPER ADMIN TOTAL WIPE ════════════════════════ */
 
+window.archiveProduct = async (productId) => {
+  if (!confirm('Archive this item?\n\nIt will be hidden from your active dashboard and trackers, but you can always view or restore it from the "Archived" tab.')) return;
+  
+  try {
+    await set(ref(db, 'products/' + productId + '/status'), 'archived');
+    showToast('Item archived', 'success');
+    closeProductModal();
+    loadProductList();
+    if (typeof loadDashboardStats === 'function') loadDashboardStats();
+  } catch (e) {
+    showToast('Failed to archive: ' + e.message, 'error');
+  }
+};
+
+window.saDeleteProject = async (productId, productName) => {
+  if (!confirm(`EXTREME DANGER: You are about to permanently delete the entire "${productName}" project.\n\nThis will instantly wipe the product, all its tasks, all comments, and all email logs from the database.\n\nThis CANNOT be undone.\n\nAre you absolutely sure?`)) return;
+  
+  showToast('Wiping project data...', 'info');
+  try {
+    // Multi-path wipe to prevent ghost data corruption
+    await set(ref(db, 'products/' + productId), null);
+    await set(ref(db, 'emailLog/' + productId), null);
+    await set(ref(db, 'comments/' + productId), null);
+    await set(ref(db, 'config/projectSheets/' + productId), null);
+
+    showToast('Project permanently deleted', 'success');
+    
+    // Check if we are in the circuit box or regular view, and refresh accordingly
+    if (currentView === 'superadmin') {
+       const activeTab = document.querySelector('.sa-tab.active');
+       if (typeof switchSATab === 'function' && activeTab) switchSATab('products', activeTab);
+    } else {
+       closeProductModal();
+       loadProductList();
+    }
+  } catch(e) {
+    showToast('Wipe failed: ' + e.message, 'error');
+  }
+};
+
+window.saDeleteTask = async (productId, taskId) => {
+  if (!confirm("SUPER ADMIN OVERRIDE: Are you absolutely sure you want to permanently delete this task across the entire system?")) return;
+  try {
+    const prod = productListCache[productId] || (window._dashRawProducts ? window._dashRawProducts[productId] : null);
+    const isNewFormat = !!prod?.tasks?.[taskId];
+    const path = isNewFormat ? 'tasks/' + taskId : 'pillars/' + taskId;
+    
+    await set(ref(db, 'products/' + productId + '/' + path), null);
+    showToast("Task permanently deleted", "success");
+    
+    // FIX: Force the Circuit Box to re-render the list so the row actually disappears
+    const activeTab = document.querySelector('.sa-tab.active');
+    if (typeof switchSATab === 'function' && activeTab) {
+       switchSATab('tasks', activeTab);
+    }
+  } catch(e) {
+    showToast("Delete failed: " + e.message, "error");
+  }
+};
 // Register all real functions with the global dispatcher
 window.__npd_init({
   handleSignIn,
