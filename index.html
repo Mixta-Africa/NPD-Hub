@@ -9965,7 +9965,6 @@ Write 2-3 paragraphs:
 
 Tone: professional, highly collaborative, and warm. Address them by department, not by name. NEVER use harsh directives or commanding language like "Deliver the following by the indicated dates". Instead, use supportive, team-oriented phrasing such as "We kindly request your team's support with...", "Please help us achieve these milestones by...", and "We look forward to collaborating with you."`;
 }
-
 function buildReminderPrompt(prod, task, daysOverdue) {
   const severity = daysOverdue >= 21 ? 'escalation'
                  : daysOverdue >= 7  ? 'firm'
