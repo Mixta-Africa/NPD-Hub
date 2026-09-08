@@ -6335,6 +6335,23 @@ window.updatePillarStatus = async (productId, taskId, newStatus) => {
         return;
       }
     }
+
+    // --- NEW: UNBLOCK DETECTOR ---
+    // Scan for tasks that were waiting on this one, have no date, and are now fully unblocked
+    let newlyUnblocked = [];
+    if (newStatus === 'complete') {
+      tasks.forEach(t => {
+        if (t.predecessors && t.predecessors.includes(taskId) && !t.deadline && t.status !== 'complete') {
+          const allOthersDone = t.predecessors.every(pid => {
+            if (pid === taskId) return true; // The one we are completing right now
+            const dep = tasks.find(x => x.id === pid);
+            return dep && (dep.status === 'complete' || dep.taskStatus === 'complete');
+          });
+          if (allOthersDone) newlyUnblocked.push(t);
+        }
+      });
+    }
+
     // Support both old pillars format and new tasks format
     if (prod?.tasks?.[taskId]) {
       await set(ref(db, `products/${productId}/tasks/${taskId}/status`), newStatus);
@@ -6344,21 +6361,17 @@ window.updatePillarStatus = async (productId, taskId, newStatus) => {
       await set(ref(db, `products/${productId}/pillars/${taskId}/taskStatus`), newStatus);
       if (prod?.pillars?.[taskId]) prod.pillars[taskId].taskStatus = newStatus;
     }
+    
     // Check if product should now be locked
     await checkAndLockProduct(productId);
 
-    // ── PROPAGATE: sync the status change into every cache so all
-    //    views (dashboard, calendar, products, tracker, docs) stay in lockstep ──
+    // ── PROPAGATE: sync the status change into every cache so all views stay in lockstep ──
     propagateStatusChange(productId, taskId, newStatus);
-
-    // Re-render whichever view is currently active
     refreshActiveView(productId);
     
     // Re-render the open modal if it is active
     const modalBody = document.getElementById('product-detail-body');
-    if (modalBody) {
-      modalBody.innerHTML = buildPillarDetail(prod);
-    }
+    if (modalBody) modalBody.innerHTML = buildPillarDetail(prod);
 
     // Log to activity feed
     const taskObj  = tasks.find(t => t.id === taskId);
@@ -6374,51 +6387,53 @@ window.updatePillarStatus = async (productId, taskId, newStatus) => {
     }
 
     showToast('Status updated.', 'success');
+
+    // --- LAUNCH UNBLOCK MODAL ---
+    if (newlyUnblocked.length > 0) {
+      setTimeout(() => showUnblockedModal(productId, newlyUnblocked), 400);
+    }
+
   } catch(e) { showToast('Update failed: ' + e.message, 'error'); }
 
-/* ── CROSS-VIEW STATUS PROPAGATION ────────────────────────────
-   Writes the new status into every in-memory product cache so a
-   change made in one view is instantly reflected everywhere. ── */
-function propagateStatusChange(productId, taskId, newStatus) {
-  const caches = [
-    typeof productListCache    !== 'undefined' ? productListCache    : null,
-    typeof trackerProductsCache !== 'undefined' ? trackerProductsCache : null,
-    typeof calProductsCache    !== 'undefined' ? calProductsCache    : null,
-    typeof docsProductsCache   !== 'undefined' ? docsProductsCache   : null,
-  ].filter(Boolean);
+  /* ── CROSS-VIEW STATUS PROPAGATION ──────────────────────────── */
+  function propagateStatusChange(productId, taskId, newStatus) {
+    const caches = [
+      typeof productListCache    !== 'undefined' ? productListCache    : null,
+      typeof trackerProductsCache !== 'undefined' ? trackerProductsCache : null,
+      typeof calProductsCache    !== 'undefined' ? calProductsCache    : null,
+      typeof docsProductsCache   !== 'undefined' ? docsProductsCache   : null,
+    ].filter(Boolean);
 
-  caches.forEach(cache => {
-    const p = cache[productId];
-    if (!p) return;
-    if (p.tasks && p.tasks[taskId])        p.tasks[taskId].status     = newStatus;
-    else if (p.pillars && p.pillars[taskId]) p.pillars[taskId].taskStatus = newStatus;
-  });
-}
-
-/* Re-render whatever view the user is currently looking at, using fresh cache data. */
-function refreshActiveView(productId) {
-  switch (currentView) {
-    case 'tracker': {
-      const p = trackerProductsCache[productId];
-      if (!p) break;
-      if (trackerViewMode === 'kanban')      renderKanban(p);
-      else if (trackerViewMode === 'gantt')  renderTrackerGantt(p);
-      else                                    renderTrackerTable(p, null);
-      break;
-    }
-    case 'calendar':
-      if (calViewMode === 'gantt') drawGantt();
-      else { drawCalendar(); drawMilestoneList(); }
-      break;
-    case 'dashboard':
-      if (typeof loadDashboardStats === 'function') loadDashboardStats();
-      break;
-    case 'products':
-      // Re-render products list from refreshed data
-      if (typeof loadProductList === 'function') loadProductList();
-      break;
+    caches.forEach(cache => {
+      const p = cache[productId];
+      if (!p) return;
+      if (p.tasks && p.tasks[taskId])        p.tasks[taskId].status     = newStatus;
+      else if (p.pillars && p.pillars[taskId]) p.pillars[taskId].taskStatus = newStatus;
+    });
   }
-}
+
+  function refreshActiveView(productId) {
+    switch (currentView) {
+      case 'tracker': {
+        const p = trackerProductsCache[productId];
+        if (!p) break;
+        if (trackerViewMode === 'kanban')      renderKanban(p);
+        else if (trackerViewMode === 'gantt')  renderTrackerGantt(p);
+        else                                    renderTrackerTable(p, null);
+        break;
+      }
+      case 'calendar':
+        if (calViewMode === 'gantt') drawGantt();
+        else { drawCalendar(); drawMilestoneList(); }
+        break;
+      case 'dashboard':
+        if (typeof loadDashboardStats === 'function') loadDashboardStats();
+        break;
+      case 'products':
+        if (typeof loadProductList === 'function') loadProductList();
+        break;
+    }
+  }
 };
 
 window.updatePillarNotes = async (productId, taskId, notes) => {
@@ -10439,6 +10454,88 @@ window.copyGCCOLink = () => {
   if (!input) return;
   input.select();
   navigator.clipboard.writeText(input.value).then(() => showToast('Link copied to clipboard', 'success'));
+};
+  /* ══ UNBLOCK & SCHEDULE ENGINE ════════════════════════════════ */
+window.showUnblockedModal = (productId, unblockedTasks) => {
+  let modal = document.getElementById('unblocked-modal');
+  if (!modal) {
+    modal = document.createElement('div');
+    modal.id = 'unblocked-modal';
+    modal.className = 'modal-overlay';
+    modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.6);display:flex;align-items:center;justify-content:center;z-index:9999;padding:20px;';
+    document.body.appendChild(modal);
+  }
+  
+  const rows = unblockedTasks.map(t => `
+    <div style="margin-bottom:12px;background:#FAFAF9;padding:12px;border:1px solid var(--border);border-radius:8px;">
+      <label style="font-size:12px;font-weight:600;display:block;margin-bottom:6px;color:var(--text);">${t.title || t.name}</label>
+      <input type="date" id="ub-date-${t.id}" class="input-field" style="width:100%;border-color:#16A34A;" />
+    </div>
+  `).join('');
+
+  modal.innerHTML = `
+    <div style="background:#fff;border-radius:12px;width:100%;max-width:420px;overflow:hidden;box-shadow:0 10px 40px rgba(0,0,0,0.2);">
+      <div style="background:#16A34A;padding:20px 24px;">
+        <div style="color:white;font-size:18px;font-weight:700;display:flex;align-items:center;gap:8px;">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 007.54.54l3-3a5 5 0 00-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 00-7.54-.54l-3 3a5 5 0 007.07 7.07l1.71-1.71"/></svg>
+          Deliverables Unblocked!
+        </div>
+      </div>
+      <div style="padding:24px;">
+        <p style="font-size:13px;color:#6B7280;margin-bottom:20px;line-height:1.6;">
+          You just cleared a bottleneck. The following tasks are now fully unblocked and ready to be scheduled.
+        </p>
+        <div style="max-height:300px;overflow-y:auto;padding-right:4px;">
+          ${rows}
+        </div>
+        <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:24px;">
+          <button class="btn-outline" onclick="document.getElementById('unblocked-modal').style.display='none'">Skip for now</button>
+          <button class="btn-primary" style="background:#16A34A;border-color:#16A34A;" onclick="saveUnblockedDates('${productId}', '${unblockedTasks.map(t=>t.id).join(',')}')">Save deadlines</button>
+        </div>
+      </div>
+    </div>`;
+  modal.style.display = 'flex';
+};
+
+window.saveUnblockedDates = async (productId, taskIdsStr) => {
+  const btn = document.querySelector('#unblocked-modal .btn-primary');
+  if (btn) { btn.disabled = true; btn.textContent = 'Saving...'; }
+  
+  const taskIds = taskIdsStr.split(',');
+  const prod = productListCache[productId] || trackerProductsCache[productId];
+  if (!prod) return;
+
+  let updatesCount = 0;
+  for (const tId of taskIds) {
+    const input = document.getElementById('ub-date-' + tId);
+    if (input && input.value) {
+      const newDate = input.value;
+      const isNewFormat = !!prod.tasks?.[tId];
+      const path = isNewFormat ? `tasks/${tId}` : `pillars/${tId}`;
+      
+      await set(ref(db, `products/${productId}/${path}/deadline`), newDate);
+      
+      if (isNewFormat) prod.tasks[tId].deadline = newDate;
+      else prod.pillars[tId].deadline = newDate;
+
+      const taskTitle = isNewFormat ? prod.tasks[tId].title : prod.pillars[tId].name;
+      await logActivity(productId, 'date_change', `Scheduled newly unblocked task: ${taskTitle}`, `Set to: ${formatDate(newDate)}`);
+      updatesCount++;
+    }
+  }
+
+  document.getElementById('unblocked-modal').style.display = 'none';
+  if (updatesCount > 0) {
+    showToast(`${updatesCount} deadline(s) scheduled.`, 'success');
+    
+    // Refresh the UI to show the new dates instantly
+    const container = document.getElementById('product-detail-body');
+    if (container) container.innerHTML = buildPillarDetail(prod);
+    
+    if (currentView === 'tracker') {
+      if (typeof renderTrackerTable === 'function') renderTrackerTable(prod, null);
+    }
+  }
 };
 /* ══ MAP EXPORT ══════════════════════════════════════════════ */
 window.exportMermaidMap = (productId, format) => {
