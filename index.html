@@ -25,7 +25,15 @@
   // Initialize Mermaid safely
   document.addEventListener('DOMContentLoaded', () => {
     if (window.mermaid) {
-      mermaid.initialize({ startOnLoad: false, securityLevel: 'loose', theme: 'base' });
+      mermaid.initialize({
+        startOnLoad: false,
+        securityLevel: 'loose',
+        theme: 'base',
+        // htmlLabels is required for the multi-line nodes (task / owner / date).
+        // Without it Mermaid renders the markup literally.
+        flowchart: { htmlLabels: true, curve: 'basis', nodeSpacing: 45, rankSpacing: 70 },
+        themeVariables: { fontFamily: 'Poppins, sans-serif', fontSize: '13px' }
+      });
     }
   });
 </script>
@@ -1124,47 +1132,113 @@ async function callGAS(action, payload) {
   
 // ── DEPENDENCY MAP GENERATOR ───────────────────────────────────
 function generateDependencyMap(tasks, prod) {
-  let graph = "flowchart LR\n"; // Use modern flowchart mapping
+  // Mermaid node IDs must be alphanumeric — raw task ids can contain
+  // characters that silently break the parse, so map them to safe handles.
+  const nid = {};
+  tasks.forEach((t, i) => { nid[t.id] = 'N' + i; });
+
+  // Sequence = longest predecessor chain. Cycle-guarded so a circular
+  // dependency degrades to stage 1 instead of hanging the render.
+  const byId = {}; tasks.forEach(t => { byId[t.id] = t; });
+  const depth = {};
+  const chain = (id, seen) => {
+    if (depth[id] !== undefined) return depth[id];
+    if (seen.has(id)) return 0;
+    seen.add(id);
+    let d = 0;
+    (byId[id]?.predecessors || []).forEach(p => {
+      if (byId[p]) d = Math.max(d, chain(p, seen) + 1);
+    });
+    seen.delete(id);
+    return (depth[id] = d);
+  };
+  tasks.forEach(t => chain(t.id, new Set()));
+  const maxDepth = tasks.reduce((m, t) => Math.max(m, depth[t.id] || 0), 0);
+
+  const clean = str => String(str || '')
+    .replace(/["'|{}\[\]()><;`#\n\r]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  const ownerOf = t => {
+    const owners = (t.owners && t.owners.length) ? t.owners
+      : (t.owner ? [{ dept: t.ownerDept || '', email: t.ownerEmail || '', nameCache: t.owner }] : []);
+    if (!owners.length) return 'Unassigned';
+    const names = owners.map(o => {
+      if (typeof ownerLabel === 'function') return ownerLabel(o);
+      return o.nameCache || o.dept || o.email || '';
+    }).filter(Boolean);
+    return names.length ? names.join(' + ') : 'Unassigned';
+  };
+
+  let graph = 'flowchart LR\n';
   let hasEdges = false;
 
-  tasks.forEach(t => {
-    const eff = resolveTaskStatus(t, prod);
-    
-    let stroke = '#16A34A', fill = '#F0FDF4'; 
-    if (eff === 'complete') { stroke = '#2563EB'; fill = '#EFF6FF'; }
-    else if (eff === 'delayed' || eff === 'overdue') { stroke = '#C0282D'; fill = '#FEF2F2'; }
-    else if (eff === 'due-soon') { stroke = '#D97706'; fill = '#FFFBEB'; }
-    else if (eff === 'blocked') { stroke = '#D97706'; fill = '#FFFBEB'; }
-
-    // Clean title and wrap in markdown quotes for bold, crisp text
-    let safeTitle = String(t.title || 'Untitled').replace(/["'|{}\[\]()><;\n\r]/g, '').trim();
-    if (safeTitle.length > 35) safeTitle = safeTitle.substring(0, 35) + '...';
-    
-    const nodeDef = eff === 'blocked' ? `>"\`**${safeTitle}**\`"]` : `("\`**${safeTitle}**\`")`;
-    graph += `  ${t.id}${nodeDef}\n`;
-    
-    graph += `  style ${t.id} fill:${fill},stroke:${stroke},stroke-width:2px,color:#1A1A1A\n`;
-    if (eff === 'blocked') {
-      graph += `  style ${t.id} stroke-dasharray: 5 5\n`; 
-    }
-
-    if (t.predecessors && t.predecessors.length > 0) {
-      t.predecessors.forEach(predId => {
-        if (tasks.find(x => x.id === predId)) {
-          // Draw bold directional arrows
-          graph += `  ${predId} -->|Blocks| ${t.id}\n`;
-          hasEdges = true;
-        }
-      });
-    }
-  });
-
-  // Global styling for the dependency connector lines
-  if (hasEdges) {
-     graph += `  linkStyle default stroke:#9CA3AF,stroke-width:2px,fill:none\n`;
+  // One subgraph per stage — this is what makes ORDER readable at a glance
+  for (let d = 0; d <= maxDepth; d++) {
+    const stage = tasks.filter(t => (depth[t.id] || 0) === d);
+    if (!stage.length) continue;
+    const label = d === 0 ? 'STAGE 1 - Can start now' : 'STAGE ' + (d + 1) + ' - After stage ' + d;
+    graph += '  subgraph S' + d + '["' + label + '"]\n';
+    graph += '    direction TB\n';
+    stage.forEach(t => {
+      let title = clean(t.title || 'Untitled');
+      if (title.length > 30) title = title.substring(0, 30) + '...';
+      const owner = clean(ownerOf(t)).substring(0, 22);
+      const due = t.deadline
+        ? new Date(t.deadline).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })
+        : 'no date';
+      // Three lines per node: what, who, when — the PM's actual question
+      graph += '    ' + nid[t.id] + '["' + title + '<br/><small>' + owner + '</small><br/><small>' + due + '</small>"]\n';
+    });
+    graph += '  end\n';
   }
 
-  return hasEdges ? graph : null; 
+  // Edges, labelled with what the downstream task is waiting for
+  tasks.forEach(t => {
+    (t.predecessors || []).forEach(pid => {
+      if (!byId[pid]) return;
+      const eff = typeof resolveTaskStatus === 'function' ? resolveTaskStatus(byId[pid], prod) : '';
+      const done = eff === 'complete';
+      // Solid arrow = predecessor finished, path is clear.
+      // Dotted arrow = still waiting, this is what is holding things up.
+      graph += done
+        ? '  ' + nid[pid] + ' ==>|cleared| ' + nid[t.id] + '\n'
+        : '  ' + nid[pid] + ' -.->|waiting on| ' + nid[t.id] + '\n';
+      hasEdges = true;
+    });
+  });
+
+  // Status colouring
+  tasks.forEach(t => {
+    const eff = typeof resolveTaskStatus === 'function' ? resolveTaskStatus(t, prod) : 'on-track';
+    let stroke = '#16A34A', fill = '#F0FDF4';
+    if (eff === 'complete')                        { stroke = '#2563EB'; fill = '#EFF6FF'; }
+    else if (eff === 'delayed' || eff === 'overdue'){ stroke = '#C0282D'; fill = '#FEF2F2'; }
+    else if (eff === 'due-soon' || eff === 'blocked'){ stroke = '#D97706'; fill = '#FFFBEB'; }
+    graph += '  style ' + nid[t.id] + ' fill:' + fill + ',stroke:' + stroke +
+             ',stroke-width:2px,color:#1A1A1A\n';
+    if (eff === 'blocked') graph += '  style ' + nid[t.id] + ' stroke-dasharray: 5 5\n';
+  });
+
+  // Critical path: the longest waiting chain ending at the latest stage.
+  // This is the sequence that actually determines the finish date.
+  const tail = tasks.filter(t => (depth[t.id] || 0) === maxDepth);
+  const critical = [];
+  if (maxDepth > 0 && tail.length) {
+    let cur = tail.sort((a, b) =>
+      new Date(b.deadline || 0) - new Date(a.deadline || 0))[0];
+    while (cur) {
+      critical.push(cur.id);
+      const preds = (cur.predecessors || []).map(p => byId[p]).filter(Boolean);
+      cur = preds.sort((a, b) => (depth[b.id] || 0) - (depth[a.id] || 0))[0];
+    }
+  }
+  if (!hasEdges && tasks.length > 0) {
+    graph += '  NOTE["No dependencies set yet<br/><small>Add a Depends on value to a task</small>"]\n';
+    graph += '  style NOTE fill:#F8F8F7,stroke:#D1D5DB,stroke-width:1px,color:#6B7280\n';
+  }
+  return graph;
 }
   
   // ── SMART FORECAST ENGINE ──────────────────────────────────────
@@ -1525,7 +1599,7 @@ function _updateDashboardUI(list) {
     const slipped = list.filter(p => p.baselineLaunchDate && p.baselineLaunchDate !== p.launchDate &&
       new Date(p.launchDate) > new Date(p.baselineLaunchDate));
     const atRiskCount = list.filter(p => {
-      const tasks  = getProductTasks(p);
+      const tasks  = getProductTasks(p).filter(t => canViewTask(t, p));
       const issues = tasks.filter(t => {
         const eff = resolveTaskStatus(t);
         return eff === 'overdue' || eff === 'delayed';
@@ -1565,7 +1639,7 @@ function _updateDashboardUI(list) {
     } else {
       const sorted = list.sort((a,b) => b.createdAt - a.createdAt).slice(0, 4);
       recentEl.innerHTML = sorted.map(p => {
-        const tasks    = getProductTasks(p);
+        const tasks    = getProductTasks(p).filter(t => canViewTask(t, p));
         const total    = tasks.length;
         const done     = tasks.filter(t => t.status === 'complete').length;
         const overdueT = tasks.filter(t => resolveTaskStatus(t) === 'overdue').length;
@@ -3312,9 +3386,16 @@ async function loadProjectDashboard(productId) {
           <div class="panel" style="margin-bottom:16px;">
             <div class="panel-header">
               <span class="panel-title">Dependency Map</span>
-              <span style="font-size:11px;color:var(--text-muted);">Visualizes critical paths and task relationships</span>
+              <span style="font-size:11px;color:var(--text-muted);">Sequence, owners and what is blocking what</span>
             </div>
-            <div class="panel-body" style="overflow:auto; max-height:280px; background:#FAFAF9; border-radius:8px;">
+            <div style="padding:10px 18px 0;display:flex;gap:16px;flex-wrap:wrap;font-size:10px;color:var(--text-muted);">
+              <span><span style="display:inline-block;width:9px;height:9px;border-radius:2px;background:#F0FDF4;border:1.5px solid #16A34A;margin-right:4px;vertical-align:-1px;"></span>On track</span>
+              <span><span style="display:inline-block;width:9px;height:9px;border-radius:2px;background:#FFFBEB;border:1.5px solid #D97706;margin-right:4px;vertical-align:-1px;"></span>Due soon / blocked</span>
+              <span><span style="display:inline-block;width:9px;height:9px;border-radius:2px;background:#FEF2F2;border:1.5px solid #C0282D;margin-right:4px;vertical-align:-1px;"></span>Overdue / delayed</span>
+              <span><span style="display:inline-block;width:9px;height:9px;border-radius:2px;background:#EFF6FF;border:1.5px solid #2563EB;margin-right:4px;vertical-align:-1px;"></span>Complete</span>
+              <span style="border-left:1px solid var(--border);padding-left:14px;"><strong>&#8658;</strong> cleared &nbsp; <strong>&#8594;</strong> waiting on</span>
+            </div>
+            <div class="panel-body" style="overflow:auto; max-height:420px; background:#FAFAF9; border-radius:8px;">
               <div id="mermaid-container-${p.id}" style="text-align:center; padding:24px; font-size:12px; color:var(--text-muted);">
                 <span class="spinner-sm"></span> Drawing map...
               </div>
@@ -3561,10 +3642,25 @@ function showSheetSyncResult(name, res) {
 }
 
 function canUserSeeProduct(p, userKey) {
-  // 1. If admin AND they want the full Org View, show everything
+  // 1. Admin in Org View sees everything
   if (currentRole === 'admin' && window.adminViewMode !== 'personal') return true;
-  
-  // 2. Otherwise, enforce strict personal/department gating ("My View")
+
+  // 2. ADMIN IN "MY VIEW" — strict personal ringfence.
+  // Deliberately narrower than the member path: no sharedWith, no department
+  // inference. If your own department merely holds a task on someone else's
+  // project, that project is NOT yours and must not appear here. This is the
+  // clause that was leaking other owners' work into a personal view.
+  if (currentRole === 'admin' && window.adminViewMode === 'personal') {
+    if (p.ownerId === userKey) return true;
+    const myEmail = (currentUser?.email || '').toLowerCase();
+    return getProductTasks(p).some(t => {
+      const owners = (t.owners && t.owners.length) ? t.owners
+        : [{ dept: t.ownerDept || '', email: t.ownerEmail || '' }];
+      return owners.some(o => o.email && o.email.toLowerCase() === myEmail);
+    });
+  }
+
+  // 3. Member path — owned, shared, or my department is assigned
   if (p.ownerId === userKey) return true;
   if (p.sharedWith?.[userKey]) return true;
   
@@ -4901,7 +4997,7 @@ function buildProductDetail(p, tab) {
 }
 
 function buildDescriptionTab(p) {
-  const tasks2   = getProductTasks(p);
+  const tasks2   = getProductTasks(p).filter(t => canViewTask(t, p));
   const complete2 = tasks2.filter(t => t.status === 'complete').length;
   const pct2      = Math.round((complete2 / (tasks2.length || 1)) * 100);
   const driveLink = p.driveUrl
@@ -5836,8 +5932,8 @@ function getCalMilestones() {
   const filtered = calSelectedProduct === 'all' ? prods : prods.filter(p => p.id === calSelectedProduct);
   const out = [];
   filtered.forEach(prod => {
-    // Use unified task system — handles new tasks{} and legacy pillars{}
-    const tasks = getProductTasks(prod);
+    // Privacy-gated: the calendar renders task titles on every day cell
+    const tasks = getProductTasks(prod).filter(t => canViewTask(t, prod));
     tasks.forEach(task => {
       if (!task.deadline) return;
       const effective = resolveTaskStatus(task);
@@ -9314,28 +9410,30 @@ async function renderSAAllTasks(el) {
     const snap = await get(ref(db, 'products'));
     const products = snap.val() || {};
     
-    // Group all tasks globally by their Owner
+    // Group by the person who OWNS THE PROJECT, not by task assignee.
+    // The question this pane answers is "what is each project owner
+    // accountable for", so every task on a project rolls up to that
+    // project's owner regardless of who is doing the individual work.
     const ownerMap = {};
-    
+
     Object.values(products).forEach(prod => {
       if (prod.status === 'archived') return;
-      const tasks = getProductTasks(prod);
-      
-      tasks.forEach(t => {
-        const owners = (t.owners && t.owners.length > 0) ? t.owners : 
-                       (t.owner ? [{ dept: t.ownerDept || '', email: t.ownerEmail || '', nameCache: t.owner }] : []);
-        
-        if (owners.length === 0) {
-          if (!ownerMap['Unassigned']) ownerMap['Unassigned'] = [];
-          ownerMap['Unassigned'].push({ prod, task: t });
-          return;
-        }
+      const key = prod.ownerName || prod.createdBy || prod.ownerId || 'Unassigned';
+      if (!ownerMap[key]) ownerMap[key] = [];
 
-        owners.forEach(o => {
-          const key = o.nameCache || o.dept || o.email || 'Unassigned';
-          if (!ownerMap[key]) ownerMap[key] = [];
-          ownerMap[key].push({ prod, task: t, isDept: !!o.dept && !o.email });
-        });
+      const tasks = getProductTasks(prod);
+      if (tasks.length === 0) {
+        // Still surface the project so an owner with no tasks isn't invisible
+        ownerMap[key].push({ prod, task: null, emptyProject: true });
+        return;
+      }
+      tasks.forEach(t => {
+        const assignees = (t.owners && t.owners.length > 0) ? t.owners
+          : (t.owner ? [{ dept: t.ownerDept || '', email: t.ownerEmail || '', nameCache: t.owner }] : []);
+        const assignedTo = assignees.length
+          ? assignees.map(o => o.nameCache || o.dept || o.email).filter(Boolean).join(', ')
+          : 'Unassigned';
+        ownerMap[key].push({ prod, task: t, assignedTo });
       });
     });
 
@@ -9348,7 +9446,7 @@ async function renderSAAllTasks(el) {
 
     let html = `
       <div style="margin-bottom:16px;display:flex;justify-content:space-between;align-items:center;">
-        <div style="font-size:12px;color:var(--text-muted);">Global task distribution by assigned owner. Click a name to expand their tasks.</div>
+        <div style="font-size:12px;color:var(--text-muted);">Everything grouped by the person who owns each project. Click a name to see their projects and every task inside them.</div>
       </div>
       <div style="display:flex;flex-direction:column;gap:12px;">
     `;
@@ -9360,13 +9458,25 @@ async function renderSAAllTasks(el) {
       
       // Task rows (hidden by default)
       const taskRows = items.map(i => {
+        // A project with no tasks yet still needs a row, otherwise its owner
+        // looks like they have nothing in flight.
+        if (!i.task) {
+          return `
+          <div style="display:flex;align-items:center;gap:10px;padding:8px 16px;border-top:1px solid #F3F3F2;">
+            <div style="flex:1;min-width:0;">
+              <div style="font-size:12px;font-weight:600;color:var(--text-muted);font-style:italic;">No tasks created yet</div>
+              <div style="font-size:10px;color:var(--text-muted);">${i.prod.name}</div>
+            </div>
+            <span style="font-size:9px;font-weight:700;color:#9CA3AF;background:#F3F4F6;padding:2px 7px;border-radius:8px;">EMPTY</span>
+          </div>`;
+        }
         const eff = resolveTaskStatus(i.task, i.prod);
         const m = STATUS_META[eff] || STATUS_META['on-track'];
         return `
           <div style="display:flex;align-items:center;gap:10px;padding:8px 16px;border-top:1px solid #F3F3F2;">
             <div style="flex:1;min-width:0;">
               <div style="font-size:12px;font-weight:600;color:var(--text);">${i.task.title || 'Untitled'}</div>
-              <div style="font-size:10px;color:var(--text-muted);">${i.prod.name}</div>
+              <div style="font-size:10px;color:var(--text-muted);">${i.prod.name} &nbsp;·&nbsp; <span style="color:#6B7280;">assigned to ${i.assignedTo || 'Unassigned'}</span></div>
             </div>
             <span style="font-size:11px;color:${m.color};">${i.task.deadline ? formatDate(i.task.deadline) : 'No date'}</span>
             <span style="font-size:9px;font-weight:700;color:${m.color};background:${m.color}15;padding:2px 7px;border-radius:8px;">${m.label.toUpperCase()}</span>
@@ -9383,7 +9493,14 @@ async function renderSAAllTasks(el) {
             </div>
             <div style="flex:1;">
               <div style="font-size:14px;font-weight:700;color:var(--text);">${ownerName}</div>
-              <div style="font-size:11px;color:var(--text-muted);">${items.length} total tasks</div>
+              <div style="font-size:11px;color:var(--text-muted);">${
+                (() => {
+                  const projects = [...new Set(items.map(i => i.prod.id))].length;
+                  const realTasks = items.filter(i => i.task).length;
+                  return projects + ' project' + (projects !== 1 ? 's' : '') +
+                         ' · ' + realTasks + ' task' + (realTasks !== 1 ? 's' : '');
+                })()
+              }</div>
             </div>
             <div style="display:flex;gap:12px;text-align:right;">
               <div>
