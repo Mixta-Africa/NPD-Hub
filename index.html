@@ -2891,36 +2891,43 @@ function taskOwnerList(task) {
 }
 
 function canViewTask(task, prod) {
-  if (currentRole === 'admin' || isSuperAdmin) return true;
   if (!currentUser) return false;
-
-  const vis     = getTaskVisibility(task);
+  
   const userKey = sanitiseEmail(currentUser.email);
   const myEmail = (currentUser.email || '').toLowerCase();
   const myDept  = (currentUserDept || '').toLowerCase();
 
-  if (prod && prod.ownerId === userKey) return true;   // product owner always sees their own board
-
+  // 1. Check if the user is explicitly assigned to this task
   const owners = taskOwnerList(task);
-
-  // Am I an owner of this task — by email, or as a member of an owning department?
   const isTaskOwner = owners.some(o => {
     if (o.email && o.email.toLowerCase() === myEmail) return true;
     if (o.dept && myDept && o.dept.toLowerCase() === myDept) return true;
     return false;
   });
+
+  // 2. THE STRICT "MY VIEW" GATE: If Personal View is active, HIDE everything else.
+  if (window.adminViewMode === 'personal') {
+    return isTaskOwner; // Admin sees ZERO tasks unless directly assigned to them/their dept.
+  }
+
+  // 3. NORMAL ORG/ADMIN VIEW LOGIC BELOW
+  if (currentRole === 'admin' || isSuperAdmin) return true;
+  if (prod && prod.ownerId === userKey) return true; // Product owner sees all tasks
   if (isTaskOwner) return true;
 
+  const vis = getTaskVisibility(task);
   if (vis === 'private') return false;
-
   if (vis === 'department') {
-    // Explicit extra departments or people granted access
     if (Array.isArray(task.visibleTo) && task.visibleTo.some(e => {
       const v = String(e || '').toLowerCase().trim();
       return v === myEmail || (myDept && v === myDept);
     })) return true;
-    return false;   // owners already checked above
+    return false;
   }
+  if (vis === 'public') return true;
+
+  return false;
+}
 
   if (vis === 'public') return true;   // anyone who can see the product
 
@@ -4637,6 +4644,14 @@ function buildStakeholderConfirm(product) {
       </div>
       <div id="ob-custom-list" style="margin-top:8px;display:flex;flex-wrap:wrap;gap:6px;"></div>
     </div>
+    <div class="form-row" style="margin-bottom:12px;border-top:1px solid var(--border);padding-top:12px;">
+      <label class="form-label">Google Drive Setup</label>
+      <select id="drive-create-mode" class="select-field" style="width:100%;">
+        <option value="sop">Create standard 8 SOP folders</option>
+        <option value="blank">Create empty Drive folder (I will name subfolders later)</option>
+        <option value="skip">Skip Drive creation for now</option>
+      </select>
+    </div>
     <div class="form-row" style="margin-bottom:12px;">
       <label class="form-label">Send mode</label>
       <select id="onboard-send-mode" class="select-field" style="width:100%;">
@@ -4730,20 +4745,25 @@ window.confirmAndLaunchGAS = async () => {
   if (btn) { btn.disabled = true; btn.textContent = 'Setting up Drive…'; }
 
   try {
-    // Step 1: Create Drive folder first (no email yet)
-    showToast('Creating Drive folder...', 'info');
-    const driveResult = await callGAS('createProductDrive', {
-      productName:       pendingProduct.name,
-      productId:         pendingProduct.id,
-      launchDate:        pendingProduct.launchDate,
-      stakeholderEmails: selectedStakeholders,
-    });
+    // Step 1: Handle Drive Creation
+    const driveMode = document.getElementById('drive-create-mode')?.value || 'sop';
+    let folderUrl = pendingProduct.driveUrl || null;
 
-    let folderUrl = null;
-    if (driveResult.ok && !driveResult.stub) {
-      folderUrl = driveResult.folderUrl;
-      await set(ref(db, `products/${pendingProduct.id}/driveUrl`), folderUrl);
-      productListCache[pendingProduct.id].driveUrl = folderUrl;
+    if (driveMode !== 'skip' && !folderUrl) {
+      showToast('Setting up Drive...', 'info');
+      const driveResult = await callGAS('createProductDrive', {
+        productName:       pendingProduct.name,
+        productId:         pendingProduct.id,
+        launchDate:        pendingProduct.launchDate,
+        stakeholderEmails: selectedStakeholders,
+        folderStrategy:    driveMode // 'sop' or 'blank'
+      });
+
+      if (driveResult.ok && !driveResult.stub) {
+        folderUrl = driveResult.folderUrl;
+        await set(ref(db, `products/${pendingProduct.id}/driveUrl`), folderUrl);
+        productListCache[pendingProduct.id].driveUrl = folderUrl;
+      }
     }
 
     // Save onboarding metadata
@@ -7515,7 +7535,7 @@ window.confirmHandover = async (productId) => {
       type:      'handover',
       subject:   `Handover Package: ${prod.name} — covering until ${returnDate}`,
       toEmails:  [reliever?.email || ''].filter(Boolean),
-      ccEmails:  [currentUser.email, ...(prod.defaultCCs || [])],
+      ccEmails:  prod.defaultCCs || [],
       productId,
       draftPrompt: buildHandoverPrompt(prod, tasks, reliever?.name || relieverId, returnDate, notes),
       onSend: async ({ subject, body, toEmails, ccEmails, testMode }) => {
@@ -9934,7 +9954,7 @@ Write 2-3 paragraphs:
 2. What specifically they need to deliver and by when
 3. Clear next step / call to action
 
-Tone: professional, direct, warm. Address them by department, not by name.`;
+Tone: professional, highly collaborative, and warm. Address them by department, not by name. NEVER use harsh directives or commanding language like "Deliver the following by the indicated dates". Instead, use supportive, team-oriented phrasing such as "We kindly request your team's support with...", "Please help us achieve these milestones by...", and "We look forward to collaborating with you."
 }
 
 function buildReminderPrompt(prod, task, daysOverdue) {
