@@ -2905,12 +2905,27 @@ function canViewTask(task, prod) {
     return false;
   });
 
+  function canViewTask(task, prod) {
+  if (!currentUser) return false;
+  
+  const userKey = sanitiseEmail(currentUser.email);
+  const myEmail = (currentUser.email || '').toLowerCase();
+  const myDept  = (currentUserDept || '').toLowerCase();
+
+  // 1. Check if the user is explicitly assigned to this task
+  const owners = typeof taskOwnerList === 'function' ? taskOwnerList(task) : (task.owners || []);
+  const isTaskOwner = owners.some(o => {
+    if (o.email && o.email.toLowerCase() === myEmail) return true;
+    if (o.dept && myDept && o.dept.toLowerCase() === myDept) return true;
+    return false;
+  });
+
   // 2. THE STRICT "MY VIEW" GATE: If Personal View is active, HIDE everything else.
   if (window.adminViewMode === 'personal') {
     return isTaskOwner; // Admin sees ZERO tasks unless directly assigned to them/their dept.
   }
 
-  // 3. NORMAL ORG/ADMIN VIEW LOGIC BELOW
+  // 3. NORMAL ORG/ADMIN VIEW LOGIC
   if (currentRole === 'admin' || isSuperAdmin) return true;
   if (prod && prod.ownerId === userKey) return true; // Product owner sees all tasks
   if (isTaskOwner) return true;
@@ -2928,7 +2943,6 @@ function canViewTask(task, prod) {
 
   return false;
 }
-
 function canSetTaskVisibility(prod) {
   if (currentRole === 'admin' || isSuperAdmin) return true;
   if (!currentUser || !prod) return false;
