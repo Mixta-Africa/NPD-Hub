@@ -3286,7 +3286,8 @@ async function loadProjectDashboard(productId) {
           if (mDiv) {
             // Remove the processed lock so it can redraw on live updates
             mDiv.removeAttribute('data-processed');
-            mermaid.init(undefined, mDiv);
+            // FIX: Mermaid requires a NodeList, not a single HTML element
+            mermaid.init(undefined, document.querySelectorAll('#mermaid-' + productId));
           }
         } catch(e) { console.warn('Mermaid render failed:', e); }
       }
