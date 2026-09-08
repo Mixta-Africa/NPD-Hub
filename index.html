@@ -1533,8 +1533,6 @@ function _updateDashboardUI(list) {
       const launch = p.launchDate ? new Date(p.launchDate) : null;
       if (launch) launch.setHours(0,0,0,0);
       const days = launch ? Math.round((launch - today) / 86400000) : null;
-      // Declare map syntax at the top of the scope
-      const dependencyMapSyntax = typeof generateDependencyMap === 'function' ? generateDependencyMap(tasks, p) : null;
       return issues >= 2 && days !== null && days >= 0 && days <= 21;
     }).length;
     const slipEl  = document.getElementById('stat-slip');
@@ -2909,8 +2907,11 @@ function canViewTask(task, prod) {
     return false;
   });
 
- // 2. THE "MY VIEW" GATE: If Personal View is active, HIDE everything else EXCEPT tasks you own OR products you own.
-  if (window.adminViewMode === 'personal') {
+  // 2. THE "MY VIEW" GATE — admins only.
+  // Role-guarded deliberately: this branch is stricter than the normal path
+  // (it drops public and department-visible tasks). If a non-admin ever
+  // reached it, they would silently lose access to work they should see.
+  if (currentRole === 'admin' && window.adminViewMode === 'personal') {
     return isTaskOwner || (prod && prod.ownerId === userKey);
   }
 
@@ -5075,14 +5076,20 @@ function buildPillarDetail(p) {
     return;
   }
   
-  // AMC APEX SAFETY GATE
+  // Elevated-risk safety gate.
+  // Matches on ownerDept only — the previous version also did a substring
+  // match on the owner NAME, which fires falsely on any person whose name
+  // happens to contain the department string. Same fuzzy-matching class of
+  // bug we removed from email routing.
   const t = getProductTasks(permCheck).find(x => x.id === taskId);
-  if (t && (t.ownerDept === 'AMC' || (t.owner && t.owner.includes('AMC')))) {
-    if (!confirm("⚠️ APEX WARNING: You are attempting to delete an AMC (Asset Management Committee) task. This action requires extreme caution. Are you absolutely sure you want to proceed?")) return;
+  const HIGH_RISK_DEPTS = ['AMC'];
+  const isHighRisk = t && t.ownerDept && HIGH_RISK_DEPTS.includes(t.ownerDept);
+
+  if (isHighRisk) {
+    if (!confirm("APEX WARNING\n\nYou are deleting an AMC task. This action cannot be undone.\n\nAre you sure you want to proceed?")) return;
   } else {
     if (!confirm("Delete this task? This cannot be undone.")) return;
   }
-  if (!confirm("Delete this task? This cannot be undone.")) return;
   try {
     const prod = productListCache[productId];
     const isNewFormat = !!prod.tasks?.[taskId];
