@@ -2929,11 +2929,6 @@ function canViewTask(task, prod) {
   return false;
 }
 
-  if (vis === 'public') return true;   // anyone who can see the product
-
-  return false;   // unknown value → deny
-}
-
 function canSetTaskVisibility(prod) {
   if (currentRole === 'admin' || isSuperAdmin) return true;
   if (!currentUser || !prod) return false;
