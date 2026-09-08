@@ -1122,10 +1122,9 @@ async function callGAS(action, payload) {
 
 /* ── STATUS HELPERS ── */
   
-  // ── DEPENDENCY MAP GENERATOR ───────────────────────────────────
 // ── DEPENDENCY MAP GENERATOR ───────────────────────────────────
 function generateDependencyMap(tasks, prod) {
-  let graph = "graph LR\n"; // Left-to-Right orientation
+  let graph = "flowchart LR\n"; // Use modern flowchart mapping
   let hasEdges = false;
 
   tasks.forEach(t => {
@@ -1137,12 +1136,11 @@ function generateDependencyMap(tasks, prod) {
     else if (eff === 'due-soon') { stroke = '#D97706'; fill = '#FFFBEB'; }
     else if (eff === 'blocked') { stroke = '#D97706'; fill = '#FFFBEB'; }
 
-    // Aggressively clean the title to prevent Mermaid parser crashes
+    // Clean title and wrap in markdown quotes for bold, crisp text
     let safeTitle = String(t.title || 'Untitled').replace(/["'|{}\[\]()><;\n\r]/g, '').trim();
-    // Truncate to keep the boxes compact and prevent massive graphs
-    if (safeTitle.length > 25) safeTitle = safeTitle.substring(0, 25) + '...';
+    if (safeTitle.length > 35) safeTitle = safeTitle.substring(0, 35) + '...';
     
-    const nodeDef = eff === 'blocked' ? `>"${safeTitle}"]` : `("${safeTitle}")`;
+    const nodeDef = eff === 'blocked' ? `>"\`**${safeTitle}**\`"]` : `("\`**${safeTitle}**\`")`;
     graph += `  ${t.id}${nodeDef}\n`;
     
     graph += `  style ${t.id} fill:${fill},stroke:${stroke},stroke-width:2px,color:#1A1A1A\n`;
@@ -1153,12 +1151,18 @@ function generateDependencyMap(tasks, prod) {
     if (t.predecessors && t.predecessors.length > 0) {
       t.predecessors.forEach(predId => {
         if (tasks.find(x => x.id === predId)) {
-          graph += `  ${predId} --> ${t.id}\n`;
+          // Draw bold directional arrows
+          graph += `  ${predId} -->|Blocks| ${t.id}\n`;
           hasEdges = true;
         }
       });
     }
   });
+
+  // Global styling for the dependency connector lines
+  if (hasEdges) {
+     graph += `  linkStyle default stroke:#9CA3AF,stroke-width:2px,fill:none\n`;
+  }
 
   return hasEdges ? graph : null; 
 }
@@ -2905,9 +2909,9 @@ function canViewTask(task, prod) {
     return false;
   });
 
-  // 2. THE STRICT "MY VIEW" GATE: If Personal View is active, HIDE everything else.
+ // 2. THE "MY VIEW" GATE: If Personal View is active, HIDE everything else EXCEPT tasks you own OR products you own.
   if (window.adminViewMode === 'personal') {
-    return isTaskOwner; // Admin sees ZERO tasks unless directly assigned to them/their dept.
+    return isTaskOwner || (prod && prod.ownerId === userKey);
   }
 
   // 3. NORMAL ORG/ADMIN VIEW LOGIC
@@ -10266,6 +10270,55 @@ window.copyGCCOLink = () => {
   if (!input) return;
   input.select();
   navigator.clipboard.writeText(input.value).then(() => showToast('Link copied to clipboard', 'success'));
+};
+/* ══ MAP EXPORT ══════════════════════════════════════════════ */
+window.exportMermaidMap = (productId, format) => {
+  const container = document.getElementById('mermaid-container-' + productId);
+  if (!container) return;
+  const svg = container.querySelector('svg');
+  if (!svg) { showToast('Map is not ready yet', 'error'); return; }
+  
+  const svgData = new XMLSerializer().serializeToString(svg);
+  const blob = new Blob([svgData], { type: 'image/svg+xml;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  
+  if (format === 'svg') {
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `Dependency_Map_${productId}.svg`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  } else {
+    showToast('Generating high-res PNG...', 'info');
+    const canvas = document.createElement('canvas');
+    const bbox = svg.getBoundingClientRect();
+    
+    // Scale up for high-resolution PNG
+    canvas.width = bbox.width * 2; 
+    canvas.height = bbox.height * 2;
+    const ctx = canvas.getContext('2d');
+    ctx.scale(2, 2);
+    
+    // Fill with solid white background (SVGs are transparent by default)
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    
+    const img = new Image();
+    img.onload = () => {
+      ctx.drawImage(img, 0, 0, bbox.width, bbox.height);
+      const pngUrl = canvas.toDataURL('image/png', 1.0);
+      const a = document.createElement('a');
+      a.href = pngUrl;
+      a.download = `Dependency_Map_${productId}.png`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    };
+    img.src = url;
+  }
 };
 
 // Register all real functions with the global dispatcher
