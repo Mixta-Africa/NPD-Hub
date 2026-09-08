@@ -1131,7 +1131,20 @@ async function callGAS(action, payload) {
 /* ── STATUS HELPERS ── */
   
 // ── DEPENDENCY MAP GENERATOR ───────────────────────────────────
+/* Clicking a node opens that task. Mermaid calls this by name from the
+   generated `click` directives, so it must live on window. */
+window.depMapNodeClick = (taskId) => {
+  const pid = window._depMapProductId;
+  if (!pid) return;
+  openProjectDashboard(pid);
+  setTimeout(() => {
+    if (typeof highlightDeepLinkTask === 'function') highlightDeepLinkTask(taskId);
+  }, 800);
+};
+
 function generateDependencyMap(tasks, prod) {
+  // Remember which item this map belongs to so node clicks can route
+  window._depMapProductId = prod && prod.id ? prod.id : null;
   // Mermaid node IDs must be alphanumeric — raw task ids can contain
   // characters that silently break the parse, so map them to safe handles.
   const nid = {};
@@ -1182,9 +1195,12 @@ function generateDependencyMap(tasks, prod) {
     graph += '  subgraph S' + d + '["' + label + '"]\n';
     graph += '    direction TB\n';
     stage.forEach(t => {
+      // Shorter truncation than the box can hold — Mermaid does not reflow,
+      // so text must fit the node rather than the node grow to the text.
       let title = clean(t.title || 'Untitled');
-      if (title.length > 30) title = title.substring(0, 30) + '...';
-      const owner = clean(ownerOf(t)).substring(0, 22);
+      if (title.length > 26) title = title.substring(0, 26) + '...';
+      let owner = clean(ownerOf(t));
+      if (owner.length > 20) owner = owner.substring(0, 20) + '...';
       const due = t.deadline
         ? new Date(t.deadline).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })
         : 'no date';
@@ -1234,6 +1250,12 @@ function generateDependencyMap(tasks, prod) {
       cur = preds.sort((a, b) => (depth[b.id] || 0) - (depth[a.id] || 0))[0];
     }
   }
+  // Make every node clickable — the map should be a way into the work,
+  // not a picture of it.
+  tasks.forEach(t => {
+    graph += '  click ' + nid[t.id] + ' call depMapNodeClick("' + t.id + '")\n';
+  });
+
   if (!hasEdges && tasks.length > 0) {
     graph += '  NOTE["No dependencies set yet<br/><small>Add a Depends on value to a task</small>"]\n';
     graph += '  style NOTE fill:#F8F8F7,stroke:#D1D5DB,stroke-width:1px,color:#6B7280\n';
@@ -1518,31 +1540,9 @@ function refreshDashboardUI() {
   const products = window._dashRawProducts;
   const userKey  = sanitiseEmail(currentUser.email);
   
-  const list = Object.values(products).filter(p => {
-    if (p.status === 'archived') return false;
-    
-    // 1. Admin "Org View": Show absolutely everything
-    if (currentRole === 'admin' && window.adminViewMode === 'org') return true;
-    
-    // 2. "My View" (or standard Member view):
-    if (p.ownerId === userKey) return true;
-    if (p.sharedWith && p.sharedWith[userKey]) return true;
-    
-    // 3. Deep Task Inspection: Am I or my department assigned to any task here?
-    if (currentUserDept) {
-      const tasks = getProductTasks(p);
-      const isMyTask = tasks.some(t => {
-        const owners = (t.owners && t.owners.length) ? t.owners : [{ dept: t.ownerDept || '', email: t.ownerEmail || '' }];
-        return owners.some(o => 
-          (o.dept && o.dept.toLowerCase() === currentUserDept.toLowerCase()) ||
-          (o.email && o.email.toLowerCase() === (currentUser.email || '').toLowerCase())
-        );
-      });
-      if (isMyTask) return true;
-    }
-    
-    return false;
-  });
+  // Delegates to the single access function — see canUserSeeProduct.
+  const list = Object.values(products)
+    .filter(p => p.status !== 'archived' && canUserSeeProduct(p, userKey));
   
   _updateDashboardUI(list);
 }
@@ -1985,9 +1985,8 @@ async function loadMyActions() {
 
     Object.values(products).forEach(prod => {
       if (prod.status === 'archived') return;
-      const isOwner  = prod.ownerId === userKey;
-      const isShared = prod.sharedWith?.[userKey];
-      if (!isOwner && !isShared && currentRole !== 'admin') return;
+      // Delegates to the single access function — see canUserSeeProduct.
+      if (!canUserSeeProduct(prod, userKey)) return;
 
       const tasks = getProductTasks(prod).filter(t => canViewTask(t, prod));
       const allTasksMap = {};
@@ -2166,14 +2165,12 @@ async function loadProductList() {
     const products = snap.val() || {};
     productListCache = products;
     const userKey  = sanitiseEmail(currentUser.email);
+    // SINGLE SOURCE OF TRUTH. This used to carry its own copy of the access
+    // rules, which silently bypassed the My View toggle — the duplicate said
+    // "admin sees everything" with no mode check. Never re-inline this logic;
+    // if access needs to change, change canUserSeeProduct and nothing else.
     const visible  = Object.values(products)
-      .filter(p => {
-        if (p.status === 'archived') return false;
-        if (currentRole === 'admin') return true;
-        if (p.ownerId === userKey) return true;
-        if (p.sharedWith?.[userKey]) return true;
-        return false;
-      })
+      .filter(p => p.status !== 'archived' && canUserSeeProduct(p, userKey))
       .sort((a,b) => b.createdAt - a.createdAt);
 
     // Live counts on the filter tabs, computed BEFORE the type filter applies
@@ -3850,7 +3847,7 @@ window.submitAsk = async () => {
     const messages = [{ role: 'system', content: system }]
       .concat(_askHistory.slice(-6))
       .concat([{ role: 'user', content: q }]);
-    const { text, provider } = await askAI(messages, 1000);
+    const { text, provider, model } = await askAI(messages, 1000);
     _askHistory.push({ role: 'user', content: q });
     _askHistory.push({ role: 'assistant', content: text });
     replaceAskMessage(thinkingId, text, provider + (model ? ' · ' + model : ''));
@@ -9457,7 +9454,32 @@ async function renderSAAllTasks(el) {
       const delayed = items.filter(i => ['overdue','delayed'].includes(resolveTaskStatus(i.task, i.prod))).length;
       
       // Task rows (hidden by default)
-      const taskRows = items.map(i => {
+      // Sub-bucket by project. A person owning four projects with 45 tasks
+      // is unreadable as a flat list — the project is the unit people think in.
+      const byProject = {};
+      items.forEach(i => {
+        const k = i.prod.id;
+        if (!byProject[k]) byProject[k] = { prod: i.prod, rows: [] };
+        byProject[k].rows.push(i);
+      });
+
+      const taskRows = Object.values(byProject).map(bucket => {
+        const bTasks   = bucket.rows.filter(r => r.task);
+        const bDone    = bTasks.filter(r => resolveTaskStatus(r.task, r.prod) === 'complete').length;
+        const bIssues  = bTasks.filter(r => ['overdue','delayed','blocked'].includes(resolveTaskStatus(r.task, r.prod))).length;
+        const isProj   = (bucket.prod.itemType || 'product') === 'project';
+
+        const header = `
+          <div style="display:flex;align-items:center;gap:8px;padding:9px 16px;background:#FAFAF9;border-top:1px solid var(--border);cursor:pointer;"
+               onclick="event.stopPropagation();openProjectDashboard('${bucket.prod.id}')">
+            <span style="font-size:12px;font-weight:700;color:var(--text);">${bucket.prod.name}</span>
+            <span style="font-size:8px;font-weight:700;color:${isProj ? '#2563EB' : '#C0282D'};background:${isProj ? '#EFF6FF' : '#FEF2F2'};padding:1px 6px;border-radius:7px;">${isProj ? 'PROJECT' : 'PRODUCT'}</span>
+            <span style="font-size:10px;color:var(--text-muted);">${bDone}/${bTasks.length} done</span>
+            ${bIssues > 0 ? `<span style="font-size:10px;font-weight:700;color:var(--red);">${bIssues} need action</span>` : ''}
+            <span style="margin-left:auto;font-size:10px;color:var(--text-muted);">open &rarr;</span>
+          </div>`;
+
+        return header + bucket.rows.map(i => {
         // A project with no tasks yet still needs a row, otherwise its owner
         // looks like they have nothing in flight.
         if (!i.task) {
@@ -9483,6 +9505,7 @@ async function renderSAAllTasks(el) {
             <button onclick="saDeleteTask('${i.prod.id}', '${i.task.id}')" style="background:none;border:1px solid #FECACA;border-radius:6px;padding:4px 8px;font-size:10px;color:#C0282D;cursor:pointer;margin-left:8px;">Delete</button>
           </div>
         `;
+        }).join('');
       }).join('');
 
       html += `
@@ -10515,6 +10538,7 @@ window.__npd_init({
   dashNavToTracker:        window.dashNavToTracker,
   openDrill:               window.openDrill,
   openProjectDashboard:    window.openProjectDashboard,
+  depMapNodeClick:         window.depMapNodeClick,
   exportProjectTracker:    window.exportProjectTracker,
   syncProjectSheet:        window.syncProjectSheet,
   copyExportLink:          window.copyExportLink,
