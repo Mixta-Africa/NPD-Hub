@@ -202,7 +202,7 @@ onAuthStateChanged(auth, async (user) => {
       } else {
         currentUserDept = userData.dept || '';
         showApp();
-        loadView('dashboard');
+        routeFromDeepLink();
       }
     } catch(err) {
       // Firebase error — show a clear message rather than spinning forever
@@ -654,6 +654,45 @@ window.dismissWelcome = (dest) => {
 };
 
 /* ─── NAVIGATION ─── */
+/* ══════════════════════════════════════════════════════════════
+   DEEP LINK ROUTING
+   Every automated email carries ?p=<productId>&t=<taskId>&view=<view>.
+   Landing the recipient on the exact thing being discussed is the
+   difference between a notification and an instruction.
+   ══════════════════════════════════════════════════════════════ */
+function routeFromDeepLink() {
+  let target = 'dashboard';
+  try {
+    const q = new URLSearchParams(window.location.search);
+    const productId = q.get('p');
+    const taskId    = q.get('t');
+    const view      = q.get('view');
+
+    if (productId) {
+      // Remember the task so the item view can highlight it
+      window._deepLinkTask = taskId || null;
+      loadView('project:' + productId);
+      // Clear the params so a refresh doesn't re-trigger
+      window.history.replaceState({}, '', window.location.pathname);
+      if (taskId) setTimeout(() => highlightDeepLinkTask(taskId), 900);
+      return;
+    }
+    if (view) target = view;
+    window.history.replaceState({}, '', window.location.pathname);
+  } catch(e) { /* malformed link — fall through to dashboard */ }
+  loadView(target);
+}
+
+function highlightDeepLinkTask(taskId) {
+  const row = document.getElementById('terow-' + taskId) ||
+              document.querySelector('[data-task-id="' + taskId + '"]');
+  if (!row) return;
+  row.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  row.style.transition = 'background .4s';
+  row.style.background = '#FFFBEB';
+  setTimeout(() => { row.style.background = ''; }, 2600);
+}
+
 window.loadView = (view) => {
   // Parameterised views — drill:<filter> and project:<id>
   if (typeof view === 'string' && view.indexOf(':') > -1) {
@@ -1073,7 +1112,11 @@ async function callGAS(action, payload) {
 /* ── STATUS HELPERS ── */
   // ── SMART FORECAST ENGINE ──────────────────────────────────────
 function computeProjectPrediction(prod) {
-  const tasks = getProductTasks(prod);
+  // Privacy gate: the forecast surfaces bottleneck TASK TITLES, so it must be
+  // computed only from tasks this viewer is entitled to see. Without this a
+  // member of one department reads another department's private task names
+  // straight out of the prediction panel.
+  const tasks = getProductTasks(prod).filter(t => canViewTask(t, prod));
   if (!tasks || tasks.length === 0) return { delayDays: 0, probability: 0, predictedDate: prod.launchDate, bottlenecks: [] };
 
   const today = new Date();
@@ -4220,7 +4263,27 @@ window.addTaskToProduct = async (productId) => {
     'Owners: ' + (owners.map(o => ownerLabel(o)).join(', ') || 'Unassigned'));
   // Keep the live sheet current if this item already has one
   pushSheetIfLinked(productId);
-  showToast('Task added.', 'success');
+
+  // Notify everyone assigned, unless they assigned it to themselves
+  const notify = owners.map(o => o.email)
+    .filter(e => e && e.indexOf('@') > -1 && e.toLowerCase() !== currentUser.email.toLowerCase());
+  if (notify.length > 0) {
+    try {
+      await callGAS('sendAssignmentAlert', {
+        toEmails:    notify,
+        productId:   productId,
+        productName: prod.name,
+        taskId:      taskId,
+        taskTitle:   title,
+        deadline:    deadline || '',
+        assignedBy:  currentPreferredName || currentUser.displayName || currentUser.email,
+        sentByName:  currentPreferredName || currentUser.displayName || currentUser.email.split('@')[0],
+        sentByEmail: currentUser.email,
+      });
+    } catch(e) { console.warn('Assignment alert failed to send:', e); }
+  }
+
+  showToast('Task added.' + (notify.length ? ' ' + notify.length + ' person notified.' : ''), 'success');
   if (currentView === 'tracker') renderTrackerTable(productListCache[productId], null);
 };
 
@@ -4829,6 +4892,11 @@ function buildPillarDetail(p) {
 }
 
   window.deleteProductTask = async (productId, taskId) => {
+  const permCheck = productListCache[productId];
+  if (!permCheck || !canEdit(permCheck)) {
+    showToast('Only the owner or an admin can delete tasks on this item.', 'error');
+    return;
+  }
   if (!confirm("Delete this task? This cannot be undone.")) return;
   try {
     const prod = productListCache[productId];
@@ -4849,9 +4917,16 @@ function buildPillarDetail(p) {
 };
 
 window.moveProductTask = async (productId, taskId, direction) => {
+  const permCheck = productListCache[productId];
+  if (!permCheck || !canEdit(permCheck)) {
+    showToast('Only the owner or an admin can reorder tasks on this item.', 'error');
+    return;
+  }
   try {
     const prod = productListCache[productId];
-    const tasks = getProductTasks(prod);
+    // Reorder within the viewer's visible set only — reordering against tasks
+    // you cannot see would silently rewrite another department's sequence.
+    const tasks = getProductTasks(prod).filter(t => canViewTask(t, prod));
     const idx = tasks.findIndex(t => t.id === taskId);
     if (idx === -1 || idx + direction < 0 || idx + direction >= tasks.length) return;
 
@@ -5005,7 +5080,26 @@ window.confirmReassign = async (productId, taskId) => {
     c.owners = newOwners; c.owner = toName; c.ownerEmail = toEmail; c.ownerDept = dept;
   }
 
-  showToast('Task reassigned to ' + toName, 'success');
+  // Tell the new owner — same weight as an automated alert
+  if (toEmail && toEmail.indexOf('@') > -1) {
+    try {
+      await callGAS('sendAssignmentAlert', {
+        toEmails:      [toEmail],
+        productId:     productId,
+        productName:   prod.name,
+        taskId:        taskId,
+        taskTitle:     task.title || 'Untitled',
+        deadline:      task.deadline || '',
+        previousOwner: prevLabel,
+        reason:        reason,
+        assignedBy:    currentPreferredName || currentUser.displayName || currentUser.email,
+        sentByName:    currentPreferredName || currentUser.displayName || currentUser.email.split('@')[0],
+        sentByEmail:   currentUser.email,
+      });
+    } catch(e) { console.warn('Assignment alert failed to send:', e); }
+  }
+
+  showToast('Task reassigned to ' + toName + (toEmail ? ' — they have been notified' : ''), 'success');
   document.getElementById('modal-reassign-panel').innerHTML = '';
   // Refresh the tasks tab
   const body = document.getElementById('product-detail-body');
