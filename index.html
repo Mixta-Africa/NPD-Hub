@@ -3950,7 +3950,12 @@ function buildTaskRow(t, i) {
         '<input type="date" class="input-field" value="' + (t.deadline||'') + '"' +
           ' onchange="updateEditingTask(\'' + t.id + '\',\'deadline\',this.value)"/>' +
       '</div>' +
-      '<div class="task-edit-col task-edit-col-wide" style="grid-column:span 2;">' +
+      '<div class="task-edit-col task-edit-col-wide" style="grid-column:span 2; overflow:visible;">' +
+        '<label class="form-label">Owners <span class="form-hint">— add multiple departments/individuals</span></label>' +
+        '<div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:6px;" id="owner-chips-' + t.id + '">' +
+          (ownerChips || '<span style="font-size:11px;color:#9CA3AF;">No owners assigned</span>') +
+        '</div>' +
+        '<div style="display:flex;gap:6px;align-items:flex-end;flex-wrap:wrap;">' +
         '<label class="form-label">Owners <span class="form-hint">— can assign multiple departments/individuals</span></label>' +
         '<div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:6px;" id="owner-chips-' + t.id + '">' +
           (ownerChips || '<span style="font-size:11px;color:#9CA3AF;">No owners assigned</span>') +
@@ -6042,8 +6047,6 @@ function renderTrackerTable(prod, filter) {
     </tr>`;
   }).join('')
 
-  const overdueHtml = overdue > 0 ? `<span style="color:var(--red)">${overdue} overdue</span>` : '0 overdue';
-  // critCount must be declared before body.innerHTML uses it in the template literal
   // critCount must be declared before body.innerHTML uses it in the template literal
   const criticalIds = typeof computeCriticalPath === 'function' ? computeCriticalPath(allTasks) : new Set();
   const critCount   = criticalIds.size;
@@ -7477,7 +7480,10 @@ async function renderTeamSection() {
       <div class="allowlist-avatar">${(m.name||key)[0].toUpperCase()}</div>
       <div class="allowlist-info">
         <div class="allowlist-name">${m.name}</div>
-        <div class="allowlist-role-row"><span class="role-badge role-viewer">${m.dept || 'Commercial Strategy'}</span></div>
+        <div class="allowlist-role-row">
+          <span class="role-badge role-viewer">${m.dept || 'Unassigned'}</span>
+          ${m.isHOD ? '<span style="font-size:9px;font-weight:700;background:#F0FDF4;color:#16A34A;padding:2px 6px;border-radius:10px;margin-left:6px;">HOD</span>' : ''}
+        </div>
       </div>
     </div>`).join('') || '<div class="loading-row muted">No team members yet — they appear here after first login.</div>';
 
@@ -9215,124 +9221,128 @@ window.deleteTemplate = async (id) => {
   } catch(e) { showToast('Failed: ' + e.message, 'error'); }
 };
 
-/* ══ CIRCUIT BOX: ALL TASKS VIEW ════════════════════════════ */
+/* ── TAB: ALL TASKS (Owner-Led View) ────────────────────────── */
 async function renderSAAllTasks(el) {
-  el.innerHTML = '<div class="loading-row" style="padding:24px;">Loading all products and tasks...</div>';
-  const snap = await get(ref(db, 'products'));
-  const products = Object.values(snap.val() || {}).filter(p => p.status !== 'archived');
+  el.innerHTML = '<div class="loading-row" style="padding:24px;">Loading organization tasks...</div>';
+  try {
+    const snap = await get(ref(db, 'products'));
+    const products = snap.val() || {};
+    
+    // Group all tasks globally by their Owner
+    const ownerMap = {};
+    
+    Object.values(products).forEach(prod => {
+      if (prod.status === 'archived') return;
+      const tasks = getProductTasks(prod);
+      
+      tasks.forEach(t => {
+        const owners = (t.owners && t.owners.length > 0) ? t.owners : 
+                       (t.owner ? [{ dept: t.ownerDept || '', email: t.ownerEmail || '', nameCache: t.owner }] : []);
+        
+        if (owners.length === 0) {
+          if (!ownerMap['Unassigned']) ownerMap['Unassigned'] = [];
+          ownerMap['Unassigned'].push({ prod, task: t });
+          return;
+        }
 
-  if (products.length === 0) {
-    el.innerHTML = '<div class="empty-state-sm"><p>No products yet.</p></div>';
-    return;
+        owners.forEach(o => {
+          const key = o.nameCache || o.dept || o.email || 'Unassigned';
+          if (!ownerMap[key]) ownerMap[key] = [];
+          ownerMap[key].push({ prod, task: t, isDept: !!o.dept && !o.email });
+        });
+      });
+    });
+
+    const ownerKeys = Object.keys(ownerMap).sort();
+    
+    if (ownerKeys.length === 0) {
+      el.innerHTML = '<div class="muted" style="padding:24px;">No tasks found in the system.</div>';
+      return;
+    }
+
+    let html = `
+      <div style="margin-bottom:16px;display:flex;justify-content:space-between;align-items:center;">
+        <div style="font-size:12px;color:var(--text-muted);">Global task distribution by assigned owner. Click a name to expand their tasks.</div>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:12px;">
+    `;
+
+    ownerKeys.forEach(ownerName => {
+      const items = ownerMap[ownerName];
+      const done = items.filter(i => resolveTaskStatus(i.task, i.prod) === 'complete').length;
+      const delayed = items.filter(i => ['overdue','delayed'].includes(resolveTaskStatus(i.task, i.prod))).length;
+      
+      // Task rows (hidden by default)
+      const taskRows = items.map(i => {
+        const eff = resolveTaskStatus(i.task, i.prod);
+        const m = STATUS_META[eff] || STATUS_META['on-track'];
+        return `
+          <div style="display:flex;align-items:center;gap:10px;padding:8px 16px;border-top:1px solid #F3F3F2;">
+            <div style="flex:1;min-width:0;">
+              <div style="font-size:12px;font-weight:600;color:var(--text);">${i.task.title || 'Untitled'}</div>
+              <div style="font-size:10px;color:var(--text-muted);">${i.prod.name}</div>
+            </div>
+            <span style="font-size:11px;color:${m.color};">${i.task.deadline ? formatDate(i.task.deadline) : 'No date'}</span>
+            <span style="font-size:9px;font-weight:700;color:${m.color};background:${m.color}15;padding:2px 7px;border-radius:8px;">${m.label.toUpperCase()}</span>
+            <button onclick="saDeleteTask('${i.prod.id}', '${i.task.id}')" style="background:none;border:1px solid #FECACA;border-radius:6px;padding:4px 8px;font-size:10px;color:#C0282D;cursor:pointer;margin-left:8px;">Delete</button>
+          </div>
+        `;
+      }).join('');
+
+      html += `
+        <details class="panel" style="margin:0;cursor:pointer;">
+          <summary style="padding:16px;display:flex;align-items:center;gap:12px;outline:none;list-style:none;">
+            <div style="width:32px;height:32px;border-radius:50%;background:#F0F0EE;color:#1A1A1A;font-size:12px;font-weight:700;display:flex;align-items:center;justify-content:center;">
+              ${ownerName[0].toUpperCase()}
+            </div>
+            <div style="flex:1;">
+              <div style="font-size:14px;font-weight:700;color:var(--text);">${ownerName}</div>
+              <div style="font-size:11px;color:var(--text-muted);">${items.length} total tasks</div>
+            </div>
+            <div style="display:flex;gap:12px;text-align:right;">
+              <div>
+                <div style="font-size:14px;font-weight:700;color:var(--green);">${done}</div>
+                <div style="font-size:9px;text-transform:uppercase;color:var(--text-muted);">Done</div>
+              </div>
+              <div>
+                <div style="font-size:14px;font-weight:700;color:${delayed > 0 ? 'var(--red)' : 'var(--text)'};">${delayed}</div>
+                <div style="font-size:9px;text-transform:uppercase;color:var(--text-muted);">Delayed</div>
+              </div>
+            </div>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-left:8px;color:var(--text-muted);"><path d="M6 9l6 6 6-6"/></svg>
+          </summary>
+          <div style="background:#FAFAF9;border-top:1px solid var(--border);padding-bottom:8px;">
+            ${taskRows}
+          </div>
+        </details>
+      `;
+    });
+
+    html += '</div>';
+    el.innerHTML = html;
+
+  } catch(e) {
+    el.innerHTML = `<div class="muted" style="padding:24px;">Error loading tasks: ${e.message}</div>`;
   }
-
-  const sections = products.map(prod => {
-    const tasks  = getProductTasks(prod);
-    const locked = isProductLocked(prod);
-    const rows   = tasks.map((t, i) => {
-      const st = t.status || 'on-track';
-      const stCls = st === 'complete' ? 'pill-blue' : st === 'delayed' ? 'pill-red' : 'pill-green';
-      const pred  = (t.predecessors||[]).length > 0
-        ? `<span style="font-size:10px;color:var(--amber);">${t.predecessors.length} dep${t.predecessors.length!==1?'s':''}</span>`
-        : '';
-      return `<tr class="tracker-row">
-        <td class="tracker-num">${i+1}</td>
-        <td class="tracker-pillar">
-          <div class="tracker-pillar-name">${locked ? ICON.lock + ' ' : ''}${t.title||t.name||'Untitled'}</div>
-          <div class="tracker-pillar-owner">${t.owner||'—'}</div>
-        </td>
-        <td style="font-size:12px;color:var(--text-muted);">${t.deadline||'—'}</td>
-        <td><span class="pill ${stCls}" style="font-size:11px;">${st}</span> ${pred}</td>
-        <td>
-          ${isSuperAdmin ? `<button class="btn-secondary-sm" onclick="saEditTask('${prod.id}','${t.id}')">Edit</button>` : ''}
-        </td>
-      </tr>`;
-    }).join('');
-
-    return `
-      <div class="panel" style="margin-bottom:14px;">
-        <div class="panel-header">
-          <span class="panel-title">${prod.name}</span>
-          <span style="font-size:12px;color:var(--text-muted);">${tasks.length} tasks · ${locked ? 'Locked' : 'Editable'}</span>
-        </div>
-        <div style="overflow:auto;">
-          <table class="tracker-table" style="min-width:500px;">
-            <thead><tr>
-              <th style="width:32px;">#</th><th>Task</th>
-              <th style="width:110px;">Deadline</th>
-              <th style="width:120px;">Status</th>
-              <th style="width:60px;"></th>
-            </tr></thead>
-            <tbody>${rows}</tbody>
-          </table>
-        </div>
-      </div>`;
-  }).join('');
-
-  el.innerHTML = sections;
 }
 
-window.saEditTask = async (productId, taskId) => {
-  // Super admin can edit any task regardless of lock
-  const snap = await get(ref(db, 'products/' + productId + '/tasks/' + taskId));
-  const task = snap.val();
-  if (!task) { showToast('Task not found.', 'error'); return; }
-
-  let modal = document.getElementById('sa-modal');
-  if (!modal) {
-    modal = document.createElement('div');
-    modal.id = 'sa-modal';
-    modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.45);display:flex;align-items:center;justify-content:center;z-index:2000;padding:20px;';
-    document.body.appendChild(modal);
-  }
-  modal.innerHTML = `
-    <div style="background:#fff;border-radius:12px;width:100%;max-width:480px;overflow:hidden;box-shadow:0 8px 40px rgba(0,0,0,0.2);">
-      <div style="background:#C0282D;padding:18px 24px;">
-        <div style="color:white;font-size:11px;letter-spacing:.1em;text-transform:uppercase;margin-bottom:2px;">Super Admin · Edit Task</div>
-        <div style="color:white;font-size:17px;font-weight:700;">${task.title||'Untitled'}</div>
-      </div>
-      <div style="padding:22px;">
-        <div class="form-row"><label class="form-label">Task name</label>
-          <input id="sae-title" class="input-field" value="${task.title||''}"/></div>
-        <div class="form-row"><label class="form-label">Owner dept</label>
-          <input id="sae-owner" class="input-field" value="${task.owner||''}"/></div>
-        <div class="form-row"><label class="form-label">Start date</label>
-          <input type="date" id="sae-start" class="input-field" value="${task.startDate||''}"/></div>
-        <div class="form-row"><label class="form-label">Deadline</label>
-          <input type="date" id="sae-deadline" class="input-field" value="${task.deadline||''}"/></div>
-        <div class="form-row"><label class="form-label">Status</label>
-          <select id="sae-status" class="select-field" style="width:100%;">
-            <option value="on-track"  ${task.status==='on-track' ?'selected':''}>On Track</option>
-            <option value="delayed"   ${task.status==='delayed'  ?'selected':''}>Delayed</option>
-            <option value="complete"  ${task.status==='complete' ?'selected':''}>Complete</option>
-          </select></div>
-        <div class="form-actions">
-          <button class="btn-outline" onclick="document.getElementById('email-composer-modal').style.display='none'">Cancel</button>
-          <button class="btn-primary" onclick="saeSaveTask('${productId}','${taskId}')">Save changes</button>
-        </div>
-      </div>
-    </div>`;
-  modal.style.display = 'flex';
-};
-
-window.saeSaveTask = async (productId, taskId) => {
-  const updates = {
-    title:     document.getElementById('sae-title')?.value.trim()    || '',
-    owner:     document.getElementById('sae-owner')?.value.trim()    || '',
-    startDate: document.getElementById('sae-start')?.value          || '',
-    deadline:  document.getElementById('sae-deadline')?.value       || '',
-    status:    document.getElementById('sae-status')?.value         || 'on-track',
-    updatedAt: Date.now(),
-    updatedBy: currentUser.email,
-  };
+// Global Super Admin Task Deletion
+window.saDeleteTask = async (productId, taskId) => {
+  if (!confirm("SUPER ADMIN OVERRIDE: Are you absolutely sure you want to permanently delete this task across the entire system?")) return;
   try {
-    await Promise.all(Object.entries(updates).map(([k,v]) =>
-      set(ref(db, `products/${productId}/tasks/${taskId}/${k}`), v)
-    ));
-    document.getElementById('sa-modal').style.display = 'none';
-    showToast('Task updated by super admin.', 'success');
-    loadSATab('tasks');
-  } catch(e) { showToast('Save failed: ' + e.message, 'error'); }
+    const snap = await get(ref(db, 'products/' + productId));
+    const prod = snap.val();
+    if (!prod) return;
+    
+    const isNewFormat = !!prod.tasks?.[taskId];
+    const path = isNewFormat ? 'tasks/' + taskId : 'pillars/' + taskId;
+    await set(ref(db, 'products/' + productId + '/' + path), null);
+    
+    showToast("Task deleted globally.", "success");
+    loadSATab('tasks'); // Refresh the tab
+  } catch(e) {
+    showToast("Failed to delete task.", "error");
+  }
 };
 
 /* ══ ITEM 4: ACTIVITY FEED ══════════════════════════════════ */
