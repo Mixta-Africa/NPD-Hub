@@ -3056,7 +3056,7 @@ async function loadDrilldown(filter) {
       const matched = getProductTasks(p).filter(t => {
         if (!canViewTask(t, p)) return false;
         const eff = resolveTaskStatus(t);
-        if (filter === 'overdue') return eff === 'overdue' || eff === 'delayed';
+        if (filter === 'overdue') return eff === 'overdue' || eff === 'delayed' || eff === 'blocked';
         if (filter === 'ontrack') return !!t.deadline && (eff === 'on-track' || eff === 'due-soon');
         if (filter === 'week') {
           if (!t.deadline || eff === 'complete') return false;
@@ -3298,7 +3298,7 @@ async function loadProjectDashboard(productId) {
           statCard('Progress',  pct + '%',      pct >= 75 ? 'var(--green)' : pct >= 40 ? 'var(--amber)' : 'var(--red)') +
           statCard('Complete',  done,           'var(--green)') +
           statCard('On track',  onTrack,        'var(--green)') +
-          statCard('Needs action', delayed,     delayed > 0 ? 'var(--red)' : 'var(--green)') +
+          statCard('Needs action', delayed + blocked, (delayed + blocked) > 0 ? 'var(--red)' : 'var(--green)') +
         '</div>' +
         
        // --- INJECT DEPENDENCY MAP ---
@@ -3555,10 +3555,14 @@ function showSheetSyncResult(name, res) {
 }
 
 function canUserSeeProduct(p, userKey) {
-  if (currentRole === 'admin') return true;
+  // 1. If admin AND they want the full Org View, show everything
+  if (currentRole === 'admin' && window.adminViewMode !== 'personal') return true;
+  
+  // 2. Otherwise, enforce strict personal/department gating ("My View")
   if (p.ownerId === userKey) return true;
   if (p.sharedWith?.[userKey]) return true;
-  // Department assignment: visible if my dept owns any task on it
+  
+  // 3. Deep Task Inspection: Am I or my department assigned to any task here?
   if (currentUserDept) {
     const tasks = getProductTasks(p);
     const mine = tasks.some(t => {
@@ -5734,14 +5738,12 @@ function drawGantt() {
     // Unified status → dot + bar class (matches tracker exactly)
     const eff = m.effectiveStatus;
     const dotStatus = eff === 'complete' ? 'complete'
-                    : eff === 'delayed'  ? 'delayed'
-                    : eff === 'overdue'  ? 'delayed'
-                    : eff === 'due-soon' ? 'due-soon'
+                    : (eff === 'delayed' || eff === 'overdue') ? 'delayed'
+                    : (eff === 'blocked' || eff === 'due-soon') ? 'due-soon'
                     : 'on-track';
     const barCls = eff === 'complete' ? 'tg-bar-complete'
-                 : eff === 'delayed'  ? 'tg-bar-delayed'
-                 : eff === 'overdue'  ? 'tg-bar-delayed'
-                 : eff === 'due-soon' ? 'tg-bar-blocked'
+                 : (eff === 'delayed' || eff === 'overdue') ? 'tg-bar-delayed'
+                 : (eff === 'blocked' || eff === 'due-soon') ? 'tg-bar-blocked'
                  : 'tg-bar-ontrack';
 
     const label = m.pillarName || m.productName || 'Milestone';
@@ -5856,8 +5858,8 @@ function drawCalendar() {
     const events   = dayMap[day] || [];
     const dots = events.slice(0,4).map(e => {
       const cls = e.effectiveStatus==='complete' ? 'cal-dot-blue'
-        : e.effectiveStatus==='delayed'  ? 'cal-dot-red'
-        : e.effectiveStatus==='overdue'  ? 'cal-dot-red'
+        : (e.effectiveStatus==='delayed' || e.effectiveStatus==='overdue') ? 'cal-dot-red'
+        : e.effectiveStatus==='blocked' ? 'cal-dot-amber'
         : e.effectiveStatus==='due-soon' ? 'cal-dot-amber'
         : 'cal-dot-green';
       return `<span class="cal-dot ${cls}" title="${e.productName}: ${e.pillarName}"></span>`;
