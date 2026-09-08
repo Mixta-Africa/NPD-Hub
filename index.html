@@ -2341,10 +2341,10 @@ function renderProductCard(p) {
         ${p.gmailThreadId ? '<span class="pcf-badge-grey" title="Thread active">' + ICON.thread + '</span>' : ''}
       </div>
 
-      <div class="pcf-actions">
+     <div class="pcf-actions">
         <button class="btn-secondary-sm" onclick="openProjectDashboard('${p.id}')">Dashboard</button>
         <button class="btn-secondary-sm" onclick="viewProduct('${p.id}')">Tasks</button>
-        ${canEdit(p) ? `<button class="btn-primary-sm" onclick="showQuickUpdate('${p.id}')">${ICON.bolt} Update</button>` : ''}
+        ${canEdit(p) && p.status !== 'archived' ? `<button class="btn-primary-sm" onclick="showQuickUpdate('${p.id}')">${ICON.bolt} Update</button>` : ''}
         ${canEdit(p) ? `<button class="btn-secondary-sm" onclick="showWeeklyLog('${p.id}')">Log</button>` : ''}
         ${canEdit(p) && !p.onboardedAt ? `<button class="btn-secondary-sm" style="color:var(--amber);border-color:var(--amber);" onclick="reOnboardProduct('${p.id}')">${ICON.warn} Onboard</button>` : ''}
         ${editBtn}
@@ -2353,6 +2353,10 @@ function renderProductCard(p) {
         ${getProductAccess(p) === 'owner' || currentRole === 'admin' ? `<button class="btn-secondary-sm" onclick="showHandoverModal('${p.id}')">Handover</button>` : ''}
         <button class="btn-secondary-sm" onclick="exportProjectTracker('${p.id}')">Export</button>
         <button class="btn-secondary-sm" onclick="showProductActivity('${p.id}')">Activity</button>
+        ${canEdit(p) ? (p.status === 'archived' 
+          ? `<button class="btn-secondary-sm" style="color:var(--green);border-color:var(--green);" onclick="unarchiveProduct('${p.id}')">Restore</button>`
+          : `<button class="btn-secondary-sm" style="color:var(--amber);border-color:var(--amber);" onclick="archiveProduct('${p.id}')">Archive</button>`)
+          : ''}
       </div>
     </div>`;
 }
@@ -9419,34 +9423,17 @@ async function renderSAAllTasks(el) {
     const snap = await get(ref(db, 'products'));
     const products = snap.val() || {};
     
-    // Group by the person who OWNS THE PROJECT, not by task assignee.
-    // The question this pane answers is "what is each project owner
-    // accountable for", so every task on a project rolls up to that
-    // project's owner regardless of who is doing the individual work.
-    const ownerMap = {};
+    // Group by the person who OWNS THE PROJECT
+    const byOwner = {};
 
     Object.values(products).forEach(prod => {
       if (prod.status === 'archived') return;
       const key = prod.ownerName || prod.createdBy || prod.ownerId || 'Unassigned';
-      if (!ownerMap[key]) ownerMap[key] = [];
-
-      const tasks = getProductTasks(prod);
-      if (tasks.length === 0) {
-        // Still surface the project so an owner with no tasks isn't invisible
-        ownerMap[key].push({ prod, task: null, emptyProject: true });
-        return;
-      }
-      tasks.forEach(t => {
-        const assignees = (t.owners && t.owners.length > 0) ? t.owners
-          : (t.owner ? [{ dept: t.ownerDept || '', email: t.ownerEmail || '', nameCache: t.owner }] : []);
-        const assignedTo = assignees.length
-          ? assignees.map(o => o.nameCache || o.dept || o.email).filter(Boolean).join(', ')
-          : 'Unassigned';
-        ownerMap[key].push({ prod, task: t, assignedTo });
-      });
+      if (!byOwner[key]) byOwner[key] = [];
+      byOwner[key].push(prod);
     });
 
-    const ownerKeys = Object.keys(ownerMap).sort();
+    const ownerKeys = Object.keys(byOwner).sort();
     
     if (ownerKeys.length === 0) {
       el.innerHTML = '<div class="muted" style="padding:24px;">No tasks found in the system.</div>';
@@ -9461,104 +9448,105 @@ async function renderSAAllTasks(el) {
     `;
 
     ownerKeys.forEach(ownerName => {
-      const items = ownerMap[ownerName];
-      const done = items.filter(i => resolveTaskStatus(i.task, i.prod) === 'complete').length;
-      const delayed = items.filter(i => ['overdue','delayed'].includes(resolveTaskStatus(i.task, i.prod))).length;
-      
-      // Task rows (hidden by default)
-      // Sub-bucket by project. A person owning four projects with 45 tasks
-      // is unreadable as a flat list — the project is the unit people think in.
-      const byProject = {};
-      items.forEach(i => {
-        const k = i.prod.id;
-        if (!byProject[k]) byProject[k] = { prod: i.prod, rows: [] };
-        byProject[k].rows.push(i);
+      const prods = byOwner[ownerName];
+      let totalTasks = 0;
+      let totalDone = 0;
+      let totalDelayed = 0;
+
+      prods.forEach(p => {
+        const tasks = getProductTasks(p);
+        totalTasks += tasks.length;
+        tasks.forEach(t => {
+          const st = resolveTaskStatus(t, p);
+          if (st === 'complete') totalDone++;
+          if (st === 'delayed' || st === 'overdue') totalDelayed++;
+        });
       });
 
-      const taskRows = Object.values(byProject).map(bucket => {
-        const bTasks   = bucket.rows.filter(r => r.task);
-        const bDone    = bTasks.filter(r => resolveTaskStatus(r.task, r.prod) === 'complete').length;
-        const bIssues  = bTasks.filter(r => ['overdue','delayed','blocked'].includes(resolveTaskStatus(r.task, r.prod))).length;
-        const isProj   = (bucket.prod.itemType || 'product') === 'project';
-
-        const header = `
-          <div style="display:flex;align-items:center;gap:8px;padding:9px 16px;background:#FAFAF9;border-top:1px solid var(--border);cursor:pointer;"
-               onclick="event.stopPropagation();openProjectDashboard('${bucket.prod.id}')">
-            <span style="font-size:12px;font-weight:700;color:var(--text);">${bucket.prod.name}</span>
-            <span style="font-size:8px;font-weight:700;color:${isProj ? '#2563EB' : '#C0282D'};background:${isProj ? '#EFF6FF' : '#FEF2F2'};padding:1px 6px;border-radius:7px;">${isProj ? 'PROJECT' : 'PRODUCT'}</span>
-            <span style="font-size:10px;color:var(--text-muted);">${bDone}/${bTasks.length} done</span>
-            ${bIssues > 0 ? `<span style="font-size:10px;font-weight:700;color:var(--red);">${bIssues} need action</span>` : ''}
-            <span style="margin-left:auto;font-size:10px;color:var(--text-muted);">open &rarr;</span>
-          </div>`;
-
-        return header + bucket.rows.map(i => {
-        // A project with no tasks yet still needs a row, otherwise its owner
-        // looks like they have nothing in flight.
-        if (!i.task) {
-          return `
-          <div style="display:flex;align-items:center;gap:10px;padding:8px 16px;border-top:1px solid #F3F3F2;">
-            <div style="flex:1;min-width:0;">
-              <div style="font-size:12px;font-weight:600;color:var(--text-muted);font-style:italic;">No tasks created yet</div>
-              <div style="font-size:10px;color:var(--text-muted);">${i.prod.name}</div>
-            </div>
-            <span style="font-size:9px;font-weight:700;color:#9CA3AF;background:#F3F4F6;padding:2px 7px;border-radius:8px;">EMPTY</span>
-          </div>`;
-        }
-        const eff = resolveTaskStatus(i.task, i.prod);
-        const m = STATUS_META[eff] || STATUS_META['on-track'];
-        return `
-          <div style="display:flex;align-items:center;gap:10px;padding:8px 16px;border-top:1px solid #F3F3F2;">
-            <div style="flex:1;min-width:0;">
-              <div style="font-size:12px;font-weight:600;color:var(--text);">${i.task.title || 'Untitled'}</div>
-              <div style="font-size:10px;color:var(--text-muted);">${i.prod.name} &nbsp;·&nbsp; <span style="color:#6B7280;">assigned to ${i.assignedTo || 'Unassigned'}</span></div>
-            </div>
-            <span style="font-size:11px;color:${m.color};">${i.task.deadline ? formatDate(i.task.deadline) : 'No date'}</span>
-            <span style="font-size:9px;font-weight:700;color:${m.color};background:${m.color}15;padding:2px 7px;border-radius:8px;">${m.label.toUpperCase()}</span>
-            <button onclick="saDeleteTask('${i.prod.id}', '${i.task.id}')" style="background:none;border:1px solid #FECACA;border-radius:6px;padding:4px 8px;font-size:10px;color:#C0282D;cursor:pointer;margin-left:8px;">Delete</button>
-          </div>
-        `;
-        }).join('');
-      }).join('');
+      const initials = ownerName.split(' ').map(n => n[0]).join('').substring(0, 2).toUpperCase();
 
       html += `
-        <details class="panel" style="margin:0;cursor:pointer;">
-          <summary style="padding:16px;display:flex;align-items:center;gap:12px;outline:none;list-style:none;">
-            <div style="width:32px;height:32px;border-radius:50%;background:#F0F0EE;color:#1A1A1A;font-size:12px;font-weight:700;display:flex;align-items:center;justify-content:center;">
-              ${ownerName[0].toUpperCase()}
+        <details style="background:#fff;border:1px solid var(--border);border-radius:12px;overflow:hidden;" open>
+          <summary style="padding:16px 20px;display:flex;align-items:center;gap:12px;cursor:pointer;background:#FAFAF9;list-style:none;user-select:none;outline:none;">
+            <div style="width:36px;height:36px;border-radius:50%;background:#F0F0EE;color:var(--text);font-size:12px;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0;">
+              ${initials}
             </div>
             <div style="flex:1;">
               <div style="font-size:14px;font-weight:700;color:var(--text);">${ownerName}</div>
-              <div style="font-size:11px;color:var(--text-muted);">${
-                (() => {
-                  const projects = [...new Set(items.map(i => i.prod.id))].length;
-                  const realTasks = items.filter(i => i.task).length;
-                  return projects + ' project' + (projects !== 1 ? 's' : '') +
-                         ' · ' + realTasks + ' task' + (realTasks !== 1 ? 's' : '');
-                })()
-              }</div>
+              <div style="font-size:11px;color:var(--text-muted);">${prods.length} project${prods.length !== 1 ? 's' : ''} · ${totalTasks} tasks</div>
             </div>
-            <div style="display:flex;gap:12px;text-align:right;">
+            <div style="display:flex;gap:12px;font-size:12px;font-weight:600;margin-right:8px;text-align:right;">
               <div>
-                <div style="font-size:14px;font-weight:700;color:var(--green);">${done}</div>
+                <div style="font-size:14px;font-weight:700;color:var(--green);">${totalDone}</div>
                 <div style="font-size:9px;text-transform:uppercase;color:var(--text-muted);">Done</div>
               </div>
               <div>
-                <div style="font-size:14px;font-weight:700;color:${delayed > 0 ? 'var(--red)' : 'var(--text)'};">${delayed}</div>
+                <div style="font-size:14px;font-weight:700;color:${totalDelayed > 0 ? 'var(--red)' : 'var(--text)'};">${totalDelayed}</div>
                 <div style="font-size:9px;text-transform:uppercase;color:var(--text-muted);">Delayed</div>
               </div>
             </div>
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-left:8px;color:var(--text-muted);"><path d="M6 9l6 6 6-6"/></svg>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="color:var(--text-muted);"><path d="M6 9l6 6 6-6"/></svg>
           </summary>
-          <div style="background:#FAFAF9;border-top:1px solid var(--border);padding-bottom:8px;">
-            ${taskRows}
+          
+          <div style="padding:12px 16px;border-top:1px solid var(--border);display:flex;flex-direction:column;gap:10px;background:#F8F8F7;">
+            ${prods.map(p => {
+              const tasks = getProductTasks(p);
+              const pDone = tasks.filter(t => resolveTaskStatus(t, p) === 'complete').length;
+              const pDelayed = tasks.filter(t => ['delayed','overdue'].includes(resolveTaskStatus(t, p))).length;
+              
+              return `
+                <details style="border:1px solid var(--border);border-radius:8px;background:#fff;overflow:hidden;">
+                  <summary style="padding:10px 14px;display:flex;align-items:center;justify-content:space-between;cursor:pointer;background:#fff;font-size:12px;user-select:none;outline:none;">
+                    <div style="display:flex;align-items:center;gap:8px;">
+                      <span style="font-weight:700;color:var(--text);">${p.name}</span>
+                      <span style="font-size:9px;font-weight:700;color:${(p.itemType||'product')==='project'?'#2563EB':'#C0282D'};background:${(p.itemType||'product')==='project'?'#EFF6FF':'#FEF2F2'};padding:1px 6px;border-radius:6px;">
+                        ${(p.itemType || 'product').toUpperCase()}
+                      </span>
+                      <span style="color:var(--text-muted);font-size:11px;">${pDone}/${tasks.length} done</span>
+                      ${pDelayed > 0 ? `<span style="color:var(--red);font-weight:600;font-size:11px;">${pDelayed} need action</span>` : ''}
+                    </div>
+                    <div style="display:flex;align-items:center;gap:8px;">
+                      <span style="margin-left:auto;font-size:10px;color:var(--text-muted);margin-right:8px;">open &rarr;</span>
+                      <button class="btn-danger-xs" onclick="event.stopPropagation();saDeleteProject('${p.id}', '${p.name.replace(/'/g, "\\'")}')" title="Delete Entire Project">
+                        Delete
+                      </button>
+                    </div>
+                  </summary>
+
+                  <div style="padding:8px 12px;display:flex;flex-direction:column;gap:6px;background:#FAFAF9;border-top:1px solid #F3F3F2;">
+                    ${tasks.length === 0 ? '<div style="font-size:11px;color:var(--text-muted);padding:6px 0;">No tasks in this project.</div>' : ''}
+                    ${tasks.map(t => {
+                      const eff = resolveTaskStatus(t, p);
+                      const m = STATUS_META[eff] || STATUS_META['on-track'];
+                      const due = t.deadline ? formatDate(t.deadline) : 'No date';
+                      const assignees = (t.owners && t.owners.length > 0) ? t.owners
+                                    : (t.owner ? [{ dept: t.ownerDept || '', email: t.ownerEmail || '', nameCache: t.owner }] : []);
+                      const owner = assignees.length ? assignees.map(o => o.nameCache || o.dept || o.email).filter(Boolean).join(', ') : 'Unassigned';
+
+                      return `
+                        <div style="display:flex;align-items:center;justify-content:space-between;padding:6px 8px;border-bottom:1px solid #F3F3F2;font-size:11px;">
+                          <div style="flex:1;min-width:0;padding-right:12px;">
+                            <div style="font-weight:600;color:var(--text);">${t.title || t.name || 'Untitled'}</div>
+                            <div style="color:var(--text-muted);font-size:10px;">Assigned to: ${owner}</div>
+                          </div>
+                          <div style="display:flex;align-items:center;gap:10px;flex-shrink:0;">
+                            <span style="color:var(--text-muted);">${due}</span>
+                            <span style="font-size:9px;font-weight:700;color:${m.color};background:${m.color}15;padding:2px 6px;border-radius:6px;">
+                              ${m.label.toUpperCase()}
+                            </span>
+                            <button class="btn-danger-xs" onclick="saDeleteTask('${p.id}', '${t.id}')">Delete</button>
+                          </div>
+                        </div>`;
+                    }).join('')}
+                  </div>
+                </details>`;
+            }).join('')}
           </div>
-        </details>
-      `;
+        </details>`;
     });
 
     html += '</div>';
     el.innerHTML = html;
-
   } catch(e) {
     el.innerHTML = `<div class="muted" style="padding:24px;">Error loading tasks: ${e.message}</div>`;
   }
@@ -10494,6 +10482,18 @@ window.archiveProduct = async (productId) => {
     showToast('Failed to archive: ' + e.message, 'error');
   }
 };
+  window.unarchiveProduct = async (productId) => {
+  if (!confirm('Restore this item?\n\nIt will move back to your active dashboard and tracking views.')) return;
+  
+  try {
+    await set(ref(db, 'products/' + productId + '/status'), 'active');
+    showToast('Item restored to active', 'success');
+    loadProductList();
+    if (typeof loadDashboardStats === 'function') loadDashboardStats();
+  } catch (e) {
+    showToast('Failed to restore: ' + e.message, 'error');
+  }
+};
 
 window.saDeleteProject = async (productId, productName) => {
   if (!confirm(`EXTREME DANGER: You are about to permanently delete the entire "${productName}" project.\n\nThis will instantly wipe the product, all its tasks, all comments, and all email logs from the database.\n\nThis CANNOT be undone.\n\nAre you absolutely sure?`)) return;
@@ -10522,22 +10522,55 @@ window.saDeleteProject = async (productId, productName) => {
 };
 
 window.saDeleteTask = async (productId, taskId) => {
-  if (!confirm("SUPER ADMIN OVERRIDE: Are you absolutely sure you want to permanently delete this task across the entire system?")) return;
+  if (!confirm("SUPER ADMIN OVERRIDE: Are you sure you want to permanently delete this task across the system?")) return;
   try {
-    const prod = productListCache[productId] || (window._dashRawProducts ? window._dashRawProducts[productId] : null);
-    const isNewFormat = !!prod?.tasks?.[taskId];
-    const path = isNewFormat ? 'tasks/' + taskId : 'pillars/' + taskId;
+    // Direct multi-path wipe to guarantee removal regardless of legacy/new schema format
+    await Promise.all([
+      set(ref(db, `products/${productId}/tasks/${taskId}`), null),
+      set(ref(db, `products/${productId}/pillars/${taskId}`), null)
+    ]);
     
-    await set(ref(db, 'products/' + productId + '/' + path), null);
+    // Wipe local cache entries if present
+    if (productListCache[productId]?.tasks?.[taskId]) delete productListCache[productId].tasks[taskId];
+    if (productListCache[productId]?.pillars?.[taskId]) delete productListCache[productId].pillars[taskId];
+
     showToast("Task permanently deleted", "success");
-    
-    // FIX: Force the Circuit Box to re-render the list so the row actually disappears
-    const activeTab = document.querySelector('.sa-tab.active');
-    if (typeof switchSATab === 'function' && activeTab) {
-       switchSATab('tasks', activeTab);
+
+    // Force UI refresh of the Circuit Box All Tasks tab
+    const container = document.getElementById('sa-tab-content');
+    if (container && typeof renderSATasksTab === 'function') {
+      renderSATasksTab(container);
+    } else if (currentView === 'superadmin') {
+      loadView('superadmin');
     }
   } catch(e) {
     showToast("Delete failed: " + e.message, "error");
+  }
+};
+
+window.saDeleteProject = async (productId, productName) => {
+  if (!confirm(`EXTREME DANGER: Permanently delete "${productName}"?\n\nThis will wipe the product, tasks, comments, and email logs.\n\nThis CANNOT be undone.`)) return;
+  
+  showToast('Wiping project...', 'info');
+  try {
+    await Promise.all([
+      set(ref(db, `products/${productId}`), null),
+      set(ref(db, `emailLog/${productId}`), null),
+      set(ref(db, `comments/${productId}`), null),
+      set(ref(db, `config/projectSheets/${productId}`), null)
+    ]);
+
+    delete productListCache[productId];
+    showToast('Project permanently deleted', 'success');
+
+    const container = document.getElementById('sa-tab-content');
+    if (container && typeof renderSATasksTab === 'function') {
+      renderSATasksTab(container);
+    } else {
+      loadView('superadmin');
+    }
+  } catch(e) {
+    showToast('Wipe failed: ' + e.message, 'error');
   }
 };
 // Register all real functions with the global dispatcher
