@@ -2882,7 +2882,7 @@ function getTaskVisibility(task) {
   return (v === 'public' || v === 'department' || v === 'restricted') ? (v === 'restricted' ? 'department' : v) : 'private';
 }
 
-function taskOwnerList(task) {
+ffunction taskOwnerList(task) {
   if (task.owners && task.owners.length > 0) return task.owners;
   if (task.owner || task.ownerEmail) {
     return [{ dept: task.ownerDept || '', email: task.ownerEmail || '', nameCache: task.owner || '' }];
@@ -2891,21 +2891,6 @@ function taskOwnerList(task) {
 }
 
 function canViewTask(task, prod) {
-  if (!currentUser) return false;
-  
-  const userKey = sanitiseEmail(currentUser.email);
-  const myEmail = (currentUser.email || '').toLowerCase();
-  const myDept  = (currentUserDept || '').toLowerCase();
-
-  // 1. Check if the user is explicitly assigned to this task
-  const owners = taskOwnerList(task);
-  const isTaskOwner = owners.some(o => {
-    if (o.email && o.email.toLowerCase() === myEmail) return true;
-    if (o.dept && myDept && o.dept.toLowerCase() === myDept) return true;
-    return false;
-  });
-
-  function canViewTask(task, prod) {
   if (!currentUser) return false;
   
   const userKey = sanitiseEmail(currentUser.email);
