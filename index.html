@@ -3271,36 +3271,38 @@ async function loadProjectDashboard(productId) {
                 .sort((a, b) => b[1].length - a[1].length)
                 .map(([dept, list]) => buildPdDeptBlock(dept, list, today, p))
                 .join('')) +
-        '</div>';
-    });
-    
-    // Register the listener so it safely unmounts when you change pages
-    registerListener('project_dash', unsub);
+            '</div>';
 
-    // Architectural Fix: In-Memory SVG Compilation (Bypasses DOM Corruption)
-    if (dependencyMapSyntax) {
-      setTimeout(() => {
-        if (window.mermaid) {
-          try {
-            const container = document.getElementById('mermaid-container-' + productId);
-            if (container) {
-              const safeId = 'mermaid-svg-' + Date.now();
-              mermaid.render(safeId, dependencyMapSyntax, (svgCode) => {
-                container.innerHTML = svgCode;
-              });
-            }
-          } catch(e) { 
-            console.warn('Mermaid engine failed:', e);
-            const container = document.getElementById('mermaid-container-' + productId);
-            if (container) container.innerHTML = '<div style="color:var(--red);font-size:12px;">Map engine encountered a syntax error.</div>';
+          // --- MERMAID RENDERER: NOW SAFELY INSIDE THE LIVE LISTENER ---
+          if (dependencyMapSyntax) {
+            setTimeout(() => {
+              if (window.mermaid) {
+                try {
+                  const container = document.getElementById('mermaid-container-' + productId);
+                  if (container) {
+                    const safeId = 'mermaid-svg-' + Date.now();
+                    mermaid.render(safeId, dependencyMapSyntax, (svgCode) => {
+                      container.innerHTML = svgCode;
+                    });
+                  }
+                } catch(e) { 
+                  console.warn('Mermaid engine failed:', e);
+                  const container = document.getElementById('mermaid-container-' + productId);
+                  if (container) container.innerHTML = '<div style="color:var(--red);font-size:12px;">Map engine encountered a syntax error.</div>';
+                }
+              }
+            }, 50);
           }
-        }
-      }, 50);
-    }
-  } catch(e) {
-    console.warn('loadProjectDashboard failed:', e);
-    body.innerHTML = '<div class="loading-row muted" style="padding:24px;">Could not load this item.</div>';
-  }
+
+        }); // <--- END OF THE FIREBASE LIVE LISTENER
+
+        // Register the listener so it safely unmounts when you change pages
+        registerListener('project_dash', unsub);
+        
+      } catch(e) {
+        console.warn('loadProjectDashboard failed:', e);
+        body.innerHTML = '<div class="loading-row muted" style="padding:24px;">Could not load this item.</div>';
+      }
 }
 
 function buildPdBudget(p) {
