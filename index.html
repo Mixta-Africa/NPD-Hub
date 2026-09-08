@@ -2882,7 +2882,7 @@ function getTaskVisibility(task) {
   return (v === 'public' || v === 'department' || v === 'restricted') ? (v === 'restricted' ? 'department' : v) : 'private';
 }
 
-ffunction taskOwnerList(task) {
+function taskOwnerList(task) {
   if (task.owners && task.owners.length > 0) return task.owners;
   if (task.owner || task.ownerEmail) {
     return [{ dept: task.ownerDept || '', email: task.ownerEmail || '', nameCache: task.owner || '' }];
