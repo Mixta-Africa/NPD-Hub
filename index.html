@@ -3148,6 +3148,7 @@ async function loadProjectDashboard(productId) {
       const launch  = p.launchDate ? new Date(p.launchDate) : null;
       if (launch) launch.setHours(0,0,0,0);
       const days = launch ? Math.round((launch - today) / 86400000) : null;
+      const dependencyMapSyntax = generateDependencyMap(tasks, p);
       // --- SMART FORECAST ---
       const forecast = computeProjectPrediction(p);
       let forecastHtml = '';
@@ -3241,23 +3242,19 @@ async function loadProjectDashboard(productId) {
           statCard('Needs action', delayed,     delayed > 0 ? 'var(--red)' : 'var(--green)') +
         '</div>' +
         
-        // --- INJECT DEPENDENCY MAP ---
-        (function() {
-          const mapSyntax = generateDependencyMap(tasks, p);
-          if (!mapSyntax) return '';
-          return `
-            <div class="panel" style="margin-bottom:16px;">
-              <div class="panel-header">
-                <span class="panel-title">Dependency Map</span>
-                <span style="font-size:11px;color:var(--text-muted);">Visualizes critical paths and task relationships</span>
+       // --- INJECT DEPENDENCY MAP ---
+        (dependencyMapSyntax ? `
+          <div class="panel" style="margin-bottom:16px;">
+            <div class="panel-header">
+              <span class="panel-title">Dependency Map</span>
+              <span style="font-size:11px;color:var(--text-muted);">Visualizes critical paths and task relationships</span>
+            </div>
+            <div class="panel-body" style="overflow:auto; max-height:280px; background:#FAFAF9; border-radius:8px;">
+              <div id="mermaid-container-${p.id}" style="text-align:center; padding:24px; font-size:12px; color:var(--text-muted);">
+                <span class="spinner-sm"></span> Drawing map...
               </div>
-              <div class="panel-body" style="overflow:auto; max-height:280px; background:#FAFAF9; border-radius:8px;">
-                <div class="mermaid" id="mermaid-${p.id}" style="text-align:center;">
-                  ${mapSyntax}
-                </div>
-              </div>
-            </div>`;
-        })() +
+            </div>
+          </div>` : '') +
 
         ((isProject && canViewBudget(p) && (p.budget || p.spend)) ? buildPdBudget(p) : '') +
 
@@ -3278,20 +3275,26 @@ async function loadProjectDashboard(productId) {
     // Register the listener so it safely unmounts when you change pages
     registerListener('project_dash', unsub);
 
-    // Force Mermaid to render the SVG flowcharts safely
-    setTimeout(() => {
-      if (window.mermaid) {
-        try {
-          const mDiv = document.getElementById('mermaid-' + productId);
-          if (mDiv) {
-            // Remove the processed lock so it can redraw on live updates
-            mDiv.removeAttribute('data-processed');
-            // FIX: Mermaid requires a NodeList, not a single HTML element
-            mermaid.init(undefined, document.querySelectorAll('#mermaid-' + productId));
+    // Architectural Fix: In-Memory SVG Compilation (Bypasses DOM Corruption)
+    if (dependencyMapSyntax) {
+      setTimeout(() => {
+        if (window.mermaid) {
+          try {
+            const container = document.getElementById('mermaid-container-' + productId);
+            if (container) {
+              const safeId = 'mermaid-svg-' + Date.now();
+              mermaid.render(safeId, dependencyMapSyntax, (svgCode) => {
+                container.innerHTML = svgCode;
+              });
+            }
+          } catch(e) { 
+            console.warn('Mermaid engine failed:', e);
+            const container = document.getElementById('mermaid-container-' + productId);
+            if (container) container.innerHTML = '<div style="color:var(--red);font-size:12px;">Map engine encountered a syntax error.</div>';
           }
-        } catch(e) { console.warn('Mermaid render failed:', e); }
-      }
-    }, 150);
+        }
+      }, 50);
+    }
   } catch(e) {
     console.warn('loadProjectDashboard failed:', e);
     body.innerHTML = '<div class="loading-row muted" style="padding:24px;">Could not load this item.</div>';
