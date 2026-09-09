@@ -3539,6 +3539,16 @@ window.exportProjectTracker = async (productId) => {
     };
   });
 
+  // --- NEW: Gather authorized emails for Google Sheets access ---
+  const authEmails = new Set();
+  if (currentUser && currentUser.email) authEmails.add(currentUser.email);
+  if (p.ownerId && TEAM_MEMBERS[p.ownerId]?.email) authEmails.add(TEAM_MEMBERS[p.ownerId].email);
+  if (p.sharedWith) {
+    Object.keys(p.sharedWith).forEach(k => {
+      if (TEAM_MEMBERS[k]?.email) authEmails.add(TEAM_MEMBERS[k].email);
+    });
+  }
+
   showToast('Building tracker…', 'info');
   try {
     const res = await callGAS('exportProjectTracker', {
@@ -3547,6 +3557,7 @@ window.exportProjectTracker = async (productId) => {
       ownerName:   p.ownerName || '',
       launchDate:  p.launchDate ? formatDate(p.launchDate) : '',
       generatedBy: currentPreferredName || currentUser.displayName || currentUser.email,
+      authorizedEmails: Array.from(authEmails), // <-- Injected into backend payload
       tasks:       rows,
     });
     if (!res.ok) { showToast('Export failed: ' + (res.error || 'unknown'), 'error'); return; }
@@ -3602,15 +3613,46 @@ async function pushSheetIfLinked(productId) {
   try {
     const snap = await get(ref(db, 'config/projectSheets/' + productId));
     if (!snap.exists()) return;          // no sheet yet — nothing to keep in step
-    await callGAS('syncProjectToSheet', { productId });
+    
+    const p = productListCache[productId];
+    if (!p) return;
+
+    const authEmails = new Set();
+    if (currentUser && currentUser.email) authEmails.add(currentUser.email);
+    if (p.ownerId && TEAM_MEMBERS[p.ownerId]?.email) authEmails.add(TEAM_MEMBERS[p.ownerId].email);
+    if (p.sharedWith) {
+      Object.keys(p.sharedWith).forEach(k => {
+        if (TEAM_MEMBERS[k]?.email) authEmails.add(TEAM_MEMBERS[k].email);
+      });
+    }
+
+    await callGAS('syncProjectToSheet', { 
+      productId,
+      authorizedEmails: Array.from(authEmails) 
+    });
   } catch(e) { console.warn('background sheet push skipped:', e); }
 }
 
 window.syncProjectSheet = async (productId) => {
   const p = productListCache[productId];
+  if (!p) return;
+  
   showToast('Syncing to Google Sheets…', 'info');
+
+  const authEmails = new Set();
+  if (currentUser && currentUser.email) authEmails.add(currentUser.email);
+  if (p.ownerId && TEAM_MEMBERS[p.ownerId]?.email) authEmails.add(TEAM_MEMBERS[p.ownerId].email);
+  if (p.sharedWith) {
+    Object.keys(p.sharedWith).forEach(k => {
+      if (TEAM_MEMBERS[k]?.email) authEmails.add(TEAM_MEMBERS[k].email);
+    });
+  }
+
   try {
-    const res = await callGAS('syncProjectToSheet', { productId });
+    const res = await callGAS('syncProjectToSheet', { 
+      productId,
+      authorizedEmails: Array.from(authEmails)
+    });
     if (!res.ok) { showToast('Sync failed: ' + (res.error || 'unknown'), 'error'); return; }
     showSheetSyncResult(p ? p.name : 'Item', res);
   } catch(e) {
