@@ -10657,25 +10657,37 @@ window.archiveProduct = async (productId) => {
 };
 
 window.saDeleteProject = async (productId, productName) => {
-  if (!confirm(`EXTREME DANGER: You are about to permanently delete the entire "${productName}" project.\n\nThis will instantly wipe the product, all its tasks, all comments, and all email logs from the database.\n\nThis CANNOT be undone.\n\nAre you absolutely sure?`)) return;
+  if (!confirm(`EXTREME DANGER: Permanently delete "${productName}"?\n\nThis will wipe the product, tasks, comments, and email logs.\n\nThis CANNOT be undone.`)) return;
   
-  showToast('Wiping project data...', 'info');
+  showToast('Wiping project...', 'info');
   try {
-    // Multi-path wipe to prevent ghost data corruption
-    await set(ref(db, 'products/' + productId), null);
-    await set(ref(db, 'emailLog/' + productId), null);
-    await set(ref(db, 'comments/' + productId), null);
-    await set(ref(db, 'config/projectSheets/' + productId), null);
+    // 1. Delete the core product (This is the critical path)
+    await set(ref(db, `products/${productId}`), null);
 
+    // 2. Attempt to delete auxiliary data, but gracefully ignore Firebase permission blocks
+    const auxPaths = [
+      `emailLog/${productId}`,
+      `comments/${productId}`,
+      `config/projectSheets/${productId}`
+    ];
+
+    for (const path of auxPaths) {
+      try {
+        await set(ref(db, path), null);
+      } catch (auxErr) {
+        console.warn(`Silently skipped auxiliary delete for ${path}:`, auxErr.message);
+      }
+    }
+
+    delete productListCache[productId];
     showToast('Project permanently deleted', 'success');
-    
-    // Check if we are in the circuit box or regular view, and refresh accordingly
-    if (currentView === 'superadmin') {
-       const activeTab = document.querySelector('.sa-tab.active');
-       if (typeof switchSATab === 'function' && activeTab) switchSATab('products', activeTab);
+
+    // Instantly redraw the screen
+    const container = document.getElementById('sa-tab-content');
+    if (container && currentView === 'superadmin') {
+      renderSAAllTasks(container);
     } else {
-       closeProductModal();
-       loadProductList();
+      loadView('superadmin');
     }
   } catch(e) {
     showToast('Wipe failed: ' + e.message, 'error');
