@@ -4218,38 +4218,6 @@ window.updateAddIndividuals = (taskId) => {
   const sel  = document.getElementById('add-ind-' + taskId);
   if (sel) sel.innerHTML = buildOwnerIndividualOptions(dept, '');
 };
-    // --- NEW: RECURRING TASKS CLONE ENGINE ---
-    if (newStatus === 'complete') {
-      const tObj = tasks.find(t => t.id === taskId);
-      if (tObj && tObj.recurrence && tObj.recurrence !== 'none') {
-        const clonedTaskObj = JSON.parse(JSON.stringify(tObj));
-        clonedTaskObj.id = generateTaskId();
-        clonedTaskObj.status = 'on-track';
-        clonedTaskObj.acknowledgement = null;
-        
-        // Advance the deadline based on the interval
-        if (clonedTaskObj.deadline) {
-          const d = new Date(clonedTaskObj.deadline);
-          if (clonedTaskObj.recurrence === 'weekly') d.setDate(d.getDate() + 7);
-          else if (clonedTaskObj.recurrence === 'monthly') d.setMonth(d.getMonth() + 1);
-          else if (clonedTaskObj.recurrence === 'quarterly') d.setMonth(d.getMonth() + 3);
-          clonedTaskObj.deadline = d.toISOString().split('T')[0];
-        }
-        
-        // Save the clone to Firebase
-        const pathBase = prod?.tasks?.[taskId] ? 'tasks' : 'pillars';
-        await set(ref(db, `products/${productId}/${pathBase}/${clonedTaskObj.id}`), clonedTaskObj);
-        
-        // Inject into local cache
-        if (prod[pathBase]) prod[pathBase][clonedTaskObj.id] = clonedTaskObj;
-        tasks.push(clonedTaskObj); // Add to current array so UI updates
-        
-        showToast(`Next ${clonedTaskObj.recurrence} occurrence scheduled.`, 'success');
-        await logActivity(productId, 'created', `Recurring task scheduled: ${clonedTaskObj.title}`, `Next deadline: ${formatDate(clonedTaskObj.deadline)}`, clonedTaskObj.id);
-      }
-    }
-
-    // --- NEW: UNBLOCK DETECTOR ---
 
 window.addTaskOwner = (taskId) => {
   const t = _editingTasks.find(x => x.id === taskId);
@@ -4388,7 +4356,7 @@ function buildEditProductForm(p) {
         ? `<input type="date" id="f-task-${t.id}" class="input-field pillar-date-input" value="${t.deadline||''}"/>`
         : `<span class="pill pill-grey" style="font-size:11px;">${t.deadline ? formatDate(t.deadline) : 'No date'}</span>`
       }
-      <button onclick="showTaskHistory('${p.id}', '${t.id}')" style="background:none;border:none;cursor:pointer;margin-left:8px;font-size:15px;opacity:0.6;vertical-align:middle;" title="View Task History">🕒</button>
+      <button onclick="showTaskHistory('${p.id}', '${t.id}')" style="background:none;border:none;cursor:pointer;margin-left:8px;font-size:15px;opacity:0.6;vertical-align:middle;" title="View Task History"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg></button>
     </div>`;
   }).join('');
 
@@ -4779,7 +4747,7 @@ window.saveProduct = async (existingId) => {
         for (const change of dateChanges) {
           const oldText = change.oldD ? formatDate(change.oldD) : 'No date';
           const newText = change.newD ? formatDate(change.newD) : 'No date';
-          await logActivity(existingId, 'date_change', `Deadline changed: ${change.name}`, `${oldText} ➔ ${newText}`, change.id);
+          await logActivity(existingId, 'date_change', `Deadline changed: ${change.name}`, `${oldText} -> ${newText}`, change.id);
         }
       }
       
