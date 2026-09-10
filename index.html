@@ -1406,7 +1406,7 @@ function getTaskEffectiveStatus(task, prod) {
     const allTasks = getProductTasks(prod);
     const isBlocked = task.predecessors.some(pid => {
       const pred = allTasks.find(t => t.id === pid);
-      return pred && pred.status !== 'complete';
+      return pred && pred.status !== 'complete' && pred.taskStatus !== 'complete';
     });
     if (isBlocked) return 'blocked';
   }
@@ -1759,7 +1759,7 @@ async function loadWorkload() {
         const eff      = resolveTaskStatus(task);
         const isBlocked = (task.predecessors || []).some(pid => {
           const pred = taskMap[pid];
-          return pred && pred.status !== 'complete';
+          return pred && pred.status !== 'complete' && pred.taskStatus !== 'complete';
         });
         // Only include tasks due within horizon or already overdue/delayed/blocked
         const dueDate = task.deadline ? new Date(task.deadline) : null;
@@ -2037,7 +2037,7 @@ async function loadMyActions() {
         // Check if blocked by predecessor
         const blockedBy = (task.predecessors || []).filter(pid => {
           const pred = allTasksMap[pid];
-          return pred && pred.status !== 'complete';
+          return pred && pred.status !== 'complete' && pred.taskStatus !== 'complete';
         });
         const isBlocked = blockedBy.length > 0;
 
@@ -2357,7 +2357,6 @@ function renderProductCard(p) {
         <button class="btn-secondary-sm" onclick="openProjectDashboard('${p.id}')">Dashboard</button>
         <button class="btn-secondary-sm" onclick="viewProduct('${p.id}')">Tasks</button>
         ${canEdit(p) && p.status !== 'archived' ? `<button class="btn-primary-sm" onclick="showQuickUpdate('${p.id}')">${ICON.bolt} Update</button>` : ''}
-        ${canEdit(p) ? `<button class="btn-secondary-sm" onclick="showWeeklyLog('${p.id}')">Log</button>` : ''}
         ${canEdit(p) && !p.onboardedAt ? `<button class="btn-secondary-sm" style="color:var(--amber);border-color:var(--amber);" onclick="reOnboardProduct('${p.id}')">${ICON.warn} Onboard</button>` : ''}
         ${editBtn}
         ${canEdit(p) ? `<button class="btn-secondary-sm" onclick="convertItemType('${p.id}','${p.itemType||'product'}')" style="font-size:10px;" title="Switch between Product and Project"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:middle;margin-right:3px;"><path d="M17 1l4 4-4 4"/><path d="M3 11V9a4 4 0 014-4h14"/><path d="M7 23l-4-4 4-4"/><path d="M21 13v2a4 4 0 01-4 4H3"/></svg>${(p.itemType||'product')==='project'?'To Product':'To Project'}</button>` : ''}
@@ -4761,6 +4760,13 @@ window.saveProduct = async (existingId) => {
       if (oldProd.launchDate !== launchDate) diffs.push(`Launch: ${formatDate(oldProd.launchDate)} ➔ ${formatDate(launchDate)}`);
       
       if (diffs.length > 0) {
+        // Diff the core changes so we don't spam the activity log
+      const oldProd = productListCache[existingId] || {};
+      const diffs = [];
+      if (oldProd.name !== name) diffs.push(`Name changed`);
+      if (oldProd.launchDate !== launchDate) diffs.push(`Launch: ${formatDate(oldProd.launchDate)} ➔ ${formatDate(launchDate)}`);
+      
+      if (diffs.length > 0) {
         await logActivity(existingId, 'status', `Product details updated`, diffs.join(' · '));
       }
       
@@ -5163,7 +5169,7 @@ function buildPillarDetail(p) {
     // Blocked if any incomplete predecessor exists
     const blockedBy = (task.predecessors || []).filter(pid => {
       const pred = taskMap[pid];
-      return pred && pred.status !== 'complete';
+      return pred && pred.status !== 'complete' && pred.taskStatus !== 'complete';
     });
     const isBlocked = blockedBy.length > 0;
     const blockedNames = blockedBy.map(pid => taskMap[pid]?.title || 'a predecessor task');
@@ -6344,7 +6350,7 @@ function renderTrackerTable(prod, filter) {
     // Blocked by incomplete predecessors safely handled
     const blockedBy  = (pl.predecessors || []).filter(pid => {
       const dep = allTasks.find(t => t.id === pid);
-      return dep && dep.status !== 'complete';
+      return dep && dep.status !== 'complete' && dep.taskStatus !== 'complete';
     });
     const isBlocked  = blockedBy.length > 0;
     const blockedLabel = isBlocked
@@ -6489,7 +6495,7 @@ window.updatePillarStatus = async (productId, taskId, newStatus) => {
       const task    = tasks.find(t => t.id === taskId);
       const blocked = (task?.predecessors || []).filter(pid => {
         const dep = tasks.find(t => t.id === pid);
-        return dep && dep.status !== 'complete';
+        return dep && dep.status !== 'complete' && dep.taskStatus !== 'complete';
       });
       if (blocked.length > 0) {
         const names = blocked.map(pid => tasks.find(t => t.id === pid)?.title || pid).join(', ');
@@ -9231,7 +9237,7 @@ function renderKanban(prod) {
       const isLocked = locked && !isSuperAdmin && currentRole !== 'admin';
       const blocked  = (t.predecessors||[]).some(pid => {
         const dep = tasks.find(x => x.id === pid);
-        return dep && dep.status !== 'complete';
+        return dep && dep.status !== 'complete' && dep.taskStatus !== 'complete';
       });
       const deadlineChip = t.deadline
         ? (() => {
@@ -9422,7 +9428,7 @@ function renderTrackerGantt(prod) {
 
     const blocked    = (t.predecessors||[]).some(pid => {
       const dep = tasks.find(x => x.id === pid);
-      return dep && dep.status !== 'complete';
+      return dep && dep.status !== 'complete' && dep.taskStatus !== 'complete';
     });
 
     const barCls = t.status === 'complete' ? 'tg-bar-complete'
@@ -9835,7 +9841,7 @@ window.saDeleteTask = async (productId, taskId) => {
 
 async function logActivity(productId, type, message, detail, taskId = null) {
   try {
-    const eventId = 'evt_' + Date.now();
+    const eventId = 'evt_' + Date.now() + '_' + Math.random().toString(36).substr(2, 5);
     const payload = {
       id:         eventId,
       type,      // 'status' | 'note' | 'task_added' | 'handover' | 'document' | 'created' | 'baseline'
@@ -9929,6 +9935,7 @@ window.showProductActivity = async (productId) => {
     .sort((a, b) => b.timestamp - a.timestamp)
     .slice(0, 100);
 
+  // Expanded icon and color dictionaries
   const typeIcon = { 
     status: ICON.refresh, note: ICON.note, task_added: ICON.plus, handover: ICON.handshake,
     document: ICON.paperclip, created: ICON.rocket, baseline: ICON.calendar,
@@ -9945,12 +9952,21 @@ window.showProductActivity = async (productId) => {
     const dt = new Date(e.timestamp);
     const timeStr = dt.toLocaleDateString('en-GB', { day:'numeric', month:'short' }) +
                     ' ' + dt.toLocaleTimeString('en-GB', { hour:'2-digit', minute:'2-digit' });
-    return `<div class="activity-row">
+    
+    // Only Super Admins get the delete button
+    const deleteBtn = isSuperAdmin 
+      ? `<button onclick="saDeleteActivity('${productId}', '${e.id}')" style="background:none;border:none;color:var(--red);font-size:10px;cursor:pointer;opacity:0.6;margin-left:auto;" title="Super Admin Override: Delete Log">Delete</button>` 
+      : '';
+
+    return `<div class="activity-row" id="act-row-${e.id}">
       <div class="activity-icon" style="color:${typeColor[e.type]||'var(--text-muted)'}">
         ${typeIcon[e.type] || ''}
       </div>
       <div class="activity-body">
-        <div class="activity-msg">${e.message}</div>
+        <div class="activity-msg" style="display:flex;align-items:center;">
+          <span>${e.message}</span>
+          ${deleteBtn}
+        </div>
         ${e.detail ? `<div class="activity-detail">${e.detail}</div>` : ''}
         <div class="activity-meta">${e.userName} · ${timeStr}</div>
       </div>
@@ -9959,9 +9975,63 @@ window.showProductActivity = async (productId) => {
 
   document.getElementById('modal-body-content').innerHTML = `
     <div class="activity-feed">${rows}</div>
-    <div class="form-actions">
+    <div class="form-actions" style="display:flex; justify-content:space-between; width:100%;">
+      <button class="btn-primary" onclick="exportActivityLogPDF('${productId}')">Export as PDF</button>
       <button class="btn-outline" onclick="closeProductModal()">Close</button>
     </div>`;
+};
+
+/* ══ PDF EXPORT & SUPER ADMIN DELETE FUNCTIONS ═════════════════ */
+window.exportActivityLogPDF = async (productId) => {
+  const prod = productListCache[productId] || trackerProductsCache[productId];
+  if (!prod) return;
+  
+  showToast('Generating PDF...', 'info');
+  try {
+    const snap = await get(ref(db, `products/${productId}/activity`));
+    const activity = snap.val() || {};
+    const events = Object.values(activity).sort((a, b) => b.timestamp - a.timestamp);
+    
+    let html = '<!DOCTYPE html><html><head><title>Activity Log - ' + prod.name + '</title>';
+    html += '<style>body{font-family:Helvetica,Arial,sans-serif;padding:40px;color:#1A1A1A;} .header{border-bottom:2px solid #C0282D;padding-bottom:10px;margin-bottom:20px;} .row{padding:12px 0;border-bottom:1px solid #E5E4E0;} .time{color:#6B7280;font-size:12px;margin-bottom:4px;} .msg{font-size:14px;font-weight:600;margin-bottom:4px;} .det{font-size:13px;color:#4B5563;}</style></head><body>';
+    html += '<div class="header"><h2 style="margin:0;">Activity Log: ' + prod.name + '</h2><p style="color:#6B7280;font-size:13px;margin-top:5px;">Generated ' + new Date().toLocaleString('en-GB') + '</p></div>';
+    
+    if (events.length === 0) {
+      html += '<p>No activity recorded yet.</p>';
+    } else {
+      events.forEach(e => {
+        const dt = new Date(e.timestamp).toLocaleString('en-GB', { day:'numeric', month:'short', year:'numeric', hour:'2-digit', minute:'2-digit' });
+        html += '<div class="row">';
+        html += '<div class="time">' + dt + ' &nbsp;&middot;&nbsp; ' + e.userName + '</div>';
+        html += '<div class="msg">' + e.message + '</div>';
+        if (e.detail) html += '<div class="det">' + e.detail + '</div>';
+        html += '</div>';
+      });
+    }
+    html += '</body></html>';
+    
+    const printWin = window.open('', '_blank');
+    printWin.document.write(html);
+    printWin.document.close();
+    printWin.focus();
+    setTimeout(() => { printWin.print(); }, 500);
+  } catch(e) {
+    showToast('Failed to export PDF: ' + e.message, 'error');
+  }
+};
+
+window.saDeleteActivity = async (productId, eventId) => {
+  if (!isSuperAdmin) return;
+  if (!confirm("SUPER ADMIN OVERRIDE: Permanently delete this activity log from Firebase?")) return;
+  
+  try {
+    await set(ref(db, `products/${productId}/activity/${eventId}`), null);
+    const row = document.getElementById(`act-row-${eventId}`);
+    if (row) row.remove();
+    showToast('Activity record permanently deleted.', 'success');
+  } catch(e) {
+    showToast('Failed to delete: ' + e.message, 'error');
+  }
 };
 
 /* ══ ITEM 6: QUICK-UPDATE MODAL ══════════════════════════════ */
@@ -11232,6 +11302,8 @@ window.__npd_init({
   showTaskHistory:         window.showTaskHistory,
   showEmailPreview:        window.showEmailPreview,
   renderDashboardEmailPage: window.renderDashboardEmailPage,
+  exportActivityLogPDF:    window.exportActivityLogPDF,
+  saDeleteActivity:        window.saDeleteActivity,
 });
 
 /* ── Auth wiring, deliberately last ──────────────────────────
