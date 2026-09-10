@@ -4703,14 +4703,16 @@ window.saveProduct = async (existingId) => {
     const existingTaskArr = getProductTasks(productListCache[existingId] || {});
     existingTaskArr.forEach(t => {
       const inputEl = document.getElementById('f-task-' + t.id);
+      const recEl   = document.getElementById('f-task-rec-' + t.id);
       const d = inputEl ? inputEl.value : t.deadline;
+      const rec = recEl ? recEl.value : (t.recurrence || 'none');
       
       // If the input exists and the date was changed, flag it for the audit log
       if (inputEl && (t.deadline || '') !== (d || '')) {
         dateChanges.push({ id: t.id, name: t.title || t.name, oldD: t.deadline, newD: d });
       }
       
-      tasks[t.id] = { ...t, deadline: d || t.deadline, updatedAt: Date.now() };
+      tasks[t.id] = { ...t, deadline: d || t.deadline, recurrence: rec, updatedAt: Date.now() };
     });
     const existingFBTasks = productListCache[existingId]?.tasks || {};
     Object.keys(existingFBTasks).forEach(tid => { if (!tasks[tid]) tasks[tid] = existingFBTasks[tid]; });
@@ -4760,13 +4762,6 @@ window.saveProduct = async (existingId) => {
       if (oldProd.launchDate !== launchDate) diffs.push(`Launch: ${formatDate(oldProd.launchDate)} ➔ ${formatDate(launchDate)}`);
       
       if (diffs.length > 0) {
-        // Diff the core changes so we don't spam the activity log
-      const oldProd = productListCache[existingId] || {};
-      const diffs = [];
-      if (oldProd.name !== name) diffs.push(`Name changed`);
-      if (oldProd.launchDate !== launchDate) diffs.push(`Launch: ${formatDate(oldProd.launchDate)} ➔ ${formatDate(launchDate)}`);
-      
-      if (diffs.length > 0) {
         await logActivity(existingId, 'status', `Product details updated`, diffs.join(' · '));
       }
       
@@ -4775,7 +4770,7 @@ window.saveProduct = async (existingId) => {
         for (const change of dateChanges) {
           const oldText = change.oldD ? formatDate(change.oldD) : 'No date';
           const newText = change.newD ? formatDate(change.newD) : 'No date';
-          await logActivity(existingId, 'date_change', `Deadline changed: ${change.name}`, `${oldText} -> ${newText}`, change.id);
+          await logActivity(existingId, 'date_change', `Deadline changed: ${change.name}`, `${oldText} ➔ ${newText}`, change.id);
         }
       }
       
