@@ -3709,35 +3709,37 @@ function canUserSeeProduct(p, userKey) {
   if (currentRole === 'admin' && window.adminViewMode !== 'personal') return true;
 
   // 2. ADMIN IN "MY VIEW" — strict personal ringfence.
-  // Deliberately narrower than the member path: no sharedWith, no department
-  // inference. If your own department merely holds a task on someone else's
-  // project, that project is NOT yours and must not appear here. This is the
-  // clause that was leaking other owners' work into a personal view.
   if (currentRole === 'admin' && window.adminViewMode === 'personal') {
     if (p.ownerId === userKey) return true;
     const myEmail = (currentUser?.email || '').toLowerCase();
     return getProductTasks(p).some(t => {
-      const owners = (t.owners && t.owners.length) ? t.owners
-        : [{ dept: t.ownerDept || '', email: t.ownerEmail || '' }];
+      // Must be genuinely visible to count
+      if (!canViewTask(t, p)) return false; 
+      const owners = (t.owners && t.owners.length) ? t.owners : [{ dept: t.ownerDept || '', email: t.ownerEmail || '' }];
       return owners.some(o => o.email && o.email.toLowerCase() === myEmail);
     });
   }
 
-  // 3. Member path — owned, shared, or my department is assigned
+  // 3. Member path — owned or shared
   if (p.ownerId === userKey) return true;
   if (p.sharedWith?.[userKey]) return true;
   
-  // 3. Deep Task Inspection: Am I or my department assigned to any task here?
+  // 4. Deep Task Inspection: Am I assigned to any GENUINELY VISIBLE task here?
   if (currentUserDept) {
-    const tasks = getProductTasks(p);
-    const mine = tasks.some(t => {
-      const owners = (t.owners && t.owners.length) ? t.owners
-        : [{ dept: t.ownerDept || '', email: t.ownerEmail || '' }];
+    const myEmail = (currentUser.email || '').toLowerCase();
+    const myDept  = currentUserDept.toLowerCase();
+    const tasks   = getProductTasks(p);
+    
+    return tasks.some(t => {
+      // If the task itself is private/restricted from them, it doesn't pull them into the project
+      if (!canViewTask(t, p)) return false;
+      
+      const owners = (t.owners && t.owners.length) ? t.owners : [{ dept: t.ownerDept || '', email: t.ownerEmail || '' }];
       return owners.some(o =>
-        (o.dept && o.dept.toLowerCase() === currentUserDept.toLowerCase()) ||
-        (o.email && o.email.toLowerCase() === (currentUser.email || '').toLowerCase()));
+        (o.dept && o.dept.toLowerCase() === myDept) ||
+        (o.email && o.email.toLowerCase() === myEmail)
+      );
     });
-    if (mine) return true;
   }
   return false;
 }
@@ -10642,20 +10644,36 @@ window.runAIDiagnostic = async () => {
 };
 
 window.saveEmailSchedule = async () => {
+  const btn = document.querySelector('button[onclick="saveEmailSchedule()"]');
+  if (btn) { btn.disabled = true; btn.textContent = 'Syncing to Google Cloud...'; }
+  
   const alertHour = parseInt(document.getElementById('alert-hour-sel')?.value || '7');
   const todoHour  = parseInt(document.getElementById('todo-hour-sel')?.value  || '8');
   const todoDay   = parseInt(document.getElementById('todo-day-sel')?.value   || '1');
+  
   try {
+    // Save to database
     await set(ref(db, 'config/emailSchedule'), { alertHour, todoHour, todoDay, updatedAt: Date.now(), updatedBy: currentUser.email });
+    
+    // Tell GAS to physically rebuild the Google Triggers
+    const resGas = await callGAS('updateTriggers', {});
+    
     const res = document.getElementById('schedule-result');
     if (res) {
       res.style.display = 'block';
-      res.innerHTML = '<div style="background:#F0FDF4;border:1px solid #BBF7D0;border-radius:8px;padding:10px 14px;font-size:12px;color:#16A34A;font-weight:500;">Schedule saved. Redeploy the GAS trigger to apply the new alert time.</div>';
+      if (resGas.ok) {
+        res.innerHTML = '<div style="background:#F0FDF4;border:1px solid #BBF7D0;border-radius:8px;padding:10px 14px;font-size:12px;color:#16A34A;font-weight:500;">Schedule saved and Google triggers successfully synced!</div>';
+      } else {
+        res.innerHTML = '<div style="background:#FFFBEB;border:1px solid #FDE68A;border-radius:8px;padding:10px 14px;font-size:12px;color:#D97706;font-weight:500;">Saved locally, but could not sync to GAS: ' + resGas.error + '</div>';
+      }
     }
-    showToast('Email schedule saved.', 'success');
-  } catch(e) { showToast('Save failed: ' + e.message, 'error'); }
+    showToast('Email schedule synced.', 'success');
+  } catch(e) { 
+    showToast('Save failed: ' + e.message, 'error'); 
+  }
+  if (btn) { btn.disabled = false; btn.textContent = 'Save schedule'; }
 };
-
+  
 async function loadEmailSchedule() {
   try {
     const snap = await get(ref(db, 'config/emailSchedule'));
