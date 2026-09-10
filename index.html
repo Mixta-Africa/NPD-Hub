@@ -1693,7 +1693,7 @@ function _updateDashboardUI(list) {
                         : daysUntil === 0 ? 'Today'
                         : daysUntil === 1 ? 'Tomorrow'
                         : formatDate(d.date);
-        return '<div class="deadline-row">' +
+        return '<div class="deadline-row" style="cursor:pointer;" onclick="viewProduct(\'' + d.productId + '\', \'' + d.pillarId + '\')" title="Click to view task details">' +
           '<div class="deadline-dot" style="background:' + dotColor + ';"></div>' +
           '<div class="deadline-info">' +
             '<div class="deadline-pillar">' + d.pillar + '</div>' +
@@ -1701,7 +1701,7 @@ function _updateDashboardUI(list) {
           '</div>' +
           '<div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px;flex-shrink:0;">' +
             '<span style="font-size:10px;font-weight:600;color:' + dotColor + ';white-space:nowrap;">' + dateLabel + '</span>' +
-            '<button class="deadline-remind-btn" onclick="showReminderModal(\'' + d.productId + '\',\'' + d.pillarId + '\',\'' + d.pillar + '\',\'' + d.product + '\',\'' + d.date + '\')" title="Send reminder">' +
+            '<button class="deadline-remind-btn" onclick="event.stopPropagation(); showReminderModal(\'' + d.productId + '\',\'' + d.pillarId + '\',\'' + d.pillar + '\',\'' + d.product + '\',\'' + d.date + '\')" title="Send reminder">' +
               ICON.bell + ' Remind' +
             '</button>' +
           '</div>' +
@@ -1814,7 +1814,7 @@ async function loadWorkload() {
         .map(({ task, prod, eff, isBlocked }) => {
           const color = isBlocked ? '#D97706' : eff === 'overdue' || eff === 'delayed' ? '#C0282D' : eff === 'due-soon' ? '#D97706' : '#16A34A';
           const label = isBlocked ? 'Blocked' : eff === 'overdue' ? 'Overdue' : eff === 'delayed' ? 'Delayed' : eff === 'due-soon' ? 'Due soon' : 'On track';
-          return '<div style="display:flex;align-items:center;gap:10px;padding:7px 0;border-bottom:1px solid #F3F3F2;">' +
+          return '<div style="display:flex;align-items:center;gap:10px;padding:7px 0;border-bottom:1px solid #F3F3F2;cursor:pointer;transition:background 0.1s;" onmouseover="this.style.background=\'#FAFAF9\'" onmouseout="this.style.background=\'none\'" onclick="viewProduct(\'' + prod.id + '\', \'' + task.id + '\')" title="Click to view task details">' +
             '<div style="flex:1;min-width:0;">' +
               '<div style="font-size:11px;font-weight:500;color:#1A1A1A;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + (task.title || 'Untitled') + '</div>' +
               '<div style="font-size:10px;color:#9CA3AF;">' + prod.name + (task.deadline ? ' · ' + formatDate(task.deadline) : '') + '</div>' +
@@ -2094,7 +2094,7 @@ async function loadMyActions() {
       const bgCol  = sectionBg[priority];
 
       html +=
-        '<div style="background:#fff;border:1px solid #E5E5E3;border-left:3px solid ' + color + ';border-radius:10px;padding:14px 16px;display:flex;align-items:flex-start;gap:14px;cursor:pointer;" onclick="loadView(\'tracker\')">' +
+        '<div style="background:#fff;border:1px solid #E5E5E3;border-left:3px solid ' + color + ';border-radius:10px;padding:14px 16px;display:flex;align-items:flex-start;gap:14px;cursor:pointer;" onclick="viewProduct(\'' + prod.id + '\', \'' + task.id + '\')">' +
           '<div style="flex:1;min-width:0;">' +
             '<div style="font-size:13px;font-weight:600;color:#1A1A1A;margin-bottom:3px;">' + (task.title || 'Untitled task') + '</div>' +
             '<div style="font-size:11px;color:#6B7280;margin-bottom:6px;">' + prod.name + '</div>' +
@@ -3258,7 +3258,7 @@ function drillGroup(g, today, filter) {
 }
 
 window.openTaskFromDrill = (productId, taskId) => {
-  openProjectDashboard(productId);
+  viewProduct(productId, taskId);
 };
 
 /* ══════════════════════════════════════════════════════════════
@@ -5030,13 +5030,30 @@ window.confirmAndLaunchGAS = async () => {
 };
 
 /* ── VIEW PRODUCT DETAIL ── */
-window.viewProduct = (id) => {
+window.viewProduct = (id, highlightTaskId) => {
   ensureProductModal();
-  const p = productListCache[id];
-  if (!p) return;
+  
+  // Pull from whichever cache holds the data (Dashboard, Tracker, or Products list)
+  const p = productListCache[id] || (typeof trackerProductsCache !== 'undefined' ? trackerProductsCache[id] : null);
+  if (!p) { showToast('Item data not fully loaded yet. Please try again.', 'error'); return; }
+  
   document.getElementById('modal-title-text').textContent = p.name;
   document.getElementById('modal-body-content').innerHTML = buildProductDetail(p, 'tasks');
   document.getElementById('create-product-modal').style.display = 'flex';
+  
+  // If a specific task was clicked, scroll down to it and flash it yellow
+  if (highlightTaskId) {
+    setTimeout(() => {
+      const row = document.getElementById('pdr-' + highlightTaskId);
+      if (row) {
+        row.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        const originalBg = row.style.background;
+        row.style.transition = 'background 0.4s ease';
+        row.style.background = '#FFFBEB'; // Flash yellow
+        setTimeout(() => { row.style.background = originalBg; }, 2000);
+      }
+    }, 50); // slight delay to let the DOM render the modal
+  }
 };
 
 window.switchProductTab = (productId, tab, el) => {
@@ -5238,7 +5255,7 @@ function buildPillarDetail(p) {
     const moveDownBtn = canEdit(p) && !isLast ? '<button onclick="moveProductTask(\'' + p.id + '\', \'' + task.id + '\', 1)" style="background:none;border:1px solid var(--border);border-radius:6px;padding:3px 8px;font-size:10px;color:var(--text-muted);cursor:pointer;font-family:Poppins,sans-serif;margin-left:6px;" title="Move Down">↓</button>' : '';
     const deleteBtn = canEdit(p) ? '<button onclick="deleteProductTask(\'' + p.id + '\', \'' + task.id + '\')" style="background:none;border:1px solid var(--border);border-radius:6px;padding:3px 8px;font-size:10px;color:var(--red);cursor:pointer;font-family:Poppins,sans-serif;margin-left:6px;" title="Delete Task">✕</button>' : '';
 
-    return '<div class="pillar-detail-row' + (isBlocked ? ' pillar-row-blocked' : '') + '">' +
+    return '<div class="pillar-detail-row' + (isBlocked ? ' pillar-row-blocked' : '') + '" id="pdr-' + task.id + '">' +
       '<div class="pillar-detail-num">' + (i + 1) + '</div>' +
       '<div class="pillar-detail-body">' +
         '<div class="pillar-detail-name">' + (task.title || task.name || 'Untitled task') + '</div>' +
