@@ -4211,6 +4211,13 @@ function buildTaskRow(t, i) {
     '</div>' +
   '</div>';
 }
+
+window.updateAddIndividuals = (taskId) => {
+  const dept = document.getElementById('add-dept-' + taskId)?.value || '';
+  if (dept) window._stickyDept = dept; // Remember chosen dept
+  const sel  = document.getElementById('add-ind-' + taskId);
+  if (sel) sel.innerHTML = buildOwnerIndividualOptions(dept, '');
+};
     // --- NEW: RECURRING TASKS CLONE ENGINE ---
     if (newStatus === 'complete') {
       const tObj = tasks.find(t => t.id === taskId);
