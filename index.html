@@ -5598,28 +5598,39 @@ async function loadDashboardEmailLog() {
     const products = prodSnap.val() || {};
     const userKey  = sanitiseEmail(currentUser.email);
     const all = [];
+    
     Object.entries(logSnap.val()).forEach(([pid, entries]) => {
       const prod = products[pid];
       if (!prod) return;
-      // Only surface items this user can see
-      const visible = currentRole === 'admin' || prod.ownerId === userKey || prod.sharedWith?.[userKey];
-      if (!visible) return;
+      
+      // FIX: Use the global access function so it strictly obeys "My View" / "Org View"
+      if (!canUserSeeProduct(prod, userKey)) return;
+      
       Object.values(entries).forEach(e => all.push(Object.assign({ productName: prod.name }, e)));
     });
+    
     if (all.length === 0) {
       el.innerHTML = '<div style="padding:16px 18px;font-size:12px;color:#9CA3AF;">No emails sent yet.</div>';
       return;
     }
+    
     all.sort((a, b) => b.sentAt - a.sentAt);
+    window._dashEmailLogs = all; // Store globally for the preview modal
+
     const typeLabel = { deadline_alert:'Deadline alert', reminder:'Reminder', onboarding:'Onboarding',
                         report:'Progress report', handover:'Handover', delayed:'Delay notice', composed:'Email' };
-    el.innerHTML = all.slice(0, 8).map(l => {
+    
+    // FIX: Wrap in a scrollable div and increase limit to 50
+    let html = '<div style="max-height: 380px; overflow-y: auto; padding-right: 4px;">';
+    
+    html += all.slice(0, 50).map(l => {
       const auto = l.trigger === 'automated';
       const clr  = auto ? '#2563EB' : '#16A34A';
       const when = new Date(l.sentAt).toLocaleDateString('en-GB',
         { day:'numeric', month:'short', hour:'2-digit', minute:'2-digit' });
       const to = (l.to || []).join(', ');
-      return '<div style="display:flex;gap:10px;padding:10px 18px;border-bottom:1px solid var(--border);">' +
+      
+      return '<div style="display:flex;gap:10px;padding:10px 18px;border-bottom:1px solid var(--border);cursor:pointer;transition:background 0.15s;" onmouseover="this.style.background=\'#FAFAF9\'" onmouseout="this.style.background=\'none\'" onclick="showEmailPreview(\'' + l.id + '\')">' +
         '<div style="width:7px;height:7px;border-radius:50%;background:' + clr + ';flex-shrink:0;margin-top:5px;"></div>' +
         '<div style="flex:1;min-width:0;">' +
           '<div style="font-size:12px;font-weight:600;color:var(--text);">' +
@@ -5633,6 +5644,9 @@ async function loadDashboardEmailLog() {
         '</div>' +
       '</div>';
     }).join('');
+    
+    html += '</div>';
+    el.innerHTML = html;
   } catch(e) {
     el.innerHTML = '<div style="padding:16px 18px;font-size:12px;color:#9CA3AF;">Could not load the email log.</div>';
   }
@@ -5671,15 +5685,22 @@ async function loadEmailLog(productId) {
       return;
     }
     const logs = Object.values(snap.val()).sort((a,b) => b.sentAt - a.sentAt);
+    window._productEmailLogs = logs; // Store globally for the preview modal
+    
     const typeLabel = { deadline_alert:'Deadline alert', reminder:'Reminder', onboarding:'Onboarding',
                         report:'Progress report', handover:'Handover', delayed:'Delay notice', composed:'Email' };
-    el.innerHTML = logs.map(l => {
+                        
+    // FIX: Add scrollable container
+    let html = '<div style="max-height: 400px; overflow-y: auto; padding-right: 8px;">';
+    
+    html += logs.map(l => {
       const auto = l.trigger === 'automated';
       const clr  = auto ? '#2563EB' : '#16A34A';
       const when = new Date(l.sentAt).toLocaleDateString('en-GB',
         { day:'numeric', month:'short', hour:'2-digit', minute:'2-digit' });
       const to = (l.to || []).join(', ');
-      return '<div style="display:flex;gap:10px;padding:10px 0;border-bottom:1px solid #F3F3F2;">' +
+      
+      return '<div style="display:flex;gap:10px;padding:10px 8px;border-bottom:1px solid #F3F3F2;cursor:pointer;transition:background 0.15s;border-radius:6px;" onmouseover="this.style.background=\'#FAFAF9\'" onmouseout="this.style.background=\'transparent\'" onclick="showEmailPreview(\'' + l.id + '\')">' +
         '<div style="width:7px;height:7px;border-radius:50%;background:' + clr + ';flex-shrink:0;margin-top:6px;"></div>' +
         '<div style="flex:1;min-width:0;">' +
           '<div style="display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;">' +
@@ -5696,6 +5717,9 @@ async function loadEmailLog(productId) {
         '</div>' +
       '</div>';
     }).join('');
+    
+    html += '</div>';
+    el.innerHTML = html;
   } catch(e) {
     el.innerHTML = '<div style="font-size:12px;color:#9CA3AF;padding:12px 0;">Could not load the email log.</div>';
   }
@@ -10895,6 +10919,57 @@ window.saDeleteProject = async (productId, productName) => {
     showToast('Wipe failed: ' + e.message, 'error');
   }
 };
+
+  /* ══ EMAIL PREVIEW MODAL ═════════════════════════════════════ */
+window.showEmailPreview = (logId) => {
+  // Find log in either dashboard cache or product-level cache
+  let log = (window._dashEmailLogs || []).find(l => l.id === logId);
+  if (!log && window._productEmailLogs) {
+    log = window._productEmailLogs.find(l => l.id === logId);
+  }
+  if (!log) return;
+
+  const when = new Date(log.sentAt).toLocaleString('en-GB', { day:'numeric', month:'short', year:'numeric', hour:'2-digit', minute:'2-digit' });
+  const typeLabel = { deadline_alert:'Deadline alert', reminder:'Reminder', onboarding:'Onboarding', report:'Progress report', handover:'Handover', delayed:'Delay notice', composed:'Email' };
+  
+  let modal = document.getElementById('email-preview-modal');
+  if (!modal) {
+    modal = document.createElement('div');
+    modal.id = 'email-preview-modal';
+    modal.className = 'modal-overlay';
+    modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.5);display:flex;align-items:center;justify-content:center;z-index:9999;padding:20px;';
+    document.body.appendChild(modal);
+  }
+
+  // Fallback for older logs that didn't save the HTML body
+  const bodyContent = log.body 
+    ? log.body.replace(/\n/g, '<br/>') 
+    : '<div style="color:var(--text-muted);font-style:italic;padding:20px;background:#F8F8F7;border-radius:8px;text-align:center;">This email was logged before full body capture was enabled. Only the delivery metadata above is available.</div>';
+
+  modal.innerHTML = `
+    <div style="background:#fff;border-radius:12px;width:100%;max-width:600px;max-height:85vh;display:flex;flex-direction:column;box-shadow:0 10px 40px rgba(0,0,0,0.2);">
+      <div style="padding:16px 20px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center;background:#FAFAF9;border-radius:12px 12px 0 0;flex-shrink:0;">
+        <div style="font-size:14px;font-weight:700;color:var(--text);">Email Receipt</div>
+        <button onclick="document.getElementById('email-preview-modal').style.display='none'" style="background:none;border:none;font-size:20px;cursor:pointer;color:var(--text-muted);line-height:1;">&times;</button>
+      </div>
+      <div style="padding:20px;overflow-y:auto;flex:1;">
+        <div style="margin-bottom:20px;font-size:12px;background:#FAFAF9;border:1px solid var(--border);border-radius:8px;padding:14px;">
+          <div style="display:flex;margin-bottom:6px;"><strong style="width:70px;color:var(--text-muted);">Date:</strong> <span>${when}</span></div>
+          <div style="display:flex;margin-bottom:6px;"><strong style="width:70px;color:var(--text-muted);">From:</strong> <span>${log.sentBy || 'System'}</span></div>
+          <div style="display:flex;margin-bottom:6px;"><strong style="width:70px;color:var(--text-muted);">To:</strong> <span>${(log.to || []).join(', ') || 'None'}</span></div>
+          ${log.cc && log.cc.length ? `<div style="display:flex;margin-bottom:6px;"><strong style="width:70px;color:var(--text-muted);">CC:</strong> <span>${log.cc.join(', ')}</span></div>` : ''}
+          <div style="display:flex;margin-bottom:6px;"><strong style="width:70px;color:var(--text-muted);">Subject:</strong> <span style="font-weight:600;">${log.subject || 'No subject'}</span></div>
+          <div style="display:flex;"><strong style="width:70px;color:var(--text-muted);">Type:</strong> <span><span style="text-transform:uppercase;font-size:9px;font-weight:700;background:#E5E5E3;padding:2px 6px;border-radius:4px;">${typeLabel[log.type] || log.type}</span></span></div>
+        </div>
+        <div style="font-size:13px;line-height:1.6;color:var(--text);">
+          ${bodyContent}
+        </div>
+      </div>
+    </div>
+  `;
+  modal.style.display = 'flex';
+};
+  
 // Register all real functions with the global dispatcher
 window.__npd_init({
   handleSignIn,
@@ -11059,6 +11134,7 @@ window.__npd_init({
   showAddDocFolder:        window.showAddDocFolder,
   confirmAddDocFolder:     window.confirmAddDocFolder,
   showTaskHistory:         window.showTaskHistory,
+  showEmailPreview:        window.showEmailPreview,
 });
 
 </script>
