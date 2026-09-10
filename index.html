@@ -4754,7 +4754,15 @@ window.saveProduct = async (existingId) => {
       closeProductModal();
       showStakeholderConfirm(payload);
     } else {
-      await logActivity(existingId, 'status', `Product details updated`);
+      // Diff the core changes so we don't spam the activity log
+      const oldProd = productListCache[existingId] || {};
+      const diffs = [];
+      if (oldProd.name !== name) diffs.push(`Name changed`);
+      if (oldProd.launchDate !== launchDate) diffs.push(`Launch: ${formatDate(oldProd.launchDate)} ➔ ${formatDate(launchDate)}`);
+      
+      if (diffs.length > 0) {
+        await logActivity(existingId, 'status', `Product details updated`, diffs.join(' · '));
+      }
       
       // Fire the Date Change Audit Logs
       if (dateChanges.length > 0) {
@@ -6640,12 +6648,23 @@ window.updatePillarStatus = async (productId, taskId, newStatus) => {
 window.updatePillarNotes = async (productId, taskId, notes) => {
   try {
     const prod = trackerProductsCache[productId] || productListCache[productId];
+    let oldNote = '';
+    
     if (prod?.tasks?.[taskId]) {
+      oldNote = prod.tasks[taskId].notes || '';
       await set(ref(db, `products/${productId}/tasks/${taskId}/notes`), notes);
       prod.tasks[taskId].notes = notes;
     } else {
+      oldNote = prod?.pillars?.[taskId]?.notes || '';
       await set(ref(db, `products/${productId}/pillars/${taskId}/notes`), notes);
       if (prod?.pillars?.[taskId]) prod.pillars[taskId].notes = notes;
+    }
+    
+    if (oldNote !== notes) {
+      const taskName = prod?.tasks?.[taskId]?.title || prod?.pillars?.[taskId]?.name || taskId;
+      if (typeof logActivity === 'function') {
+        await logActivity(productId, 'note', `Notes updated: ${taskName}`, notes, taskId);
+      }
     }
   } catch(e) { showToast('Note save failed.', 'error'); }
 };
@@ -9910,11 +9929,17 @@ window.showProductActivity = async (productId) => {
     .sort((a, b) => b.timestamp - a.timestamp)
     .slice(0, 100);
 
-  const typeIcon = { status: ICON.refresh, note: ICON.note, task_added: ICON.plus, handover: ICON.handshake,
-                     document: ICON.paperclip, created: ICON.rocket, baseline: ICON.calendar };
-  const typeColor = { status: 'var(--blue)', note: 'var(--text-muted)', task_added: 'var(--green)',
-                      handover: 'var(--amber)', document: 'var(--text-muted)',
-                      created: 'var(--green)', baseline: 'var(--red)' };
+  const typeIcon = { 
+    status: ICON.refresh, note: ICON.note, task_added: ICON.plus, handover: ICON.handshake,
+    document: ICON.paperclip, created: ICON.rocket, baseline: ICON.calendar,
+    date_change: ICON.calendar, reassignment: ICON.thread, visibility: ICON.lock, type_changed: ICON.bolt 
+  };
+  const typeColor = { 
+    status: 'var(--blue)', note: 'var(--text-muted)', task_added: 'var(--green)',
+    handover: 'var(--amber)', document: 'var(--text-muted)', created: 'var(--green)', 
+    baseline: 'var(--red)', date_change: 'var(--amber)', reassignment: 'var(--blue)', 
+    visibility: 'var(--red)', type_changed: 'var(--amber)' 
+  };
 
   const rows = events.map(e => {
     const dt = new Date(e.timestamp);
