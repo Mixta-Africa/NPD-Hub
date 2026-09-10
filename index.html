@@ -145,6 +145,10 @@ const ICON = {
 let currentUser      = null;
 let currentRole      = null;      // 'admin' | 'member' | null
 let currentUserDept  = '';        // set at login from /users/{key}/dept — drives dept scoping
+// Declared HERE, not next to loadPreferredName. Firebase's auth callback can
+// fire during module evaluation with a cached session; anything touching this
+// before its `let` had run threw a temporal-dead-zone error and killed the app.
+let currentPreferredName = '';
 let currentView      = 'dashboard';
 let isSuperAdmin     = false;     // true after password challenge passed
 let saSessionStart   = null;      // timestamp of super admin session start
@@ -169,7 +173,13 @@ function teardownAllListeners() {
 }
 
 /* ─── AUTH STATE LISTENER ─── */
-onAuthStateChanged(auth, async (user) => {
+/* Auth handler is DEFINED here but REGISTERED at the very end of the module.
+   Firebase fires this immediately when a cached session exists — if it runs
+   during module evaluation, every `let`/`const` declared further down is still
+   in its temporal dead zone and any access throws, killing the whole app with
+   a blank screen. Registering last guarantees the module is fully evaluated
+   before any auth callback can run. */
+const handleAuthStateChange = async (user) => {
   // Always reset the sign-in button — it was set to loading on click
   setBtnLoading(false);
 
@@ -238,7 +248,7 @@ onAuthStateChanged(auth, async (user) => {
     saSessionStart = null;
     showLogin();
   }
-});
+};
 
 /* ─── AUTH ACTIONS ─── */
 window.handleSignIn = async () => {
@@ -7515,7 +7525,7 @@ window.removeFromAllowlist = async (key) => {
 
 /* ─── UTILITIES ─── */
 // Preferred name — loaded from Firebase users record
-let currentPreferredName = '';
+// currentPreferredName is declared at the top with the other session state.
 
 async function loadPreferredName() {
   if (!currentUser) return;
@@ -11111,6 +11121,10 @@ window.__npd_init({
   showTaskHistory:         window.showTaskHistory,
   showEmailPreview:        window.showEmailPreview,
 });
+
+/* ── Auth wiring, deliberately last ──────────────────────────
+   Everything above is now defined. Safe for the callback to fire. */
+onAuthStateChanged(auth, handleAuthStateChange);
 
 </script>
 
