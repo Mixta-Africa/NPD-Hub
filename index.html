@@ -2024,6 +2024,8 @@ async function loadMyActions() {
         const isMyTask   = ownerEmail === myEmail ||
                            ownerEmail.includes(myEmail.split('@')[0]) ||
                            (myName && ownerEmail.includes(myName.split(' ')[0].toLowerCase()));
+        
+        const isOwner = prod.ownerId === userKey;
         if (!isMyTask && !isOwner) return;
 
         if (task.status === 'complete') return;
@@ -5568,6 +5570,9 @@ window.confirmSpinOut = async (sourceProductId, sourceTaskId) => {
   loadProductList();
 };
 
+window._emailLogCurrentPage = 1;
+const ITEMS_PER_PAGE = 7;
+
 async function loadDashboardEmailLog() {
   const el = document.getElementById('dash-emaillog');
   if (!el) return;
@@ -5587,8 +5592,6 @@ async function loadDashboardEmailLog() {
     Object.entries(logSnap.val()).forEach(([pid, entries]) => {
       const prod = products[pid];
       if (!prod) return;
-      
-      // FIX: Use the global access function so it strictly obeys "My View" / "Org View"
       if (!canUserSeeProduct(prod, userKey)) return;
       
       Object.values(entries).forEach(e => all.push(Object.assign({ productName: prod.name }, e)));
@@ -5600,42 +5603,87 @@ async function loadDashboardEmailLog() {
     }
     
     all.sort((a, b) => b.sentAt - a.sentAt);
-    window._dashEmailLogs = all; // Store globally for the preview modal
-
-    const typeLabel = { deadline_alert:'Deadline alert', reminder:'Reminder', onboarding:'Onboarding',
-                        report:'Progress report', handover:'Handover', delayed:'Delay notice', composed:'Email' };
+    window._dashEmailLogs = all; 
+    window._emailLogCurrentPage = 1;
     
-    // FIX: Wrap in a scrollable div and increase limit to 50
-    let html = '<div style="max-height: 380px; overflow-y: auto; padding-right: 4px;">';
-    
-    html += all.slice(0, 50).map(l => {
-      const auto = l.trigger === 'automated';
-      const clr  = auto ? '#2563EB' : '#16A34A';
-      const when = new Date(l.sentAt).toLocaleDateString('en-GB',
-        { day:'numeric', month:'short', hour:'2-digit', minute:'2-digit' });
-      const to = (l.to || []).join(', ');
-      
-      return '<div style="display:flex;gap:10px;padding:10px 18px;border-bottom:1px solid var(--border);cursor:pointer;transition:background 0.15s;" onmouseover="this.style.background=\'#FAFAF9\'" onmouseout="this.style.background=\'none\'" onclick="showEmailPreview(\'' + l.id + '\')">' +
-        '<div style="width:7px;height:7px;border-radius:50%;background:' + clr + ';flex-shrink:0;margin-top:5px;"></div>' +
-        '<div style="flex:1;min-width:0;">' +
-          '<div style="font-size:12px;font-weight:600;color:var(--text);">' +
-            (typeLabel[l.type] || 'Email') +
-            ' <span style="font-weight:400;color:#9CA3AF;">· ' + (l.productName || '') + '</span></div>' +
-          (to ? '<div style="font-size:11px;color:#6B7280;margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">To: ' + to + '</div>' : '') +
-        '</div>' +
-        '<div style="text-align:right;flex-shrink:0;">' +
-          '<div style="font-size:10px;font-weight:600;color:' + clr + ';">' + (auto ? 'AUTO' : 'MANUAL') + '</div>' +
-          '<div style="font-size:10px;color:#9CA3AF;">' + when + '</div>' +
-        '</div>' +
-      '</div>';
-    }).join('');
-    
-    html += '</div>';
-    el.innerHTML = html;
+    renderDashboardEmailPage(1);
   } catch(e) {
     el.innerHTML = '<div style="padding:16px 18px;font-size:12px;color:#9CA3AF;">Could not load the email log.</div>';
   }
 }
+
+window.renderDashboardEmailPage = (page) => {
+  const el = document.getElementById('dash-emaillog');
+  if (!el || !window._dashEmailLogs) return;
+  
+  const all = window._dashEmailLogs;
+  const totalPages = Math.ceil(all.length / ITEMS_PER_PAGE);
+  if (page < 1) page = 1;
+  if (page > totalPages) page = totalPages;
+  window._emailLogCurrentPage = page;
+  
+  const startIdx = (page - 1) * ITEMS_PER_PAGE;
+  const currentItems = all.slice(startIdx, startIdx + ITEMS_PER_PAGE);
+  
+  const typeLabel = { deadline_alert:'Deadline alert', reminder:'Reminder', onboarding:'Onboarding', report:'Progress report', handover:'Handover', delayed:'Delay notice', composed:'Email' };
+  
+  let html = '<div style="min-height:400px; display:flex; flex-direction:column;">';
+  html += '<div style="flex:1;">';
+  html += currentItems.map(l => {
+    const auto = l.trigger === 'automated';
+    const clr  = auto ? '#2563EB' : '#16A34A';
+    const when = new Date(l.sentAt).toLocaleDateString('en-GB', { day:'numeric', month:'short', hour:'2-digit', minute:'2-digit' });
+    const to = (l.to || []).join(', ');
+    
+    return '<div style="display:flex;gap:10px;padding:10px 18px;border-bottom:1px solid var(--border);cursor:pointer;transition:background 0.15s;" onmouseover="this.style.background=\'#FAFAF9\'" onmouseout="this.style.background=\'none\'" onclick="showEmailPreview(\'' + l.id + '\')">' +
+      '<div style="width:7px;height:7px;border-radius:50%;background:' + clr + ';flex-shrink:0;margin-top:5px;"></div>' +
+      '<div style="flex:1;min-width:0;">' +
+        '<div style="font-size:12px;font-weight:600;color:var(--text);">' +
+          (typeLabel[l.type] || 'Email') +
+          ' <span style="font-weight:400;color:#9CA3AF;">· ' + (l.productName || '') + '</span></div>' +
+        (to ? '<div style="font-size:11px;color:#6B7280;margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">To: ' + to + '</div>' : '') +
+      '</div>' +
+      '<div style="text-align:right;flex-shrink:0;">' +
+        '<div style="font-size:10px;font-weight:600;color:' + clr + ';">' + (auto ? 'AUTO' : 'MANUAL') + '</div>' +
+        '<div style="font-size:10px;color:#9CA3AF;">' + when + '</div>' +
+      '</div>' +
+    '</div>';
+  }).join('');
+  html += '</div>';
+  
+  // Pagination controls at the bottom
+  if (totalPages > 1) {
+    html += '<div style="display:flex;align-items:center;justify-content:center;gap:4px;padding:12px 18px;border-top:1px solid var(--border);background:#FAFAF9;">';
+    
+    // Previous buttons
+    html += `<button onclick="renderDashboardEmailPage(1)" style="padding:4px 8px;border:1px solid var(--border);background:#fff;border-radius:4px;cursor:pointer;font-size:11px;" ${page === 1 ? 'disabled style="opacity:0.5;cursor:not-allowed;"' : ''}>&laquo;</button>`;
+    html += `<button onclick="renderDashboardEmailPage(${page - 1})" style="padding:4px 8px;border:1px solid var(--border);background:#fff;border-radius:4px;cursor:pointer;font-size:11px;" ${page === 1 ? 'disabled style="opacity:0.5;cursor:not-allowed;"' : ''}>&lsaquo;</button>`;
+    
+    // Page window (show current, -2, and +2)
+    let startPage = Math.max(1, page - 2);
+    let endPage = Math.min(totalPages, page + 2);
+    if (startPage > 1) html += '<span style="font-size:11px;color:var(--text-muted);padding:0 4px;">...</span>';
+    
+    for (let i = startPage; i <= endPage; i++) {
+      if (i === page) {
+        html += `<button style="padding:4px 10px;border:1px solid var(--red);background:var(--red);color:#fff;border-radius:4px;font-size:11px;font-weight:600;">${i}</button>`;
+      } else {
+        html += `<button onclick="renderDashboardEmailPage(${i})" style="padding:4px 10px;border:1px solid var(--border);background:#fff;border-radius:4px;cursor:pointer;font-size:11px;transition:background 0.15s;" onmouseover="this.style.background=\'var(--bg)\'" onmouseout="this.style.background=\'#fff\'">${i}</button>`;
+      }
+    }
+    
+    if (endPage < totalPages) html += '<span style="font-size:11px;color:var(--text-muted);padding:0 4px;">...</span>';
+    
+    // Next buttons
+    html += `<button onclick="renderDashboardEmailPage(${page + 1})" style="padding:4px 8px;border:1px solid var(--border);background:#fff;border-radius:4px;cursor:pointer;font-size:11px;" ${page === totalPages ? 'disabled style="opacity:0.5;cursor:not-allowed;"' : ''}>&rsaquo;</button>`;
+    html += `<button onclick="renderDashboardEmailPage(${totalPages})" style="padding:4px 8px;border:1px solid var(--border);background:#fff;border-radius:4px;cursor:pointer;font-size:11px;" ${page === totalPages ? 'disabled style="opacity:0.5;cursor:not-allowed;"' : ''}>&raquo;</button>`;
+    
+    html += '</div>';
+  }
+  
+  html += '</div>';
+  el.innerHTML = html;
+};
 
 /* ══ EMAIL VISIBILITY LOG ══════════════════════════════════
    Every send is recorded so the owner can see what left the system
@@ -7106,17 +7154,20 @@ async function loadDeadlineStatus() {
     const alerts   = [];
 
     Object.values(products).filter(p => p.status !== 'archived').forEach(prod => {
-      PILLARS.forEach(pl => {
-        const pd = prod.pillars?.[pl.id];
-        if (!pd?.deadline || pd?.taskStatus === 'complete') return;
-        const due  = new Date(pd.deadline); due.setHours(0,0,0,0);
+      const tasks = getProductTasks(prod);
+      tasks.forEach(task => {
+        const effStatus = resolveTaskStatus(task, prod);
+        if (!task.deadline || effStatus === 'complete') return;
+        
+        const due  = new Date(task.deadline); due.setHours(0,0,0,0);
         const diff = Math.round((due - today) / 86400000);
+        
         if (diff <= 3) {
           alerts.push({
             productName: prod.name,
-            pillarName:  pl.name,
-            owner:       pl.owner,
-            deadline:    pd.deadline,
+            pillarName:  task.title || task.name,
+            owner:       task.owner || 'Unassigned',
+            deadline:    task.deadline,
             diff,
             status: diff < 0 ? 'overdue' : diff === 0 ? 'due-today' : 'warning',
           });
@@ -11120,6 +11171,7 @@ window.__npd_init({
   confirmAddDocFolder:     window.confirmAddDocFolder,
   showTaskHistory:         window.showTaskHistory,
   showEmailPreview:        window.showEmailPreview,
+  renderDashboardEmailPage: window.renderDashboardEmailPage,
 });
 
 /* ── Auth wiring, deliberately last ──────────────────────────
