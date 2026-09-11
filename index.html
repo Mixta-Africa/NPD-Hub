@@ -1452,71 +1452,84 @@ function renderDashboard(el) {
   loadPreferredName().then(() => {
     const name = currentPreferredName;
     
-    // UX: The admin toggle switch
+    // UX: The admin toggle switch (Now placed inside the Hero Banner if admin)
     const adminToggle = currentRole === 'admin' ? `
-      <div style="display:flex;background:#F0F0EE;padding:4px;border-radius:8px;width:fit-content;margin-top:12px;">
+      <div style="display:flex;background:rgba(255,255,255,0.6);backdrop-filter:blur(4px);padding:4px;border-radius:8px;width:fit-content;margin-top:16px;border:1px solid rgba(0,0,0,0.05);">
         <button id="view-mode-personal" onclick="setAdminViewMode('personal')" style="padding:6px 16px;border:none;border-radius:6px;font-size:12px;font-weight:600;font-family:Poppins,sans-serif;cursor:pointer; transition:all 0.2s; ${window.adminViewMode === 'personal' ? 'background:#fff;color:var(--text);box-shadow:0 1px 3px rgba(0,0,0,0.1);' : 'background:transparent;color:var(--text-muted);'}">My View</button>
         <button id="view-mode-org" onclick="setAdminViewMode('org')" style="padding:6px 16px;border:none;border-radius:6px;font-size:12px;font-weight:600;font-family:Poppins,sans-serif;cursor:pointer; transition:all 0.2s; ${window.adminViewMode === 'org' ? 'background:#fff;color:var(--text);box-shadow:0 1px 3px rgba(0,0,0,0.1);' : 'background:transparent;color:var(--text-muted);'}">Org View</button>
       </div>` : '';
 
-    el.innerHTML =
-      '<div class="view-header">' +
-        '<div>' +
-          '<h1 class="view-title">Good ' + getGreeting() + ', <span id="dash-greeting-name" onclick="editPreferredName()" title="Click to personalise your name" style="cursor:pointer;border-bottom:1px dashed var(--border);padding-bottom:1px;">' + name + '</span>.' +
-            '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" stroke-width="2" style="margin-left:6px;vertical-align:middle;cursor:pointer;" onclick="editPreferredName()" title="Edit name"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>' +
-          '</h1>' +
-          '<p class="view-subtitle">' + (currentRole === 'admin'
-            ? 'Team overview — all products and projects'
-            : 'Your products and projects' + (currentUserDept ? ' — ' + currentUserDept : '')) + '</p>' +
-          adminToggle +
-        '</div>' +
-        '<button class="btn-primary" onclick="loadView(\'products\')">+ New</button>' +
-      '</div>' +
-      '<div class="stats-row">' +
-        '<div class="stat-card stat-card-link dash-stat-card" onclick="openDrill(\'active\')" style="border-top:3px solid var(--red);">' +
-          '<div class="stat-label">Active items</div>' +
-          '<div class="stat-value" id="stat-active">—</div>' +
-          '<div class="stat-nav-hint" id="stat-slip" style="color:var(--red);font-weight:500;min-height:16px;"></div>' +
-        '</div>' +
-        '<div class="stat-card stat-card-link dash-stat-card" onclick="openDrill(\'ontrack\')" style="border-top:3px solid var(--green);">' +
-          '<div class="stat-label">On Track</div>' +
-          '<div class="stat-value green" id="stat-ontrack">—</div>' +
-          '<div class="stat-nav-hint" id="stat-ontrack-hint" style="min-height:16px;">See the tasks →</div>' +
-        '</div>' +
-        '<div class="stat-card stat-card-link dash-stat-card" onclick="openDrill(\'overdue\')" style="border-top:3px solid var(--red);">' +
-          '<div class="stat-label">Overdue</div>' +
-          '<div class="stat-value red" id="stat-overdue">—</div>' +
-          '<div class="stat-nav-hint">See what is overdue →</div>' +
-        '</div>' +
-        '<div class="stat-card stat-card-link dash-stat-card" onclick="openDrill(\'week\')" style="border-top:3px solid var(--amber);">' +
-          '<div class="stat-label">Due This Week</div>' +
-          '<div class="stat-value amber" id="stat-week">—</div>' +
-          '<div class="stat-nav-hint">See the tasks →</div>' +
-        '</div>' +
-      '</div>' +
-      '<div class="two-col">' +
-        '<div class="panel">' +
-          '<div class="panel-header">' +
-            '<span class="panel-title">Products</span>' +
-            '<button class="btn-link-sm" onclick="loadView(\'products\')">View all →</button>' +
-          '</div>' +
-          '<div id="dash-recent"><div class="loading-row" style="padding:18px;">Loading...</div></div>' +
-        '</div>' +
-        '<div class="panel">' +
-          '<div class="panel-header">' +
-            '<span class="panel-title">Upcoming Deadlines</span>' +
-            '<button class="btn-link-sm" onclick="loadView(\'calendar\')">Calendar →</button>' +
-          '</div>' +
-          '<div id="dash-deadlines"><div class="loading-row" style="padding:18px;">Loading...</div></div>' +
-        '</div>' +
-      '</div>' +
-      '<div class="panel">' +
-        '<div class="panel-header">' +
-          '<span class="panel-title">Recent emails sent</span>' +
-          '<span style="font-size:11px;color:var(--text-muted);">Automated and manual sends across your items</span>' +
-        '</div>' +
-        '<div id="dash-emaillog"><div class="loading-row" style="padding:18px;">Loading...</div></div>' +
-      '</div>';
+    el.innerHTML = `
+      <div class="hero-banner">
+        <div>
+          <div class="hero-greeting">Good ${getGreeting()},</div>
+          <div class="hero-name">
+            <span id="dash-greeting-name" onclick="editPreferredName()" title="Click to personalise your name" style="cursor:pointer;border-bottom:2px dashed rgba(0,0,0,0.15);">${name}</span>.
+          </div>
+          <div class="hero-sub">Here's what's happening across your products and projects.</div>
+          ${adminToggle}
+        </div>
+        <button class="btn-primary" style="padding:12px 24px; font-size:14px; box-shadow:0 4px 12px rgba(192,40,45,0.3);" onclick="showCreateProduct()">+ New Project</button>
+      </div>
+      
+      <div class="stats-row">
+        <div class="stat-card stat-card-link dash-stat-card" onclick="openDrill('active')" style="border-top:3px solid var(--red);">
+          <div class="stat-label">Active items</div>
+          <div class="stat-value" id="stat-active">—</div>
+          <div class="stat-nav-hint" id="stat-slip" style="color:var(--red);font-weight:500;min-height:16px;"></div>
+        </div>
+        <div class="stat-card stat-card-link dash-stat-card" onclick="openDrill('ontrack')" style="border-top:3px solid var(--green);">
+          <div class="stat-label">On Track</div>
+          <div class="stat-value green" id="stat-ontrack">—</div>
+          <div class="stat-nav-hint" id="stat-ontrack-hint" style="min-height:16px;">See the tasks →</div>
+        </div>
+        <div class="stat-card stat-card-link dash-stat-card" onclick="openDrill('overdue')" style="border-top:3px solid var(--amber);">
+          <div class="stat-label">Overdue</div>
+          <div class="stat-value amber" id="stat-overdue">—</div>
+          <div class="stat-nav-hint">See what is overdue →</div>
+        </div>
+        <div class="stat-card stat-card-link dash-stat-card" onclick="openDrill('week')" style="border-top:3px solid var(--blue);">
+          <div class="stat-label">Due This Week</div>
+          <div class="stat-value" style="color:var(--blue);" id="stat-week">—</div>
+          <div class="stat-nav-hint">See the tasks →</div>
+        </div>
+      </div>
+      
+      <div class="two-col">
+        <div class="panel">
+          <div class="panel-header">
+            <span class="panel-title" style="display:flex;align-items:center;gap:8px;">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 16V8a2 2 0 00-1-1.73l-7-4a2 2 0 00-2 0l-7 4A2 2 0 003 8v8a2 2 0 001 1.73l7 4a2 2 0 002 0l7-4A2 2 0 0021 16z"/></svg>
+              Projects
+            </span>
+            <button class="btn-link-sm" onclick="loadView('products')">View all →</button>
+          </div>
+          <div id="dash-recent"><div class="loading-row" style="padding:18px;">Loading...</div></div>
+        </div>
+        
+        <div class="panel">
+          <div class="panel-header">
+            <span class="panel-title" style="display:flex;align-items:center;gap:8px;">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+              Upcoming Deadlines
+            </span>
+            <button class="btn-link-sm" onclick="loadView('calendar')">Calendar →</button>
+          </div>
+          <div id="dash-deadlines"><div class="loading-row" style="padding:18px;">Loading...</div></div>
+        </div>
+      </div>
+      
+      <div class="panel">
+        <div class="panel-header">
+          <span class="panel-title" style="display:flex;align-items:center;gap:8px;">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+            Recent Activity
+          </span>
+          <span style="font-size:11px;color:var(--text-muted);">Automated and manual sends across your items</span>
+        </div>
+        <div id="dash-emaillog"><div class="loading-row" style="padding:18px;">Loading...</div></div>
+      </div>`;
+    
     loadDashboardStats();
     loadDashboardEmailLog();
   });
@@ -11522,23 +11535,98 @@ onAuthStateChanged(auth, handleAuthStateChange);
   --amber-light:#FEF3C7;
   --blue:       #2563EB;
   --blue-light: #EFF6FF;
-  --bg:         #F8F8F7;
+  --bg:         #F9FAFB; /* Cleaner, cooler gray for the new UI */
   --surface:    #FFFFFF;
-  --border:     #E5E4E0;
-  --border-mid: #D1D0CB;
-  --text:       #1A1A18;
-  --text-mid:   #6B6B67;
-  --text-muted: #9A9A96;
-  --sidebar-w:  240px;
-  --header-h:   56px;
-  --radius:     8px;
-  --shadow:     0 1px 3px rgba(0,0,0,0.07), 0 1px 2px rgba(0,0,0,0.04);
+  --border:     #E5E7EB;
+  --border-mid: #D1D5DB;
+  --text:       #111827;
+  --text-mid:   #4B5563;
+  --text-muted: #6B7280;
+  
+  /* New Dark Theme Variables */
+  --sidebar-bg:    #18181B; 
+  --sidebar-text:  #A1A1AA;
+  --sidebar-hover: rgba(255,255,255,0.06);
+  --sidebar-w:     260px;
+  
+  --header-h:   72px;
+  --radius:     12px;
+  --shadow:     0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 2px 4px -1px rgba(0, 0, 0, 0.03);
 }
 html { font-family: 'Poppins', sans-serif; }
-body { font-family: 'Poppins', sans-serif; background: var(--bg); color: var(--text); font-size: 14px; line-height: 1.5; -webkit-font-smoothing: antialiased; }
+body { font-family: 'Poppins', sans-serif; background: var(--bg); color: var(--text); font-size: 13px; line-height: 1.5; -webkit-font-smoothing: antialiased; }
 button, input, select, textarea { font-family: 'Poppins', sans-serif; }
 button { cursor: pointer; }
 a { color: inherit; text-decoration: none; }
+
+/* ─── APP SHELL & SIDEBAR (DARK THEME) ─── */
+#screen-app { display: none; height: 100vh; overflow: hidden; flex-direction: row; }
+#screen-app.active-app { display: flex; }
+
+#sidebar {
+  width: var(--sidebar-w); min-width: var(--sidebar-w); height: 100vh;
+  background: var(--sidebar-bg); border-right: none; color: white;
+  display: flex; flex-direction: column; transition: width 0.2s, min-width 0.2s;
+  overflow: hidden;
+}
+.sidebar-top { padding: 24px 20px 16px; flex-shrink: 0; display: flex; align-items: center; gap: 12px; }
+.sidebar-logo-img { width: 36px; height: 36px; border-radius: 8px; object-fit: cover; }
+.sidebar-brand { font-family: 'Poppins', sans-serif; font-size: 14px; font-weight: 700; color: white; letter-spacing: 0.5px; }
+.sidebar-subbrand { font-size: 10px; color: var(--sidebar-text); text-transform: uppercase; letter-spacing: 0.1em; }
+
+.sidebar-nav { flex: 1; overflow-y: auto; padding: 12px; }
+.nav-section-label { font-size: 10px; font-weight: 700; color: #52525B; text-transform: uppercase; letter-spacing: 0.1em; padding: 16px 12px 8px; }
+.nav-item {
+  display: flex; align-items: center; gap: 12px; padding: 10px 12px; border-radius: 8px;
+  font-size: 13px; font-weight: 500; color: var(--sidebar-text); cursor: pointer;
+  border: none; background: none; width: 100%; text-align: left; transition: all 0.2s;
+}
+.nav-item:hover { background: var(--sidebar-hover); color: white; }
+.nav-item.active { background: var(--red); color: white; font-weight: 600; box-shadow: 0 4px 12px rgba(192,40,45,0.3); }
+.nav-item .nav-icon { width: 18px; height: 18px; opacity: 0.8; }
+.nav-item.active .nav-icon { opacity: 1; }
+
+.sidebar-bottom-graphic {
+  padding: 24px 20px 32px; flex-shrink: 0;
+  background: linear-gradient(180deg, rgba(24,24,27,0) 0%, rgba(0,0,0,0.4) 100%), url('https://mixtafrica.com/wp-content/uploads/2023/06/lakowe-lakes-2.jpg') bottom/cover;
+  border-top: 1px solid rgba(255,255,255,0.05);
+}
+.sidebar-bottom-text { font-size: 15px; font-weight: 600; color: white; line-height: 1.4; text-shadow: 0 2px 4px rgba(0,0,0,0.5); }
+
+/* ─── NEW MAIN HEADER ─── */
+#main-area { flex: 1; display: flex; flex-direction: column; overflow: hidden; min-width: 0; background: var(--bg); }
+#main-header {
+  height: var(--header-h); background: var(--surface);
+  display: flex; align-items: center; justify-content: space-between; padding: 0 32px; flex-shrink: 0;
+  border-bottom: 1px solid var(--border); box-shadow: 0 1px 2px rgba(0,0,0,0.02);
+}
+.header-left { display: flex; align-items: center; gap: 16px; flex: 1; }
+.global-search-wrap {
+  display: flex; align-items: center; background: #F4F4F5; border-radius: 99px;
+  padding: 8px 16px; width: 100%; max-width: 480px; border: 1px solid transparent; transition: border 0.2s;
+}
+.global-search-wrap:focus-within { border-color: var(--border-mid); background: white; box-shadow: var(--shadow); }
+.global-search-input { border: none; background: transparent; outline: none; width: 100%; font-size: 13px; margin-left: 10px; font-family: 'Poppins', sans-serif; color: var(--text); }
+.header-right { display: flex; align-items: center; gap: 24px; }
+.header-bell { color: var(--text-muted); cursor: pointer; transition: color 0.2s; position: relative; }
+.header-bell:hover { color: var(--text); }
+.header-profile { display: flex; align-items: center; gap: 12px; cursor: pointer; padding-left: 24px; border-left: 1px solid var(--border); }
+.header-avatar { width: 36px; height: 36px; border-radius: 50%; background: var(--text); color: white; font-size: 14px; font-weight: 600; display: flex; align-items: center; justify-content: center; }
+.header-user-details { display: flex; flex-direction: column; }
+.header-user-name { font-size: 13px; font-weight: 600; color: var(--text); line-height: 1.2; }
+.header-user-role { font-size: 11px; color: var(--text-muted); line-height: 1.2; margin-top: 2px; }
+
+.main-content { flex: 1; overflow-y: auto; padding: 32px 40px 60px; }
+
+/* ─── DASHBOARD HERO BANNER ─── */
+.hero-banner {
+  background: linear-gradient(90deg, #F8F5EE 35%, rgba(248,245,238,0.2) 100%), url('https://mixtafrica.com/wp-content/uploads/2023/06/lakowe-lakes-2.jpg') center right/cover no-repeat;
+  border-radius: 16px; padding: 40px 48px; display: flex; justify-content: space-between; align-items: flex-start;
+  margin-bottom: 24px; box-shadow: 0 4px 20px rgba(0,0,0,0.04); border: 1px solid rgba(0,0,0,0.03);
+}
+.hero-greeting { font-size: 11px; font-weight: 700; letter-spacing: 0.1em; color: var(--text-mid); text-transform: uppercase; margin-bottom: 4px; }
+.hero-name { font-size: 36px; font-weight: 700; color: var(--text); line-height: 1.1; margin-bottom: 8px; letter-spacing: -0.5px; }
+.hero-sub { font-size: 14px; color: var(--text-mid); }
 
 /* ─── LOGIN SCREEN ─── */
 #screen-login {
@@ -12459,13 +12547,13 @@ textarea.input-field { resize: vertical; line-height: 1.6; }
 ══════════════════════════════════════════ -->
 <div id="screen-app" style="display:none;">
 
-  <!-- SIDEBAR -->
+  <!-- DARK SIDEBAR -->
   <nav id="sidebar">
     <div class="sidebar-top">
       <img src="Mixta%20Africa.jpg" alt="Mixta Africa" class="sidebar-logo-img"/>
       <div class="sidebar-brand-text">
-        <div class="sidebar-brand">Mixta Africa</div>
-        <div class="sidebar-subbrand">NPD Hub</div>
+        <div class="sidebar-brand">MIXTA AFRICA</div>
+        <div class="sidebar-subbrand">NPD HUB</div>
       </div>
     </div>
 
@@ -12477,14 +12565,14 @@ textarea.input-field { resize: vertical; line-height: 1.6; }
       </button>
       <button class="nav-item" data-view="myactions" onclick="loadView('myactions')" id="nav-myactions">
         <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 3.6-7 8-7s8 3 8 7"/><polyline points="16 11 17.5 12.5 21 9"/></svg>
-        <span>My Actions &amp; To-do</span>
+        <span>My Actions &amp; To-dos</span>
       </button>
       <button class="nav-item" data-view="ask" onclick="loadView('ask')">
         <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.38 8.38 0 01-.9 3.8 8.5 8.5 0 01-7.6 4.7 8.38 8.38 0 01-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 01-.9-3.8 8.5 8.5 0 014.7-7.6 8.38 8.38 0 013.8-.9h.5a8.48 8.48 0 018 8v.5z"/></svg>
         <span>Ask</span>
       </button>
       <button class="nav-item" data-view="products" onclick="loadView('products')">
-        <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21 16V8a2 2 0 00-1-1.73l-7-4a2 2 0 00-2 0l-7 4A2 2 0 003 8v8a2 2 0 001 1.73l7 4a2 2 0 002 0l7-4A2 2 0 0021 16z"/></svg>
+        <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/></svg>
         <span>Products &amp; Projects</span>
       </button>
 
@@ -12519,33 +12607,40 @@ textarea.input-field { resize: vertical; line-height: 1.6; }
         <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
         <span>Circuit Box</span>
       </button>
-      <button class="nav-item" style="font-size:11px;color:var(--text-muted);justify-content:center;" onclick="showSAChallenge()" title="Super admin access"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg></button>
     </div>
 
-    <div class="sidebar-bottom">
-      <div class="user-row">
-        <div class="user-avatar" id="user-avatar">T</div>
-        <div class="user-info">
-          <div class="user-name" id="user-name">Loading...</div>
-          <div class="user-email" id="user-email"></div>
-        </div>
-        <span class="role-badge role-admin" id="role-badge">Admin</span>
-      </div>
+    <div class="sidebar-bottom-graphic">
+      <div class="sidebar-bottom-text">Building Africa's<br>next generation<br>of homes.</div>
     </div>
   </nav>
 
-  <!-- MAIN AREA -->
+  <!-- MAIN AREA WITH GLOBAL HEADER -->
   <div id="main-area">
     <header id="main-header">
-      <button class="header-toggle" onclick="toggleSidebar()" title="Toggle sidebar">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
-      </button>
-      <span id="page-title">Dashboard</span>
-      <div class="header-spacer"></div>
-      <div class="header-actions">
-        <button class="btn-outline" style="font-size:12px;padding:6px 12px;" onclick="handleSignOut()">Sign out</button>
+      <div class="header-left">
+        <button class="header-toggle" onclick="toggleSidebar()" title="Toggle sidebar">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+        </button>
+        <div class="global-search-wrap">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="color:var(--text-muted)"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+          <input type="text" class="global-search-input" placeholder="Search projects, tasks, or people..." id="global-search-input"/>
+        </div>
+      </div>
+      
+      <div class="header-right">
+        <div class="header-bell" title="Notifications">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8A6 6 0 006 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 01-3.4 0"/></svg>
+        </div>
+        <div class="header-profile" onclick="handleSignOut()" title="Click to sign out">
+          <div class="header-avatar" id="user-avatar">T</div>
+          <div class="header-user-details">
+            <div class="header-user-name" id="user-name">Loading...</div>
+            <div class="header-user-role" id="user-email"></div>
+          </div>
+        </div>
       </div>
     </header>
+    
     <div id="main-content" class="main-content"></div>
   </div>
 
