@@ -11142,18 +11142,32 @@ window.showEmailPreview = (logId) => {
   modal.style.display = 'flex';
 };
 
-/* ══ STATE RECONCILIATION ENGINE (THE WATCHDOG) ══════════════ */
+/* ══ ENTERPRISE STATE RECONCILIATION ENGINE (THE WATCHDOG) ══════════════ */
 async function renderSAWatchdog(el) {
   el.innerHTML = `
     <div class="panel" style="margin-bottom:16px;">
       <div class="panel-header">
-        <span class="panel-title">NPD Watchdog — State Reconciliation Engine</span>
+        <span class="panel-title" style="display:flex;align-items:center;gap:8px;">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--blue)" stroke-width="2.5"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
+          Strict State Reconciler
+        </span>
       </div>
       <div class="panel-body">
-        <p style="font-size:13px;color:var(--text-mid);line-height:1.7;margin-bottom:16px;">
-          This engine mimics React's state management by cross-referencing the absolute source of truth (Firebase) against your browser's local caches and dependency maps. It actively hunts for "Ghost Tasks", false blocks, broken links, and cache desyncs.
-        </p>
-        <button class="btn-primary" id="watchdog-btn" onclick="runWatchdogScan()" style="width:100%;">Run Deep Scan</button>
+        <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:20px;">
+          <div style="background:#FAFAF9;padding:12px;border:1px solid var(--border);border-radius:8px;">
+            <div style="font-size:11px;font-weight:700;color:var(--text-muted);text-transform:uppercase;margin-bottom:4px;">DAG Integrity</div>
+            <div style="font-size:11px;color:var(--text-mid);">Detects circular loops, ghost links, and rendering paradoxes.</div>
+          </div>
+          <div style="background:#FAFAF9;padding:12px;border:1px solid var(--border);border-radius:8px;">
+            <div style="font-size:11px;font-weight:700;color:var(--text-muted);text-transform:uppercase;margin-bottom:4px;">Deep Parity</div>
+            <div style="font-size:11px;color:var(--text-mid);">Strict JSON equality diffing between UI Heap and DB nodes.</div>
+          </div>
+          <div style="background:#FAFAF9;padding:12px;border:1px solid var(--border);border-radius:8px;">
+            <div style="font-size:11px;font-weight:700;color:var(--text-muted);text-transform:uppercase;margin-bottom:4px;">Chronological Rules</div>
+            <div style="font-size:11px;color:var(--text-mid);">Flags timeline impossibilities (child deadline before parent).</div>
+          </div>
+        </div>
+        <button class="btn-primary" id="watchdog-btn" onclick="runWatchdogScan()" style="width:100%;font-size:13px;padding:12px;">Execute Deep Scan</button>
       </div>
     </div>
     <div id="watchdog-results"></div>`;
@@ -11162,93 +11176,166 @@ async function renderSAWatchdog(el) {
 window.runWatchdogScan = async () => {
   const btn = document.getElementById('watchdog-btn');
   const res = document.getElementById('watchdog-results');
-  if (btn) { btn.disabled = true; btn.textContent = 'Scanning Architecture...'; }
-  if (res) res.innerHTML = '<div class="loading-row">Pulling master database state...</div>';
+  if (btn) { btn.disabled = true; btn.textContent = 'Scanning Virtual Tree vs Database...'; }
+  if (res) res.innerHTML = '<div class="loading-row">Analyzing architecture...</div>';
 
   try {
-    const snap = await get(ref(db, 'products'));
-    const masterData = snap.val() || {};
+    const [prodSnap, stkSnap, deptSnap] = await Promise.all([
+      get(ref(db, 'products')),
+      get(ref(db, 'config/stakeholders')),
+      get(ref(db, 'config/departments'))
+    ]);
+    
+    const masterData = prodSnap.val() || {};
+    const liveStakeholders = Array.isArray(stkSnap.val()) ? stkSnap.val() : Object.values(stkSnap.val() || {});
+    const liveDepts = Object.keys(deptSnap.val() || {});
+    
+    const validEmails = liveStakeholders.map(s => (s.email || '').toLowerCase());
     const anomalies = [];
 
     Object.entries(masterData).forEach(([productId, masterProd]) => {
       if (masterProd.status === 'archived') return;
 
       const masterTasks = masterProd.tasks ? Object.values(masterProd.tasks) : (masterProd.pillars ? pillarsToTasks(masterProd.pillars) : []);
-      const localProd = productListCache[productId];
-      const trackerProd = typeof trackerProductsCache !== 'undefined' ? trackerProductsCache[productId] : null;
+      const localProd = productListCache[productId] || (typeof trackerProductsCache !== 'undefined' ? trackerProductsCache[productId] : null);
 
-      // CHECK 1: CACHE DRIFT (Does local cache match Firebase?)
+      // --- CHECK 1: DEEP CACHE DRIFT ---
       if (localProd) {
-        const localTasks = getProductTasks(localProd);
-        if (localTasks.length !== masterTasks.length) {
-          anomalies.push({ type: 'cache-drift', prod: masterProd.name, issue: `Browser cache has ${localTasks.length} tasks, but Database has ${masterTasks.length}. UI is desynced.` });
+        const cleanLocal  = JSON.stringify(localProd).replace(/"updatedAt":\d+,?/g, '');
+        const cleanMaster = JSON.stringify(masterProd).replace(/"updatedAt":\d+,?/g, '');
+        if (cleanLocal !== cleanMaster) {
+          anomalies.push({ level: 'critical', type: 'cache-drift', prod: masterProd.name, issue: `Browser memory heap differs from database. UI is displaying stale/mutated state.`, fixable: true, fixAction: `watchdogSyncCache('${productId}')`, fixLabel: 'Force Pull Data' });
         }
       }
 
-      // CHECK 2: ORPHANED DEPENDENCIES (Task depends on a deleted "Ghost" task)
+      // --- CHECK 2: CIRCULAR DEPENDENCIES (DAG FRACTURE) ---
+      const adjList = {};
+      masterTasks.forEach(t => adjList[t.id] = t.predecessors || []);
+      
+      const visited = new Set();
+      const recStack = new Set();
+      let cycleFound = false;
+
+      const detectCycle = (nodeId) => {
+        if (recStack.has(nodeId)) return true;
+        if (visited.has(nodeId)) return false;
+        visited.add(nodeId);
+        recStack.add(nodeId);
+        for (const neighbor of (adjList[nodeId] || [])) {
+          if (detectCycle(neighbor)) return true;
+        }
+        recStack.delete(nodeId);
+        return false;
+      };
+
+      masterTasks.forEach(t => {
+        if (!cycleFound && detectCycle(t.id)) {
+          cycleFound = true;
+          anomalies.push({ level: 'critical', type: 'dag-cycle', prod: masterProd.name, issue: `Infinite loop detected involving "${t.title}". Tasks depend on each other cyclically, breaking Gantt and Map rendering.`, fixable: true, fixAction: `watchdogWipeLinks('${productId}')`, fixLabel: 'Wipe Project Links' });
+        }
+      });
+
       masterTasks.forEach(task => {
+        // --- CHECK 3: GHOST LINKS ---
         if (task.predecessors && task.predecessors.length > 0) {
           task.predecessors.forEach(pid => {
             const predExists = masterTasks.find(t => t.id === pid);
             if (!predExists) {
-              anomalies.push({ type: 'ghost-link', prod: masterProd.name, issue: `Task "${task.title || 'Untitled'}" is blocked by a deleted task (ID: ${pid}). This causes permanent false blockages.`, fixable: true, fixAction: `watchdogFixGhost('${productId}', '${task.id}', '${pid}')` });
+              anomalies.push({ level: 'warning', type: 'ghost-link', prod: masterProd.name, issue: `Task "${task.title}" waits on a deleted task (${pid}). Causes permanent false blockages.`, fixable: true, fixAction: `watchdogFixGhost('${productId}', '${task.id}', '${pid}')`, fixLabel: 'Sever Ghost Link' });
+            } else if (task.deadline && predExists.deadline) {
+              // --- CHECK 4: CHRONOLOGICAL PARADOX ---
+              const tDate = new Date(task.deadline).setHours(0,0,0,0);
+              const pDate = new Date(predExists.deadline).setHours(0,0,0,0);
+              if (pDate > tDate) {
+                anomalies.push({ level: 'warning', type: 'time-paradox', prod: masterProd.name, issue: `Timeline impossible. "${task.title}" is due ${formatDate(task.deadline)}, but waits on "${predExists.title}" due LATER (${formatDate(predExists.deadline)}).` });
+              }
             }
           });
         }
-      });
 
-      // CHECK 3: FALSE STATUS CONFLICTS (task.status vs task.taskStatus)
-      masterTasks.forEach(task => {
+        // --- CHECK 5: ORPHANED RESOURCES ---
+        if (task.ownerEmail && !validEmails.includes(task.ownerEmail.toLowerCase())) {
+          anomalies.push({ level: 'info', type: 'orphaned-owner', prod: masterProd.name, issue: `Task "${task.title}" assigned to ${task.ownerEmail}, who no longer exists in the Stakeholders directory.` });
+        }
+
+        // --- CHECK 6: SCHEMA CONFLICTS ---
         if (task.status === 'complete' && task.taskStatus && task.taskStatus !== 'complete') {
-          anomalies.push({ type: 'schema-conflict', prod: masterProd.name, issue: `Task "${task.title || 'Untitled'}" has conflicting completion statuses between new and legacy data.`, fixable: true, fixAction: `watchdogFixSchema('${productId}', '${task.id}')` });
+          anomalies.push({ level: 'warning', type: 'schema-conflict', prod: masterProd.name, issue: `Task "${task.title}" has conflicting completion markers between UI schema and Legacy schema.`, fixable: true, fixAction: `watchdogFixSchema('${productId}', '${task.id}')`, fixLabel: 'Align Schema' });
         }
       });
       
-      // CHECK 4: DEADLINE / OVERDUE LOGIC CORRUPTION
-      masterTasks.forEach(task => {
-        const eff = resolveTaskStatus(task, masterProd);
-        if (task.status === 'complete' && eff !== 'complete') {
-           anomalies.push({ type: 'logic-trap', prod: masterProd.name, issue: `Task "${task.title || 'Untitled'}" is marked complete in DB, but the UI engine is calculating it as "${eff}".` });
-        }
-      });
+      // --- CHECK 7: MACRO STATUS HALLUCINATIONS ---
+      const allComplete = masterTasks.length > 0 && masterTasks.every(t => t.status === 'complete');
+      if (allComplete && masterProd.status === 'active') {
+         anomalies.push({ level: 'info', type: 'status-hallucination', prod: masterProd.name, issue: `Project is 100% complete but still marked 'Active' in database.`, fixable: true, fixAction: `watchdogArchiveProd('${productId}')`, fixLabel: 'Archive Project' });
+      }
     });
 
     // Render Results
     if (anomalies.length === 0) {
-      res.innerHTML = '<div class="alert-result-box alert-result-ok" style="display:block;">All state caches, dependencies, and database nodes are perfectly synchronized.</div>';
+      res.innerHTML = '<div class="alert-result-box alert-result-ok" style="display:block;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:text-bottom;margin-right:4px;"><path d="M22 11.08V12a10 10 0 11-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg> Architecture Clean. Zero anomalies detected in DAG, Caches, or Timeline.</div>';
     } else {
-      res.innerHTML = `<div style="font-size:13px;font-weight:600;color:var(--red);margin-bottom:10px;">${anomalies.length} Anomalies Detected</div>` +
-        anomalies.map(a => `
-        <div style="background:#FFFBEB;border:1px solid #FDE68A;border-left:3px solid var(--amber);border-radius:8px;padding:12px 14px;margin-bottom:8px;">
-          <div style="font-size:11px;font-weight:700;color:var(--amber);text-transform:uppercase;margin-bottom:4px;">[${a.type}] ${a.prod}</div>
-          <div style="font-size:12px;color:var(--text);margin-bottom:${a.fixable ? '8px' : '0'};">${a.issue}</div>
-          ${a.fixable ? `<button class="btn-secondary-sm" style="font-size:10px;padding:4px 8px;" onclick="${a.fixAction}">Auto-Fix Disconnect</button>` : ''}
+      const colors = { critical: 'var(--red)', warning: 'var(--amber)', info: 'var(--blue)' };
+      const bgs = { critical: '#FEF2F2', warning: '#FFFBEB', info: '#EFF6FF' };
+      
+      res.innerHTML = `<div style="font-size:14px;font-weight:700;color:var(--text);margin-bottom:12px;">${anomalies.length} Architecture Anomalies Detected</div>` +
+        anomalies.sort((a,b) => a.level === 'critical' ? -1 : 1).map(a => `
+        <div style="background:${bgs[a.level]};border:1px solid ${colors[a.level]}40;border-left:4px solid ${colors[a.level]};border-radius:6px;padding:12px 14px;margin-bottom:8px;display:flex;justify-content:space-between;align-items:center;">
+          <div>
+            <div style="font-size:10px;font-weight:800;color:${colors[a.level]};text-transform:uppercase;letter-spacing:.05em;margin-bottom:2px;">[${a.type}] &middot; ${a.prod}</div>
+            <div style="font-size:12px;color:var(--text);line-height:1.5;">${a.issue}</div>
+          </div>
+          ${a.fixable ? `<button class="btn-outline" style="border-color:${colors[a.level]};color:${colors[a.level]};font-size:10px;padding:5px 10px;margin-left:12px;flex-shrink:0;" onclick="${a.fixAction}">${a.fixLabel}</button>` : ''}
         </div>
       `).join('');
     }
   } catch (e) {
     res.innerHTML = `<div class="alert-result-box alert-result-err" style="display:block;">Scan Failed: ${e.message}</div>`;
   }
-  if (btn) { btn.disabled = false; btn.textContent = 'Run Deep Scan'; }
+  if (btn) { btn.disabled = false; btn.textContent = 'Execute Deep Scan'; }
+};
+
+/* --- WATCHDOG AUTO-FIXERS --- */
+window.watchdogSyncCache = async (productId) => {
+  const snap = await get(ref(db, `products/${productId}`));
+  if (snap.exists()) {
+    productListCache[productId] = snap.val();
+    if (typeof trackerProductsCache !== 'undefined') trackerProductsCache[productId] = snap.val();
+    showToast('Cache memory forced to equal Database.', 'success');
+    runWatchdogScan();
+  }
+};
+
+window.watchdogWipeLinks = async (productId) => {
+  if (!confirm("This will remove all 'Depends On' links in this project to break the infinite loop. Continue?")) return;
+  const snap = await get(ref(db, `products/${productId}/tasks`));
+  const tasks = snap.val() || {};
+  const updates = {};
+  Object.keys(tasks).forEach(tid => updates[`products/${productId}/tasks/${tid}/predecessors`] = []);
+  await Promise.all(Object.entries(updates).map(([path, val]) => set(ref(db, path), val)));
+  showToast('DAG Cycles broken.', 'success');
+  runWatchdogScan();
 };
 
 window.watchdogFixGhost = async (productId, taskId, ghostId) => {
-  try {
-    const snap = await get(ref(db, `products/${productId}/tasks/${taskId}/predecessors`));
-    let preds = snap.val() || [];
-    preds = preds.filter(id => id !== ghostId);
-    await set(ref(db, `products/${productId}/tasks/${taskId}/predecessors`), preds);
-    showToast('Ghost dependency severed. Data synced.', 'success');
-    runWatchdogScan(); // Refresh scan
-  } catch(e) { showToast('Fix failed', 'error'); }
+  const snap = await get(ref(db, `products/${productId}/tasks/${taskId}/predecessors`));
+  let preds = snap.val() || [];
+  preds = preds.filter(id => id !== ghostId);
+  await set(ref(db, `products/${productId}/tasks/${taskId}/predecessors`), preds);
+  showToast('Ghost link severed.', 'success');
+  runWatchdogScan();
 };
 
 window.watchdogFixSchema = async (productId, taskId) => {
-  try {
-    await set(ref(db, `products/${productId}/tasks/${taskId}/taskStatus`), 'complete');
-    showToast('Legacy status synchronized.', 'success');
-    runWatchdogScan();
-  } catch(e) { showToast('Fix failed', 'error'); }
+  await set(ref(db, `products/${productId}/tasks/${taskId}/taskStatus`), 'complete');
+  showToast('Schema synchronized.', 'success');
+  runWatchdogScan();
+};
+
+window.watchdogArchiveProd = async (productId) => {
+  await set(ref(db, `products/${productId}/status`), 'archived');
+  showToast('Project Archived.', 'success');
+  runWatchdogScan();
 };
   
 // Register all real functions with the global dispatcher
@@ -11422,6 +11509,9 @@ window.__npd_init({
   runWatchdogScan:         window.runWatchdogScan,
   watchdogFixGhost:        window.watchdogFixGhost,
   watchdogFixSchema:       window.watchdogFixSchema,
+  watchdogSyncCache:       window.watchdogSyncCache,
+  watchdogWipeLinks:       window.watchdogWipeLinks,
+  watchdogArchiveProd:     window.watchdogArchiveProd,
 });
 
 /* ── Auth wiring, deliberately last ──────────────────────────
