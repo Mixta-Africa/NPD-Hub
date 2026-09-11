@@ -2242,22 +2242,25 @@ async function loadMyActions() {
       const bgCol  = sectionBg[priority];
 
       html += `
-        <div style="background:#fff;border:1px solid #E5E5E3;border-left:3px solid ${color};border-radius:10px;padding:14px 16px;display:flex;align-items:flex-start;gap:14px;cursor:pointer;" onclick="viewProduct('${prod.id}', '${task.id}')">
+        <div class="action-row-card" style="border-left:3px solid ${color};" onclick="viewProduct('${prod.id}', '${task.id}')">
           <div style="flex:1;min-width:0;">
             <div style="font-size:13px;font-weight:600;color:#1A1A1A;margin-bottom:3px;">${task.title || 'Untitled task'}</div>
             <div style="font-size:11px;color:#6B7280;margin-bottom:6px;">${prod.name}</div>
             ${isBlocked
-              ? `<div style="font-size:11px;color:#D97706;display:flex;align-items:center;gap:5px;">
+              ? `<span class="pcf-pill pcf-pill-amber" style="display:inline-flex;align-items:center;gap:5px;font-weight:600;">
                   <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 007.54.54l3-3a5 5 0 00-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 00-7.54-.54l-3 3a5 5 0 007.07 7.07l1.71-1.71"/></svg>
                   Blocked by: ${blockedNames.join(', ')}
-                </div>`
+                </span>`
               : ''}
           </div>
           <div style="text-align:right;flex-shrink:0;">
-            <div style="font-size:11px;font-weight:600;color:${color};background:${bgCol};padding:3px 8px;border-radius:20px;margin-bottom:4px;white-space:nowrap;">
+            <span class="pcf-pill pcf-pill-${priority === 0 || priority === 3 ? 'amber' : 'red'}" style="white-space:nowrap;">
               ${daysOverdue !== null && daysOverdue > 0 ? daysOverdue + 'd overdue' : deadlineStr}
+            </span>
+            <div class="action-owner-chip">
+              <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 3.6-7 8-7s8 3 8 7"/></svg>
+              ${task.owner || 'Unassigned'}
             </div>
-            <div style="font-size:10px;color:#9CA3AF;">${task.owner || 'Unassigned'}</div>
           </div>
         </div>`;
     });
@@ -12755,6 +12758,11 @@ textarea.input-field { resize: vertical; line-height: 1.5; }
 .pcf-pill-red   { background:var(--red-light);   color:var(--red); }
 .pcf-pill-blue  { background:var(--blue-light);  color:var(--blue); }
 .pcf-pill-grey  { background:#F3F4F6; color:var(--text-mid); }
+.pcf-pill-amber { background:var(--amber-light); color:var(--amber); }
+
+.action-row-card { background:#fff; border:1px solid var(--border); border-radius:10px; padding:14px 16px; display:flex; align-items:flex-start; gap:14px; cursor:pointer; box-shadow:var(--shadow-xs); transition:box-shadow .15s, transform .15s, border-color .15s; }
+.action-row-card:hover { box-shadow:var(--shadow-sm); transform:translateY(-1px); border-color:var(--border-mid); }
+.action-owner-chip { display:flex; align-items:center; gap:5px; font-size:10px; color:var(--text-muted); font-weight:600; justify-content:flex-end; margin-top:4px; }
 
 .pcf-progress-row { display:flex; align-items:center; gap:12px; margin-bottom:16px; }
 .pcf-progress-bar { flex:1; height:7px; background:#F0F0EE; border-radius:99px; overflow:hidden; }
