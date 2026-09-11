@@ -2196,7 +2196,6 @@ async function loadMyActions() {
 
     Object.values(products).forEach(prod => {
       if (prod.status === 'archived') return;
-      // Delegates to the single access function — see canUserSeeProduct.
       if (!canUserSeeProduct(prod, userKey)) return;
 
       const tasks = getProductTasks(prod).filter(t => canViewTask(t, prod));
@@ -2204,8 +2203,6 @@ async function loadMyActions() {
       tasks.forEach(t => { allTasksMap[t.id] = t; });
 
       tasks.forEach(task => {
-        // Match against EVERY owner on the task, not just the first,
-        // and treat a whole-department assignment as a match for its members.
         const ownerList = (task.owners && task.owners.length > 0)
           ? task.owners
           : [{ dept: task.ownerDept || '', email: task.ownerEmail || '' }];
@@ -2213,7 +2210,6 @@ async function loadMyActions() {
         const meEmail = (currentUser.email || '').toLowerCase().trim();
         const meDept  = (currentUserDept || '').toLowerCase().trim();
         
-        // Exact identity match only
         const isMyTask = ownerList.some(o => {
           const oe = (o.email || '').toLowerCase().trim();
           const od = (o.dept  || '').toLowerCase().trim();
@@ -2227,17 +2223,14 @@ async function loadMyActions() {
 
         if (task.status === 'complete') return;
 
-        // Determine urgency
         const eff = resolveTaskStatus(task);
         
-        // Check if blocked by predecessor
         const blockedBy = (task.predecessors || []).filter(pid => {
           const pred = allTasksMap[pid];
           return pred && pred.status !== 'complete' && pred.taskStatus !== 'complete';
         });
         const isBlocked = blockedBy.length > 0;
 
-        // Check if due this strict calendar week using the 'soon' variable
         let isDueThisWeek = false;
         if (task.deadline) {
           const d = new Date(task.deadline);
@@ -2245,7 +2238,6 @@ async function loadMyActions() {
           if (d >= today && d <= soon) isDueThisWeek = true;
         }
 
-        // Priority order: blocked > overdue > delayed > due-this-week
         const priority = isBlocked ? 0 : eff === 'overdue' ? 1 : eff === 'delayed' ? 2 : (eff === 'due-soon' || isDueThisWeek) ? 3 : 4;
         
         if (priority === 4) return;
@@ -2259,20 +2251,19 @@ async function loadMyActions() {
     });
 
     if (myTasks.length === 0) {
-      el.innerHTML =
-        '<div class="empty-state" style="padding:64px 24px;">' +
-          '<div style="margin-bottom:16px;">' +
-            '<svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="#16A34A" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">' +
-              '<path d="M22 11.08V12a10 10 0 11-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/>' +
-            '</svg>' +
-          '</div>' +
-          '<h3 style="font-size:15px;font-weight:600;margin-bottom:8px;color:#1A1A1A;">You\'re all clear</h3>' +
-          '<p style="font-size:13px;color:#6B7280;">No overdue, delayed, or blocked tasks assigned to you right now.</p>' +
-        '</div>';
+      el.innerHTML = `
+        <div class="empty-state" style="padding:64px 24px;">
+          <div style="margin-bottom:16px;">
+            <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="#16A34A" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M22 11.08V12a10 10 0 11-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/>
+            </svg>
+          </div>
+          <h3 style="font-size:15px;font-weight:600;margin-bottom:8px;color:#1A1A1A;">You're all clear</h3>
+          <p style="font-size:13px;color:#6B7280;">No overdue, delayed, or blocked tasks assigned to you right now.</p>
+        </div>`;
       return;
     }
 
-    // Sort by priority
     myTasks.sort((a, b) => a.priority - b.priority);
 
     const sectionLabels = { 0: 'Blocked', 1: 'Overdue', 2: 'Delayed', 3: 'Due this week' };
@@ -2287,7 +2278,7 @@ async function loadMyActions() {
         if (lastPriority !== -1) html += '</div><div style="height:8px;"></div>';
         const lbl = sectionLabels[priority];
         const clr = sectionColors[priority];
-        html += '<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.08em;color:' + clr + ';padding:0 2px;margin-bottom:4px;">' + lbl + '</div>';
+        html += `<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.08em;color:${clr};padding:0 2px;margin-bottom:4px;">${lbl}</div>`;
         lastPriority = priority;
       }
 
@@ -2298,25 +2289,25 @@ async function loadMyActions() {
       const color  = sectionColors[priority];
       const bgCol  = sectionBg[priority];
 
-      html +=
-        '<div style="background:#fff;border:1px solid #E5E5E3;border-left:3px solid ' + color + ';border-radius:10px;padding:14px 16px;display:flex;align-items:flex-start;gap:14px;cursor:pointer;" onclick="viewProduct(\\'' + prod.id + '\\', \\'' + task.id + '\\')">' +
-          '<div style="flex:1;min-width:0;">' +
-            '<div style="font-size:13px;font-weight:600;color:#1A1A1A;margin-bottom:3px;">' + (task.title || 'Untitled task') + '</div>' +
-            '<div style="font-size:11px;color:#6B7280;margin-bottom:6px;">' + prod.name + '</div>' +
-            (isBlocked
-              ? '<div style="font-size:11px;color:#D97706;display:flex;align-items:center;gap:5px;">' +
-                  '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 007.54.54l3-3a5 5 0 00-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 00-7.54-.54l-3 3a5 5 0 007.07 7.07l1.71-1.71"/></svg>' +
-                  'Blocked by: ' + blockedNames.join(', ') +
-                '</div>'
-              : '') +
-          '</div>' +
-          '<div style="text-align:right;flex-shrink:0;">' +
-            '<div style="font-size:11px;font-weight:600;color:' + color + ';background:' + bgCol + ';padding:3px 8px;border-radius:20px;margin-bottom:4px;white-space:nowrap;">' +
-              (daysOverdue !== null && daysOverdue > 0 ? daysOverdue + 'd overdue' : deadlineStr) +
-            '</div>' +
-            '<div style="font-size:10px;color:#9CA3AF;">' + (task.owner || 'Unassigned') + '</div>' +
-          '</div>' +
-        '</div>';
+      html += `
+        <div style="background:#fff;border:1px solid #E5E5E3;border-left:3px solid ${color};border-radius:10px;padding:14px 16px;display:flex;align-items:flex-start;gap:14px;cursor:pointer;" onclick="viewProduct('${prod.id}', '${task.id}')">
+          <div style="flex:1;min-width:0;">
+            <div style="font-size:13px;font-weight:600;color:#1A1A1A;margin-bottom:3px;">${task.title || 'Untitled task'}</div>
+            <div style="font-size:11px;color:#6B7280;margin-bottom:6px;">${prod.name}</div>
+            ${isBlocked
+              ? `<div style="font-size:11px;color:#D97706;display:flex;align-items:center;gap:5px;">
+                  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 007.54.54l3-3a5 5 0 00-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 00-7.54-.54l-3 3a5 5 0 007.07 7.07l1.71-1.71"/></svg>
+                  Blocked by: ${blockedNames.join(', ')}
+                </div>`
+              : ''}
+          </div>
+          <div style="text-align:right;flex-shrink:0;">
+            <div style="font-size:11px;font-weight:600;color:${color};background:${bgCol};padding:3px 8px;border-radius:20px;margin-bottom:4px;white-space:nowrap;">
+              ${daysOverdue !== null && daysOverdue > 0 ? daysOverdue + 'd overdue' : deadlineStr}
+            </div>
+            <div style="font-size:10px;color:#9CA3AF;">${task.owner || 'Unassigned'}</div>
+          </div>
+        </div>`;
     });
 
     html += '</div>';
