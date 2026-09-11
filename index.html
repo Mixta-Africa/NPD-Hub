@@ -1466,12 +1466,6 @@ function formatDate(d) {
   return new Date(d).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
 }
 
-function generateId() {
-  return 'prod_' + Date.now() + '_' + Math.random().toString(36).slice(2,7);
-}
-
-window.adminViewMode = window.adminViewMode || 'org'; // Default state
-
 function renderDashboard(el) {
   loadPreferredName().then(() => {
     const name = currentPreferredName;
@@ -1628,7 +1622,7 @@ function renderDashboard(el) {
             <div id="dash-emaillog"><div class="loading-row" style="padding:18px;">Loading...</div></div>
           </div>
         </div>
-      </div>\`;
+      </div>`;
       
     loadDashboardStats();
     loadDashboardEmailLog();
