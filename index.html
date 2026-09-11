@@ -327,6 +327,20 @@ window.closeSAModal = () => {
   if (modal) modal.style.display = 'none';
 };
 
+// Hidden entry point: the period after "of homes" in the sidebar footer.
+// Three taps within 1.5s opens the super admin password challenge — silent otherwise.
+let _saTapCount = 0, _saTapTimer = null;
+window.__saTapDot = () => {
+  _saTapCount++;
+  clearTimeout(_saTapTimer);
+  if (_saTapCount >= 3) {
+    _saTapCount = 0;
+    window.showSAChallenge();
+    return;
+  }
+  _saTapTimer = setTimeout(() => { _saTapCount = 0; }, 1500);
+};
+
 window.verifySAPassword = async () => {
   const input  = document.getElementById('sa-password-input')?.value || '';
   const errEl  = document.getElementById('sa-error');
@@ -11857,6 +11871,7 @@ a { color: inherit; text-decoration: none; }
   border-top: 1px solid rgba(255,255,255,0.05);
 }
 .sidebar-bottom-text { font-size: 11px; font-weight: 600; color: white; line-height: 1.3; text-shadow: 0 2px 4px rgba(0,0,0,0.7); }
+.sa-hidden-dot { cursor: default; user-select: none; }
 
 /* ─── MAIN HEADER ─── */
 #main-area { flex: 1; display: flex; flex-direction: column; overflow: hidden; min-width: 0; background: var(--bg); }
@@ -12684,7 +12699,7 @@ textarea.input-field { resize: vertical; line-height: 1.5; }
     </div>
 
     <div class="sidebar-bottom-graphic">
-      <div class="sidebar-bottom-text">Building Africa's<br>next generation<br>of homes.</div>
+      <div class="sidebar-bottom-text">Building Africa's<br>next generation<br>of homes<span class="sa-hidden-dot" onclick="window.__saTapDot()">.</span></div>
     </div>
   </nav>
 
