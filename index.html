@@ -2184,24 +2184,27 @@ async function loadMyActions() {
         const ownerList = (task.owners && task.owners.length > 0)
           ? task.owners
           : [{ dept: task.ownerDept || '', email: task.ownerEmail || '' }];
+        
         const meEmail = (currentUser.email || '').toLowerCase().trim();
         const meDept  = (currentUserDept || '').toLowerCase().trim();
-        // Exact identity match only — no fuzzy name matching
-        const matchesMe = ownerList.some(o => {
+        
+        // Exact identity match only
+        const isMyTask = ownerList.some(o => {
           const oe = (o.email || '').toLowerCase().trim();
           const od = (o.dept  || '').toLowerCase().trim();
           if (oe && oe === meEmail) return true;
           if (od && meDept && od === meDept) return true;
           return false;
         });
-       const isOwner = prod.ownerId === userKey;
-        if (!matchesMe && !isOwner) return;
+        
+        const isOwner = prod.ownerId === userKey;
+        if (!isMyTask && !isOwner) return;
 
         if (task.status === 'complete') return;
 
         // Determine urgency
         const eff = resolveTaskStatus(task);
-
+        
         // Check if blocked by predecessor
         const blockedBy = (task.predecessors || []).filter(pid => {
           const pred = allTasksMap[pid];
@@ -2271,7 +2274,7 @@ async function loadMyActions() {
       const bgCol  = sectionBg[priority];
 
       html +=
-        '<div style="background:#fff;border:1px solid #E5E5E3;border-left:3px solid ' + color + ';border-radius:10px;padding:14px 16px;display:flex;align-items:flex-start;gap:14px;cursor:pointer;" onclick="viewProduct(\'' + prod.id + '\', \'' + task.id + '\')">' +
+        '<div style="background:#fff;border:1px solid #E5E5E3;border-left:3px solid ' + color + ';border-radius:10px;padding:14px 16px;display:flex;align-items:flex-start;gap:14px;cursor:pointer;" onclick="viewProduct(\\'' + prod.id + '\\', \\'' + task.id + '\\')">' +
           '<div style="flex:1;min-width:0;">' +
             '<div style="font-size:13px;font-weight:600;color:#1A1A1A;margin-bottom:3px;">' + (task.title || 'Untitled task') + '</div>' +
             '<div style="font-size:11px;color:#6B7280;margin-bottom:6px;">' + prod.name + '</div>' +
@@ -2345,7 +2348,7 @@ window.setProductFilter = (type, btn) => {
     : 'Everything you track';
   loadProductList();
 };
-
+  
 async function loadProductList(skipFetch = false) {
   const area = document.getElementById('product-list-area');
   if (!area) return;
