@@ -1683,10 +1683,13 @@ async function loadDashboardStats() {
 // Separated so onValue callback can call it
 function _updateDashboardUI(list) {
   try {
-    const today = new Date(); today.setHours(0,0,0,0);
-    
-    // Strict calendar week: Ends on Sunday at 23:59:59
+    const today = new Date(); 
+    today.setHours(0,0,0,0);
+
+    // Calculate how many days are left until Sunday
     const daysUntilSunday = today.getDay() === 0 ? 0 : 7 - today.getDay();
+    
+    // Set the end of the week to exactly Sunday at 11:59:59 PM
     const weekEnd = new Date(today); 
     weekEnd.setDate(today.getDate() + daysUntilSunday);
     weekEnd.setHours(23, 59, 59, 999);
@@ -2154,8 +2157,14 @@ async function loadMyActions() {
     const snap = await get(ref(db, 'products'));
     const products = snap.val() || {};
     const userKey  = sanitiseEmail(currentUser.email);
-    const today    = new Date(); today.setHours(0,0,0,0);
-    const soon     = new Date(today); soon.setDate(soon.getDate() + 7);
+    const today    = new Date(); 
+    today.setHours(0,0,0,0);
+
+    // Strict calendar week: Ends on Sunday at 23:59:59
+    const daysUntilSunday = today.getDay() === 0 ? 0 : 7 - today.getDay();
+    const soon = new Date(today); 
+    soon.setDate(today.getDate() + daysUntilSunday);
+    soon.setHours(23, 59, 59, 999);
 
     const myTasks = [];
 
@@ -2184,21 +2193,13 @@ async function loadMyActions() {
           if (od && meDept && od === meDept) return true;
           return false;
         });
-        const ownerEmail = matchesMe ? (currentUser.email || '').toLowerCase().trim() : '__nomatch__';
-        const myEmail    = (currentUser.email || '').toLowerCase().trim();
-        const myName     = (currentUser.displayName || '').toLowerCase().trim();
-        const isMyTask   = ownerEmail === myEmail ||
-                           ownerEmail.includes(myEmail.split('@')[0]) ||
-                           (myName && ownerEmail.includes(myName.split(' ')[0].toLowerCase()));
-        
-        const isOwner = prod.ownerId === userKey;
-        if (!isMyTask && !isOwner) return;
+       const isOwner = prod.ownerId === userKey;
+        if (!matchesMe && !isOwner) return;
 
         if (task.status === 'complete') return;
 
         // Determine urgency
         const eff = resolveTaskStatus(task);
-        if (eff === 'on-track' && !task.predecessors?.length) return;
 
         // Check if blocked by predecessor
         const blockedBy = (task.predecessors || []).filter(pid => {
@@ -2207,8 +2208,17 @@ async function loadMyActions() {
         });
         const isBlocked = blockedBy.length > 0;
 
-        // Priority order: blocked > overdue > delayed > due-soon
-        const priority = isBlocked ? 0 : eff === 'overdue' ? 1 : eff === 'delayed' ? 2 : eff === 'due-soon' ? 3 : 4;
+        // Check if due this strict calendar week using the 'soon' variable
+        let isDueThisWeek = false;
+        if (task.deadline) {
+          const d = new Date(task.deadline);
+          d.setHours(0,0,0,0);
+          if (d >= today && d <= soon) isDueThisWeek = true;
+        }
+
+        // Priority order: blocked > overdue > delayed > due-this-week
+        const priority = isBlocked ? 0 : eff === 'overdue' ? 1 : eff === 'delayed' ? 2 : (eff === 'due-soon' || isDueThisWeek) ? 3 : 4;
+        
         if (priority === 4) return;
 
         myTasks.push({
@@ -3285,7 +3295,8 @@ async function loadDrilldown(filter) {
   try {
     const snap    = await get(ref(db, 'products'));
     const userKey = sanitiseEmail(currentUser.email);
-    const today   = new Date(); today.setHours(0,0,0,0);
+    const today   = new Date(); 
+    today.setHours(0,0,0,0);
 
     // Strict calendar week: Ends on Sunday at 23:59:59
     const daysUntilSunday = today.getDay() === 0 ? 0 : 7 - today.getDay();
@@ -12475,6 +12486,20 @@ textarea.input-field { resize: vertical; line-height: 1.5; }
 .status-pill.st-overdue   { background:var(--red-light);   color:var(--red);   }
 .status-pill.st-due-soon  { background:var(--amber-light); color:var(--amber); }
 .status-pill.st-on-track  { background:var(--green-light); color:var(--green); }
+
+/* ─── LOGIN & ACCESS DENIED SCREENS ─── */
+#screen-login, #screen-denied { display: flex; min-height: 100vh; align-items: center; justify-content: center; background: var(--bg); padding: 20px; }
+.login-card, .denied-card { background: var(--surface); border-radius: 12px; padding: 40px; width: 100%; max-width: 400px; text-align: center; box-shadow: 0 10px 40px rgba(0,0,0,0.1); margin: auto; }
+.login-logo { margin-bottom: 24px; }
+.login-logo-img { width: 64px; height: 64px; border-radius: 12px; object-fit: cover; margin-bottom: 12px; }
+.login-brand { font-size: 18px; font-weight: 700; color: var(--text); line-height: 1.2; }
+.login-sub { font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; margin-top: 4px; }
+.login-heading { font-size: 20px; font-weight: 600; margin-bottom: 8px; }
+.login-desc { font-size: 12px; color: var(--text-mid); margin-bottom: 24px; line-height: 1.6; }
+.login-notice { font-size: 10px; color: var(--text-muted); margin-top: 16px; }
+#sign-in-btn { width: 100%; padding: 12px; background: white; border: 1px solid var(--border-mid); border-radius: 8px; font-size: 13px; font-weight: 500; color: var(--text); display: flex; align-items: center; justify-content: center; gap: 10px; transition: background 0.2s; box-shadow: 0 1px 2px rgba(0,0,0,0.05); }
+#sign-in-btn:hover { background: var(--bg); }
+#login-error { display: none; color: var(--red); font-size: 12px; margin-top: 12px; background: var(--red-light); padding: 8px; border-radius: 6px; }
 </style>
 
 <!-- ══════════════════════════════════════════
