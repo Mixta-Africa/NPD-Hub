@@ -11675,8 +11675,14 @@ function positionChartPulse() {
   const chart = window._dashCharts.line;
   const dot   = document.getElementById('progress-pulse-dot');
   if (!chart || !dot) return;
+  const data = chart.data.datasets[1]?.data || [];
+  let idx = -1;
+  for (let i = data.length - 1; i >= 0; i--) {
+    if (data[i] !== null && data[i] !== undefined) { idx = i; break; }
+  }
+  if (idx === -1) { dot.style.display = 'none'; return; }
   const meta = chart.getDatasetMeta(1);
-  const pt   = meta?.data?.[meta.data.length - 1];
+  const pt   = meta?.data?.[idx];
   if (!pt) return;
   dot.style.left = pt.x + 'px';
   dot.style.top  = pt.y + 'px';
@@ -11726,14 +11732,14 @@ function renderDashboardCharts(list) {
           data: [done, open, overdue],
           backgroundColor: ['#16A34A', '#E5E7EB', '#C0282D'],
           borderColor: '#fff',
-          borderWidth: 3,
-          borderRadius: 8,
-          spacing: 3,
+          borderWidth: 2,
+          borderRadius: 3,
+          spacing: 2,
           hoverOffset: 6
         }]
       },
       options: {
-        cutout: '76%', responsive: true, maintainAspectRatio: false,
+        cutout: '72%', responsive: true, maintainAspectRatio: false,
         animation: { animateRotate: true, duration: 800, easing: 'easeOutQuart' },
         plugins: { 
           legend: { display: false }, /* NO ChartJS LEGEND */
@@ -11776,16 +11782,41 @@ function renderDashboardCharts(list) {
       doneTasks += t.filter(x => resolveTaskStatus(x, p) === 'complete').length;
     });
     const finalPct = totalTasks === 0 ? 0 : Math.round((doneTasks / totalTasks) * 100);
-    const actualData = [15, 25, Math.max(25, finalPct - 15), Math.max(30, finalPct - 5), finalPct];
+
+    // Build a 5-month window centred on the REAL current month, not a hardcoded
+    // "Aug..Dec" range. "Actual" only gets real values up to and including the
+    // current month — future months are null so the line and its fill genuinely
+    // stop at today instead of pretending to know progress that hasn't happened.
+    const now = new Date();
+    const labels = [];
+    for (let i = -2; i <= 2; i++) {
+      const d = new Date(now.getFullYear(), now.getMonth() + i, 1);
+      labels.push(d.toLocaleDateString('en-GB', { month: 'short' }));
+    }
+    const todayIdx = 2; // middle of the -2..+2 window is always the current month
+
+    // Planned is a forward-looking target trajectory — future values are expected here.
+    const plannedData = [10, 30, 55, 78, 100];
+
+    // Actual: a light ramp toward today's real completion % for past/current months
+    // (we don't store historical daily snapshots, so these earlier points are an
+    // approximation, not logged history) — anything after today is null, full stop.
+    const actualData = [
+      Math.max(0, Math.round(finalPct * 0.35)),
+      Math.max(0, Math.round(finalPct * 0.65)),
+      finalPct,
+      null,
+      null,
+    ];
     
     window._dashCharts.line = new Chart(ctxLine, {
       type: 'line',
       data: {
-        labels: ['Aug', 'Sep', 'Oct', 'Nov', 'Dec'],
+        labels,
         datasets: [
           {
             label: 'Planned',
-            data: [20, 35, 55, 75, 100],
+            data: plannedData,
             borderColor: '#16A34A', backgroundColor: greenGradient,
             fill: true, tension: 0.4, borderWidth: 2.5,
             borderCapStyle: 'round', borderJoinStyle: 'round',
@@ -11795,6 +11826,7 @@ function renderDashboardCharts(list) {
           {
             label: 'Actual',
             data: actualData,
+            spanGaps: false,
             borderColor: '#C0282D', 
             backgroundColor: redGradient,
             fill: true, tension: 0.4, borderWidth: 2.5,
