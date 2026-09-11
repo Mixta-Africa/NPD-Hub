@@ -994,11 +994,12 @@ function pillarsToTasks(pillars) {
 }
 
 function getProductTasks(prod) {
-  // Return unified task array — handles both old pillar format and new task format
-  if (prod.tasks && Object.keys(prod.tasks).length > 0) {
+  // If the product has a tasks object (even if it's empty because you deleted everything), use it.
+  // Never fall back to legacy pillars if the product has already been migrated.
+  if (prod.tasks !== undefined) {
     return Object.values(prod.tasks).sort((a,b) => (a.order||0) - (b.order||0));
   }
-  // Legacy: convert pillars to tasks on the fly
+  // Only use legacy pillars for very old products that haven't been touched yet
   return pillarsToTasks(prod.pillars || {});
 }
 
@@ -1399,13 +1400,15 @@ function getPillarStatus(deadline) {
 function getTaskEffectiveStatus(task, prod) {
   const s = task.status || task.taskStatus || 'on-track';
   if (s === 'complete') return 'complete';
-  if (s === 'delayed')  return 'delayed';   // explicit delay always wins
+  if (s === 'delayed')  return 'delayed';
+  if (s === 'in-progress') return 'in-progress';
 
   // GLOBAL BLOCKED CHECK: Cross-reference predecessors safely
   if (prod && task.predecessors && task.predecessors.length > 0) {
     const allTasks = getProductTasks(prod);
     const isBlocked = task.predecessors.some(pid => {
       const pred = allTasks.find(t => t.id === pid);
+      // Ensure we check BOTH new and legacy complete statuses
       return pred && pred.status !== 'complete' && pred.taskStatus !== 'complete';
     });
     if (isBlocked) return 'blocked';
@@ -1427,12 +1430,13 @@ function resolveTaskStatus(task, prod) {
 
 // Colour + label lookup — used by every status pill/dot on the dashboard
 const STATUS_META = {
-  'complete':  { label: 'Complete',  color: 'var(--blue)',  cls: 'st-complete'  },
-  'delayed':   { label: 'Delayed',   color: 'var(--red)',   cls: 'st-delayed'   },
-  'overdue':   { label: 'Overdue',   color: 'var(--red)',   cls: 'st-overdue'   },
-  'due-soon':  { label: 'Due soon',  color: 'var(--amber)', cls: 'st-due-soon'  },
-  'blocked':   { label: 'Blocked',   color: '#D97706',      cls: 'st-blocked'   },
-  'on-track':  { label: 'On track',  color: 'var(--green)', cls: 'st-on-track'  },
+  'complete':    { label: 'Complete',    color: 'var(--blue)',  cls: 'st-complete'  },
+  'delayed':     { label: 'Delayed',     color: 'var(--red)',   cls: 'st-delayed'   },
+  'overdue':     { label: 'Overdue',     color: 'var(--red)',   cls: 'st-overdue'   },
+  'due-soon':    { label: 'Due soon',    color: 'var(--amber)', cls: 'st-due-soon'  },
+  'blocked':     { label: 'Blocked',     color: '#D97706',      cls: 'st-blocked'   },
+  'on-track':    { label: 'On track',    color: 'var(--green)', cls: 'st-on-track'  },
+  'in-progress': { label: 'In Progress', color: '#2563EB',      cls: 'st-in-progress'},
 };
 function statusMeta(task, prod) { return STATUS_META[resolveTaskStatus(task, prod)] || STATUS_META['on-track']; }
 
@@ -6091,7 +6095,12 @@ function drawGantt() {
 
 window.calFilterChange = () => {
   calSelectedProduct = document.getElementById('cal-product-filter')?.value || 'all';
-  drawCalendar(); drawMilestoneList();
+  if (calViewMode === 'gantt') {
+    drawGantt();
+  } else {
+    drawCalendar(); 
+    drawMilestoneList();
+  }
 };
 window.calMove = (dir) => {
   calCurrentMonth += dir;
@@ -7991,6 +8000,7 @@ function renderSuperAdmin(el) {
       <button class="sa-tab" onclick="switchSATab('users', this)">Users</button>
       <button class="sa-tab" onclick="switchSATab('products', this)">Products</button>
       <button class="sa-tab" onclick="switchSATab('maintenance', this)">Maintenance</button>
+      <button class="sa-tab" onclick="switchSATab('watchdog', this)">Watchdog</button>
     </div>
 
     <div id="sa-tab-content">
@@ -8026,6 +8036,7 @@ async function loadSATab(tab) {
     case 'users':         await renderSAUsers(el);         break;
     case 'products':      await renderSAProducts(el);      break;
     case 'maintenance':   await renderSAMaintenance(el);   break;
+    case 'watchdog':      await renderSAWatchdog(el);      break;
   }
 }
 
@@ -9219,9 +9230,9 @@ function renderKanban(prod) {
 
   // Map task status to kanban column
   function taskToCol(t) {
-    const st = t.status || 'on-track';
+    const st = t.status || t.taskStatus || 'on-track';
     if (st === 'complete') return 'done';
-    if (st === 'delayed')  return 'in-progress';
+    if (st === 'in-progress' || st === 'delayed') return 'in-progress';
     return 'todo';
   }
 
@@ -9249,7 +9260,7 @@ function renderKanban(prod) {
       const statusBtns = canEdit && !blocked ? `
         <div class="kb-card-actions">
           ${col.id !== 'todo'        ? `<button class="kb-move-btn" onclick="moveKanbanTask('${prod.id}','${t.id}','on-track')">← To Do</button>` : ''}
-          ${col.id !== 'in-progress' ? `<button class="kb-move-btn" onclick="moveKanbanTask('${prod.id}','${t.id}','delayed')">In Progress</button>` : ''}
+          ${col.id !== 'in-progress' ? `<button class="kb-move-btn" onclick="moveKanbanTask('${prod.id}','${t.id}','in-progress')">In Progress</button>` : ''}
           ${col.id !== 'done'        ? `<button class="kb-move-btn kb-move-done" onclick="moveKanbanTask('${prod.id}','${t.id}','complete')">Done</button>` : ''}
         </div>` : blocked ? `<div style="font-size:10px;color:var(--amber);margin-top:6px;display:inline-flex;align-items:center;gap:3px;">${ICON.link} Blocked</div>` : '';
 
@@ -11130,6 +11141,115 @@ window.showEmailPreview = (logId) => {
   `;
   modal.style.display = 'flex';
 };
+
+/* ══ STATE RECONCILIATION ENGINE (THE WATCHDOG) ══════════════ */
+async function renderSAWatchdog(el) {
+  el.innerHTML = `
+    <div class="panel" style="margin-bottom:16px;">
+      <div class="panel-header">
+        <span class="panel-title">NPD Watchdog — State Reconciliation Engine</span>
+      </div>
+      <div class="panel-body">
+        <p style="font-size:13px;color:var(--text-mid);line-height:1.7;margin-bottom:16px;">
+          This engine mimics React's state management by cross-referencing the absolute source of truth (Firebase) against your browser's local caches and dependency maps. It actively hunts for "Ghost Tasks", false blocks, broken links, and cache desyncs.
+        </p>
+        <button class="btn-primary" id="watchdog-btn" onclick="runWatchdogScan()" style="width:100%;">Run Deep Scan</button>
+      </div>
+    </div>
+    <div id="watchdog-results"></div>`;
+}
+
+window.runWatchdogScan = async () => {
+  const btn = document.getElementById('watchdog-btn');
+  const res = document.getElementById('watchdog-results');
+  if (btn) { btn.disabled = true; btn.textContent = 'Scanning Architecture...'; }
+  if (res) res.innerHTML = '<div class="loading-row">Pulling master database state...</div>';
+
+  try {
+    const snap = await get(ref(db, 'products'));
+    const masterData = snap.val() || {};
+    const anomalies = [];
+
+    Object.entries(masterData).forEach(([productId, masterProd]) => {
+      if (masterProd.status === 'archived') return;
+
+      const masterTasks = masterProd.tasks ? Object.values(masterProd.tasks) : (masterProd.pillars ? pillarsToTasks(masterProd.pillars) : []);
+      const localProd = productListCache[productId];
+      const trackerProd = typeof trackerProductsCache !== 'undefined' ? trackerProductsCache[productId] : null;
+
+      // CHECK 1: CACHE DRIFT (Does local cache match Firebase?)
+      if (localProd) {
+        const localTasks = getProductTasks(localProd);
+        if (localTasks.length !== masterTasks.length) {
+          anomalies.push({ type: 'cache-drift', prod: masterProd.name, issue: `Browser cache has ${localTasks.length} tasks, but Database has ${masterTasks.length}. UI is desynced.` });
+        }
+      }
+
+      // CHECK 2: ORPHANED DEPENDENCIES (Task depends on a deleted "Ghost" task)
+      masterTasks.forEach(task => {
+        if (task.predecessors && task.predecessors.length > 0) {
+          task.predecessors.forEach(pid => {
+            const predExists = masterTasks.find(t => t.id === pid);
+            if (!predExists) {
+              anomalies.push({ type: 'ghost-link', prod: masterProd.name, issue: `Task "${task.title || 'Untitled'}" is blocked by a deleted task (ID: ${pid}). This causes permanent false blockages.`, fixable: true, fixAction: `watchdogFixGhost('${productId}', '${task.id}', '${pid}')` });
+            }
+          });
+        }
+      });
+
+      // CHECK 3: FALSE STATUS CONFLICTS (task.status vs task.taskStatus)
+      masterTasks.forEach(task => {
+        if (task.status === 'complete' && task.taskStatus && task.taskStatus !== 'complete') {
+          anomalies.push({ type: 'schema-conflict', prod: masterProd.name, issue: `Task "${task.title || 'Untitled'}" has conflicting completion statuses between new and legacy data.`, fixable: true, fixAction: `watchdogFixSchema('${productId}', '${task.id}')` });
+        }
+      });
+      
+      // CHECK 4: DEADLINE / OVERDUE LOGIC CORRUPTION
+      masterTasks.forEach(task => {
+        const eff = resolveTaskStatus(task, masterProd);
+        if (task.status === 'complete' && eff !== 'complete') {
+           anomalies.push({ type: 'logic-trap', prod: masterProd.name, issue: `Task "${task.title || 'Untitled'}" is marked complete in DB, but the UI engine is calculating it as "${eff}".` });
+        }
+      });
+    });
+
+    // Render Results
+    if (anomalies.length === 0) {
+      res.innerHTML = '<div class="alert-result-box alert-result-ok" style="display:block;">All state caches, dependencies, and database nodes are perfectly synchronized.</div>';
+    } else {
+      res.innerHTML = `<div style="font-size:13px;font-weight:600;color:var(--red);margin-bottom:10px;">${anomalies.length} Anomalies Detected</div>` +
+        anomalies.map(a => `
+        <div style="background:#FFFBEB;border:1px solid #FDE68A;border-left:3px solid var(--amber);border-radius:8px;padding:12px 14px;margin-bottom:8px;">
+          <div style="font-size:11px;font-weight:700;color:var(--amber);text-transform:uppercase;margin-bottom:4px;">[${a.type}] ${a.prod}</div>
+          <div style="font-size:12px;color:var(--text);margin-bottom:${a.fixable ? '8px' : '0'};">${a.issue}</div>
+          ${a.fixable ? `<button class="btn-secondary-sm" style="font-size:10px;padding:4px 8px;" onclick="${a.fixAction}">Auto-Fix Disconnect</button>` : ''}
+        </div>
+      `).join('');
+    }
+  } catch (e) {
+    res.innerHTML = `<div class="alert-result-box alert-result-err" style="display:block;">Scan Failed: ${e.message}</div>`;
+  }
+  if (btn) { btn.disabled = false; btn.textContent = 'Run Deep Scan'; }
+};
+
+window.watchdogFixGhost = async (productId, taskId, ghostId) => {
+  try {
+    const snap = await get(ref(db, `products/${productId}/tasks/${taskId}/predecessors`));
+    let preds = snap.val() || [];
+    preds = preds.filter(id => id !== ghostId);
+    await set(ref(db, `products/${productId}/tasks/${taskId}/predecessors`), preds);
+    showToast('Ghost dependency severed. Data synced.', 'success');
+    runWatchdogScan(); // Refresh scan
+  } catch(e) { showToast('Fix failed', 'error'); }
+};
+
+window.watchdogFixSchema = async (productId, taskId) => {
+  try {
+    await set(ref(db, `products/${productId}/tasks/${taskId}/taskStatus`), 'complete');
+    showToast('Legacy status synchronized.', 'success');
+    runWatchdogScan();
+  } catch(e) { showToast('Fix failed', 'error'); }
+};
   
 // Register all real functions with the global dispatcher
 window.__npd_init({
@@ -11299,6 +11419,9 @@ window.__npd_init({
   renderDashboardEmailPage: window.renderDashboardEmailPage,
   exportActivityLogPDF:    window.exportActivityLogPDF,
   saDeleteActivity:        window.saDeleteActivity,
+  runWatchdogScan:         window.runWatchdogScan,
+  watchdogFixGhost:        window.watchdogFixGhost,
+  watchdogFixSchema:       window.watchdogFixSchema,
 });
 
 /* ── Auth wiring, deliberately last ──────────────────────────
