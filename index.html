@@ -994,14 +994,6 @@ function pillarsToTasks(pillars) {
 }
 
 function getProductTasks(prod) {
-  // If the product has a tasks object (even if it's empty because you deleted everything), use it.
-  // Never fall back to legacy pillars if the product has already been migrated.
-  if (prod.tasks !== undefined) {
-    return Object.values(prod.tasks).sort((a,b) => (a.order||0) - (b.order||0));
-  }
-  // Only use legacy pillars for very old products that haven't been touched yet
-  return pillarsToTasks(prod.pillars || {});
-}
 
 async function loadSavedTemplates() {
   try {
@@ -1398,18 +1390,17 @@ function getPillarStatus(deadline) {
 // Full task status — always prefer this over getPillarStatus when you have the task object
 // Returns: 'complete' | 'delayed' | 'overdue' | 'due-soon' | 'blocked' | 'on-track'
 function getTaskEffectiveStatus(task, prod) {
-  const s = task.status || task.taskStatus || 'on-track';
+  const s = task.status; // Guaranteed to be clean by the Reducer
   if (s === 'complete') return 'complete';
   if (s === 'delayed')  return 'delayed';
   if (s === 'in-progress') return 'in-progress';
 
-  // GLOBAL BLOCKED CHECK: Cross-reference predecessors safely
+  // FAST BLOCKED CHECK: Predecessors are already validated by the Reducer
   if (prod && task.predecessors && task.predecessors.length > 0) {
-    const allTasks = getProductTasks(prod);
+    const allTasks = getProductTasks(prod); 
     const isBlocked = task.predecessors.some(pid => {
       const pred = allTasks.find(t => t.id === pid);
-      // Ensure we check BOTH new and legacy complete statuses
-      return pred && pred.status !== 'complete' && pred.taskStatus !== 'complete';
+      return pred && pred.status !== 'complete'; // Clean and bulletproof
     });
     if (isBlocked) return 'blocked';
   }
@@ -6498,7 +6489,7 @@ window.updatePillarStatus = async (productId, taskId, newStatus) => {
       const task    = tasks.find(t => t.id === taskId);
       const blocked = (task?.predecessors || []).filter(pid => {
         const dep = tasks.find(t => t.id === pid);
-        return dep && dep.status !== 'complete' && dep.taskStatus !== 'complete';
+        return dep && dep.status !== 'complete'; // Cleaned!
       });
       if (blocked.length > 0) {
         const names = blocked.map(pid => tasks.find(t => t.id === pid)?.title || pid).join(', ');
@@ -6540,16 +6531,15 @@ window.updatePillarStatus = async (productId, taskId, newStatus) => {
       }
     }
 
-    // --- NEW: UNBLOCK DETECTOR ---
-    // Scan for tasks that were waiting on this one, have no date, and are now fully unblocked
+   // --- NEW: UNBLOCK DETECTOR ---
     let newlyUnblocked = [];
     if (newStatus === 'complete') {
       tasks.forEach(t => {
         if (t.predecessors && t.predecessors.includes(taskId) && !t.deadline && t.status !== 'complete') {
           const allOthersDone = t.predecessors.every(pid => {
-            if (pid === taskId) return true; // The one we are completing right now
+            if (pid === taskId) return true;
             const dep = tasks.find(x => x.id === pid);
-            return dep && (dep.status === 'complete' || dep.taskStatus === 'complete');
+            return dep && dep.status === 'complete'; // Cleaned!
           });
           if (allOthersDone) newlyUnblocked.push(t);
         }
