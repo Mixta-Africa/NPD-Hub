@@ -1570,7 +1570,7 @@ function renderDashboard(el) {
             </span>
             <button class="panel-link-red" onclick="loadView('calendar')">Calendar &rarr;</button>
           </div>
-          <div id="dash-deadlines"><div class="loading-row" style="padding:16px;">Loading...</div></div>
+          <div id="dash-deadlines" style="max-height:280px;overflow-y:auto;"><div class="loading-row" style="padding:16px;">Loading...</div></div>
         </div>
       </div>
 
@@ -1825,7 +1825,7 @@ function _updateDashboardUI(list) {
     } else {
       upcomingDeadlines.sort((a,b) => new Date(a.date) - new Date(b.date));
       const dlColors = { overdue: 'var(--red)', delayed: 'var(--red)', 'due-soon': 'var(--amber)', warning: 'var(--amber)', 'on-track': 'var(--amber)', ontrack: 'var(--amber)' };
-      dlEl.innerHTML = upcomingDeadlines.slice(0,4).map(d => {
+      dlEl.innerHTML = upcomingDeadlines.slice(0,12).map(d => {
         const dotColor = dlColors[d.status] || 'var(--amber)';
         const due = new Date(d.date); due.setHours(0,0,0,0);
         const daysUntil = Math.round((due - today) / 86400000);
@@ -2026,7 +2026,7 @@ function renderMyActions(el) {
     '<div class="view-header">' +
       '<div>' +
         '<h1 class="view-title">My Actions &amp; To-do</h1>' +
-        '<p class="view-subtitle">Tasks assigned to you, plus a private to-do list only you can see</p>' +
+        '<p class="view-subtitle">Stay on top of what\'s important. Here\'s what needs your attention.</p>' +
       '</div>' +
     '</div>' +
     '<div class="panel" style="margin-bottom:16px;">' +
@@ -2050,12 +2050,61 @@ function renderMyActions(el) {
         '<div id="standalone-list"><div class="loading-row" style="padding:8px 0;font-size:12px;">Loading...</div></div>' +
       '</div>' +
     '</div>' +
-    '<div id="my-actions-body"><div class="loading-row" style="padding:32px;">Loading your tasks...</div></div>';
+    '<div id="ma-stats-row" style="margin-bottom:16px;"></div>' +
+    '<div style="display:grid;grid-template-columns:2.3fr 1fr;gap:16px;align-items:start;">' +
+      '<div>' +
+        '<div class="panel" style="margin-bottom:16px;">' +
+          '<div style="display:flex;gap:8px;padding:14px 16px 0;flex-wrap:wrap;" id="ma-tabs"></div>' +
+          '<div style="display:flex;gap:8px;padding:14px 16px;flex-wrap:wrap;align-items:center;border-top:1px solid var(--border);margin-top:14px;">' +
+            '<input id="ma-search" class="input-field" style="flex:2;min-width:180px;" placeholder="Search tasks or projects..." oninput="applyMyActionsFilters()"/>' +
+            '<select id="ma-filter-priority" class="input-field" style="flex:1;min-width:110px;" onchange="applyMyActionsFilters()">' +
+              '<option value="">Priority</option><option value="High">High</option><option value="Medium">Medium</option><option value="Low">Low</option>' +
+            '</select>' +
+            '<select id="ma-filter-status" class="input-field" style="flex:1;min-width:110px;" onchange="applyMyActionsFilters()">' +
+              '<option value="">Status</option><option value="on-track">On track</option><option value="at-risk">At risk</option><option value="overdue">Overdue</option><option value="delayed">Delayed</option><option value="complete">Complete</option>' +
+            '</select>' +
+            '<select id="ma-filter-due" class="input-field" style="flex:1;min-width:110px;" onchange="applyMyActionsFilters()">' +
+              '<option value="">Due date</option><option value="overdue">Overdue</option><option value="today">Today</option><option value="week">This week</option><option value="later">Later</option>' +
+            '</select>' +
+            '<button class="btn-link-sm" onclick="clearMyActionsFilters()">Clear filters</button>' +
+          '</div>' +
+        '</div>' +
+        '<div class="panel">' +
+          '<div class="panel-header">' +
+            '<span class="panel-title" id="ma-list-title">Actions &amp; To-dos</span>' +
+            '<select id="ma-sort" class="input-field" style="font-size:11px;padding:4px 8px;" onchange="applyMyActionsFilters()">' +
+              '<option value="due">Sort by: Due date (closest first)</option>' +
+              '<option value="priority">Sort by: Priority</option>' +
+              '<option value="title">Sort by: Title A-Z</option>' +
+            '</select>' +
+          '</div>' +
+          '<div id="ma-list"><div class="loading-row" style="padding:32px;">Loading your tasks...</div></div>' +
+        '</div>' +
+      '</div>' +
+      '<div style="display:flex;flex-direction:column;gap:16px;">' +
+        '<div class="panel">' +
+          '<div class="panel-header"><span class="panel-title" style="display:flex;align-items:center;gap:6px;">' +
+            '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/></svg>' +
+            'Today\'s Focus</span></div>' +
+          '<div id="ma-focus"><div class="loading-row" style="padding:16px;">Loading...</div></div>' +
+          '<div style="padding:12px 16px;border-top:1px solid var(--border);">' +
+            '<button class="btn-outline" style="width:100%;" onclick="clearMyActionsFilters()">View all actions</button>' +
+          '</div>' +
+        '</div>' +
+        '<div class="panel" style="padding:20px;text-align:center;background:linear-gradient(180deg,#FAFAF9,#F4F4F2);">' +
+          '<svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" stroke-width="1.5" style="margin-bottom:10px;"><path d="M3 20l6-9 4 5 3-4 5 8H3z"/></svg>' +
+          '<div style="font-size:13px;font-weight:700;color:#1A1A1A;margin-bottom:4px;">Progress, not perfection.</div>' +
+          '<div style="font-size:11px;color:var(--text-muted);">Small steps create big outcomes.</div>' +
+        '</div>' +
+      '</div>' +
+    '</div>';
   loadStandaloneTasks();
   loadMyActions();
 }
 
-/* ══ STANDALONE PERSONAL TASKS ══════════════════════════════ */
+window.myActionsState = { tab: 'all', sort: 'due' };
+
+/* ── STANDALONE PERSONAL TASKS ── */
 function standaloneRef() {
   return 'standaloneTasks/' + sanitiseEmail(currentUser.email);
 }
@@ -2129,151 +2178,289 @@ window.deleteStandaloneTask = async (id) => {
 };
 
 async function loadMyActions() {
-  const el = document.getElementById('my-actions-body');
-  if (!el) return;
+  const listEl = document.getElementById('ma-list');
+  if (!listEl) return;
   try {
     const snap = await get(ref(db, 'products'));
     const products = snap.val() || {};
     const userKey  = sanitiseEmail(currentUser.email);
-    const today    = new Date(); 
-    today.setHours(0,0,0,0);
+    const meEmail  = (currentUser.email || '').toLowerCase().trim();
+    const meDept   = (currentUserDept || '').toLowerCase().trim();
 
-    // Strict calendar week: Ends on Sunday at 23:59:59
-    const daysUntilSunday = today.getDay() === 0 ? 0 : 7 - today.getDay();
-    const soon = new Date(today); 
-    soon.setDate(today.getDate() + daysUntilSunday);
-    soon.setHours(23, 59, 59, 999);
-
-    const myTasks = [];
+    const records = [];
 
     Object.values(products).forEach(prod => {
       if (prod.status === 'archived') return;
       if (!canUserSeeProduct(prod, userKey)) return;
 
       const tasks = getProductTasks(prod).filter(t => canViewTask(t, prod));
-      const allTasksMap = {};
-      tasks.forEach(t => { allTasksMap[t.id] = t; });
 
       tasks.forEach(task => {
         const ownerList = (task.owners && task.owners.length > 0)
           ? task.owners
           : [{ dept: task.ownerDept || '', email: task.ownerEmail || '' }];
-        
-        const meEmail = (currentUser.email || '').toLowerCase().trim();
-        const meDept  = (currentUserDept || '').toLowerCase().trim();
-        
-        const isMyTask = ownerList.some(o => {
+
+        const isAssigned = ownerList.some(o => {
           const oe = (o.email || '').toLowerCase().trim();
           const od = (o.dept  || '').toLowerCase().trim();
           if (oe && oe === meEmail) return true;
           if (od && meDept && od === meDept) return true;
           return false;
         });
-        
-        const isOwner = prod.ownerId === userKey;
-        if (!isMyTask && !isOwner) return;
+        const isCreator = (task.createdBy || '').toLowerCase().trim() === meEmail;
 
-        if (task.status === 'complete') return;
+        // Scope is strictly about YOUR relationship to the task — owning the
+        // parent project does not count (see the gap analysis: that was the bug).
+        if (!isAssigned && !isCreator) return;
 
-        const eff = resolveTaskStatus(task);
-        
-        const blockedBy = (task.predecessors || []).filter(pid => {
-          const pred = allTasksMap[pid];
-          return pred && pred.status !== 'complete' && pred.taskStatus !== 'complete';
-        });
-        const isBlocked = blockedBy.length > 0;
-
-        let isDueThisWeek = false;
-        if (task.deadline) {
-          const d = new Date(task.deadline);
-          d.setHours(0,0,0,0);
-          if (d >= today && d <= soon) isDueThisWeek = true;
-        }
-
-        const priority = isBlocked ? 0 : eff === 'overdue' ? 1 : eff === 'delayed' ? 2 : (eff === 'due-soon' || isDueThisWeek) ? 3 : 4;
-        
-        if (priority === 4) return;
-
-        myTasks.push({
-          task, prod, eff, isBlocked, blockedBy,
-          blockedNames: blockedBy.map(pid => allTasksMap[pid]?.title || 'Unknown task'),
-          priority,
-        });
+        const eff = resolveTaskStatus(task, prod);
+        records.push({ task, prod, eff, isAssigned, isCreator });
       });
     });
 
-    if (myTasks.length === 0) {
-      el.innerHTML = `
-        <div class="empty-state" style="padding:64px 24px;">
-          <div style="margin-bottom:16px;">
-            <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="#16A34A" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M22 11.08V12a10 10 0 11-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/>
-            </svg>
-          </div>
-          <h3 style="font-size:15px;font-weight:600;margin-bottom:8px;color:#1A1A1A;">You're all clear</h3>
-          <p style="font-size:13px;color:#6B7280;">No overdue, delayed, or blocked tasks assigned to you right now.</p>
-        </div>`;
-      return;
-    }
-
-    myTasks.sort((a, b) => a.priority - b.priority);
-
-    const sectionLabels   = { 0: 'Blocked', 1: 'Overdue', 2: 'Delayed', 3: 'Due this week' };
-    const sectionColors   = { 0: '#D97706', 1: '#C0282D', 2: '#C0282D', 3: '#D97706' };
-    const sectionPillCls  = { 0: 'pcf-pill-amber', 1: 'pcf-pill-red', 2: 'pcf-pill-red', 3: 'pcf-pill-amber' };
-    const sectionCounts   = {};
-    myTasks.forEach(t => { sectionCounts[t.priority] = (sectionCounts[t.priority] || 0) + 1; });
-
-    let lastPriority = -1;
-    let html = '<div style="display:flex;flex-direction:column;gap:10px;">';
-
-    myTasks.forEach(({ task, prod, eff, isBlocked, blockedNames, priority }) => {
-      if (priority !== lastPriority) {
-        const lbl = sectionLabels[priority];
-        const cnt = sectionCounts[priority];
-        html += `<div style="display:flex;align-items:center;gap:8px;${lastPriority !== -1 ? 'margin-top:14px;' : ''}">
-          <span class="pcf-pill ${sectionPillCls[priority]}" style="text-transform:uppercase;">${lbl}</span>
-          <span style="font-size:11px;color:var(--text-muted);">${cnt} task${cnt !== 1 ? 's' : ''}</span>
-        </div>`;
-        lastPriority = priority;
-      }
-
-      const daysOverdue = task.deadline
-        ? Math.round((today - new Date(task.deadline)) / 86400000)
-        : null;
-      const deadlineStr = task.deadline ? formatDate(task.deadline) : 'No date';
-      const color  = sectionColors[priority];
-
-      html += `
-        <div class="action-row-card" style="border-left:3px solid ${color};" onclick="viewProduct('${prod.id}', '${task.id}')">
-          <div style="flex:1;min-width:0;">
-            <div style="font-size:13px;font-weight:600;color:#1A1A1A;margin-bottom:3px;">${task.title || 'Untitled task'}</div>
-            <div style="font-size:11px;color:#6B7280;margin-bottom:6px;">${prod.name}</div>
-            ${isBlocked
-              ? `<span class="pcf-pill pcf-pill-amber" style="display:inline-flex;align-items:center;gap:5px;font-weight:600;">
-                  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 007.54.54l3-3a5 5 0 00-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 00-7.54-.54l-3 3a5 5 0 007.07 7.07l1.71-1.71"/></svg>
-                  Blocked by: ${blockedNames.join(', ')}
-                </span>`
-              : ''}
-          </div>
-          <div style="text-align:right;flex-shrink:0;">
-            <span class="pcf-pill pcf-pill-${priority === 0 || priority === 3 ? 'amber' : 'red'}" style="white-space:nowrap;">
-              ${daysOverdue !== null && daysOverdue > 0 ? daysOverdue + 'd overdue' : deadlineStr}
-            </span>
-            <div class="action-owner-chip">
-              <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 3.6-7 8-7s8 3 8 7"/></svg>
-              ${task.owner || 'Unassigned'}
-            </div>
-          </div>
-        </div>`;
-    });
-
-    html += '</div>';
-    el.innerHTML = html;
+    window._myActionsData = records;
+    renderMyActionsList();
   } catch(e) {
-    el.innerHTML = '<div class="loading-row muted" style="padding:24px;">Could not load your tasks. Try refreshing.</div>';
+    listEl.innerHTML = '<div class="loading-row muted" style="padding:24px;">Could not load your tasks. Try refreshing.</div>';
     console.warn('loadMyActions error:', e);
   }
+}
+
+// Priority is DERIVED for display — there is no stored priority field on
+// tasks yet, so this reflects urgency, not an independent signal.
+function maDerivePriority(eff) {
+  if (['overdue', 'delayed', 'blocked'].includes(eff)) return 'High';
+  if (eff === 'due-soon') return 'Medium';
+  return 'Low';
+}
+function maStatusPill(eff) {
+  if (eff === 'complete') return { label: 'Complete', cls: 'pcf-pill-blue' };
+  if (eff === 'overdue')  return { label: 'Overdue',  cls: 'pcf-pill-red' };
+  if (eff === 'delayed')  return { label: 'Delayed',  cls: 'pcf-pill-red' };
+  if (eff === 'due-soon' || eff === 'blocked') return { label: 'At risk', cls: 'pcf-pill-amber' };
+  return { label: 'On track', cls: 'pcf-pill-green' };
+}
+function maInitials(name) {
+  const parts = (name || '').trim().split(/\s+/).filter(Boolean);
+  if (!parts.length) return '?';
+  return (parts[0][0] + (parts[1]?.[0] || '')).toUpperCase();
+}
+function maDueLabel(deadline) {
+  if (!deadline) return 'No date';
+  const today = new Date(); today.setHours(0,0,0,0);
+  const d = new Date(deadline); d.setHours(0,0,0,0);
+  const diff = Math.round((d - today) / 86400000);
+  if (diff === 0) return 'Today';
+  if (diff === 1) return 'Tomorrow';
+  if (diff === -1) return 'Yesterday';
+  return formatDate(deadline) + (diff < 0 ? ' · ' + Math.abs(diff) + 'd overdue' : '');
+}
+// Deterministic per-task color square — same seven-color rotation used for
+// visual variety, keyed off the task id so it's stable across re-renders.
+const MA_ICON_PALETTE = [
+  { bg: '#FEE2E2', fg: '#C0282D' }, { bg: '#FEF3C7', fg: '#D97706' },
+  { bg: '#DCFCE7', fg: '#16A34A' }, { bg: '#EFF6FF', fg: '#2563EB' },
+  { bg: '#F3E8FF', fg: '#7C3AED' }, { bg: '#FCE7F3', fg: '#DB2777' },
+];
+function maIconFor(id) {
+  let h = 0;
+  for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) >>> 0;
+  return MA_ICON_PALETTE[h % MA_ICON_PALETTE.length];
+}
+
+window.setMyActionsTab = (tab) => {
+  window.myActionsState.tab = tab;
+  renderMyActionsList();
+};
+
+window.clearMyActionsFilters = () => {
+  ['ma-search','ma-filter-priority','ma-filter-status','ma-filter-due'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.value = '';
+  });
+  window.myActionsState.tab = 'all';
+  renderMyActionsList();
+};
+
+window.applyMyActionsFilters = () => renderMyActionsList();
+
+window.toggleMyActionComplete = async (productId, taskId, checked) => {
+  if (!checked) return; // Only completing is wired here — unchecking a real
+                         // task's status belongs in its own status control.
+  await updatePillarStatus(productId, taskId, 'complete');
+  loadMyActions();
+};
+
+function renderMyActionsList() {
+  const all = window._myActionsData || [];
+  const state = window.myActionsState;
+
+  const withScope = r => ({ ...r, priority: maDerivePriority(r.eff) });
+  const scoped = all.map(withScope);
+
+  const tabCounts = {
+    all:      scoped.filter(r => r.eff !== 'complete').length,
+    mine:     scoped.filter(r => r.eff !== 'complete' && r.isAssigned && r.isCreator).length,
+    created:  scoped.filter(r => r.eff !== 'complete' && r.isCreator).length,
+    assigned: scoped.filter(r => r.eff !== 'complete' && r.isAssigned).length,
+  };
+
+  const tabsEl = document.getElementById('ma-tabs');
+  if (tabsEl) {
+    const tabDefs = [
+      ['all', 'All Tasks'], ['mine', 'My Tasks'],
+      ['created', 'Created by Me'], ['assigned', 'Assigned to Me'],
+    ];
+    tabsEl.innerHTML = tabDefs.map(([key, label]) =>
+      `<button class="pv-filter ${state.tab === key ? 'active' : ''}" onclick="setMyActionsTab('${key}')">${label} <span class="pv-count">${tabCounts[key]}</span></button>`
+    ).join('');
+  }
+
+  let rows = scoped.filter(r => {
+    if (state.tab === 'mine'     && !(r.isAssigned && r.isCreator)) return false;
+    if (state.tab === 'created'  && !r.isCreator)  return false;
+    if (state.tab === 'assigned' && !r.isAssigned) return false;
+    return true;
+  });
+
+  // Stat tiles computed on the current tab's scope, before search/dropdown filters
+  const onTrackN = rows.filter(r => ['on-track','in-progress'].includes(r.eff)).length;
+  const atRiskN  = rows.filter(r => ['due-soon','blocked'].includes(r.eff)).length;
+  const overdueN = rows.filter(r => ['overdue','delayed'].includes(r.eff)).length;
+  const totalN   = onTrackN + atRiskN + overdueN;
+  const pct = n => totalN ? Math.round((n / totalN) * 100) : 0;
+
+  const statsEl = document.getElementById('ma-stats-row');
+  if (statsEl) statsEl.innerHTML = `
+    <div class="stats-row">
+      <div class="stat-card dash-stat-card stat-tint-red">
+        <div class="stat-header"><div class="stat-icon-wrap"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--red)" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg></div></div>
+        <div class="stat-label">Total</div>
+        <div class="stat-value">${totalN}</div>
+        <div class="stat-nav-hint">tasks &amp; actions</div>
+      </div>
+      <div class="stat-card dash-stat-card stat-tint-green">
+        <div class="stat-header"><div class="stat-icon-wrap"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--green)" stroke-width="2"><path d="M22 11.08V12a10 10 0 11-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg></div></div>
+        <div class="stat-label">On Track</div>
+        <div class="stat-value" style="color:var(--green);">${onTrackN}</div>
+        <div class="stat-nav-hint" style="color:var(--green);">${pct(onTrackN)}%</div>
+      </div>
+      <div class="stat-card dash-stat-card stat-tint-amber">
+        <div class="stat-header"><div class="stat-icon-wrap"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--amber)" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/></svg></div></div>
+        <div class="stat-label">At Risk</div>
+        <div class="stat-value" style="color:var(--amber);">${atRiskN}</div>
+        <div class="stat-nav-hint" style="color:var(--amber);">${pct(atRiskN)}%</div>
+      </div>
+      <div class="stat-card dash-stat-card stat-tint-red">
+        <div class="stat-header"><div class="stat-icon-wrap"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--red)" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg></div></div>
+        <div class="stat-label">Overdue</div>
+        <div class="stat-value" style="color:var(--red);">${overdueN}</div>
+        <div class="stat-nav-hint" style="color:var(--red);">${pct(overdueN)}%</div>
+      </div>
+    </div>`;
+
+  // Today's Focus — top 5 most urgent, independent of the tab/filter state below
+  const focusEl = document.getElementById('ma-focus');
+  if (focusEl) {
+    const urgencyRank = { overdue: 0, delayed: 1, blocked: 2, 'due-soon': 3, 'on-track': 4, 'in-progress': 4, complete: 5 };
+    const focus = scoped
+      .filter(r => r.eff !== 'complete')
+      .sort((a, b) => (urgencyRank[a.eff] - urgencyRank[b.eff]) || (new Date(a.task.deadline||'9999') - new Date(b.task.deadline||'9999')))
+      .slice(0, 5);
+    focusEl.innerHTML = focus.length === 0
+      ? '<div class="empty-state" style="padding:24px 16px;font-size:12px;">Nothing urgent right now.</div>'
+      : `<div style="padding:4px 0 8px;">` + focus.map(r => `
+        <div style="display:flex;gap:10px;align-items:flex-start;padding:10px 16px;border-bottom:1px solid var(--border);cursor:pointer;" onclick="viewProduct('${r.prod.id}','${r.task.id}')">
+          <input type="checkbox" style="margin-top:2px;" onclick="event.stopPropagation(); toggleMyActionComplete('${r.prod.id}','${r.task.id}', this.checked)"/>
+          <div style="flex:1;min-width:0;">
+            <div style="font-size:12px;font-weight:600;color:#1A1A1A;">${r.task.title || 'Untitled task'}</div>
+            <div style="font-size:10px;color:var(--text-muted);margin-top:2px;">${r.prod.name} · ${r.priority}</div>
+          </div>
+          <div style="font-size:10px;font-weight:700;color:${['overdue','delayed'].includes(r.eff) ? 'var(--red)' : 'var(--text-muted)'};flex-shrink:0;">${maDueLabel(r.task.deadline)}</div>
+        </div>`).join('') + `</div>`;
+  }
+
+  // Search + dropdown filters, applied on top of the tab scope
+  const q        = (document.getElementById('ma-search')?.value || '').toLowerCase().trim();
+  const fPriority = document.getElementById('ma-filter-priority')?.value || '';
+  const fStatus   = document.getElementById('ma-filter-status')?.value || '';
+  const fDue      = document.getElementById('ma-filter-due')?.value || '';
+  const sort      = document.getElementById('ma-sort')?.value || 'due';
+
+  if (q) rows = rows.filter(r => (r.task.title || '').toLowerCase().includes(q) || (r.prod.name || '').toLowerCase().includes(q));
+  if (fPriority) rows = rows.filter(r => r.priority === fPriority);
+  if (fStatus) {
+    rows = rows.filter(r => {
+      if (fStatus === 'at-risk') return ['due-soon','blocked'].includes(r.eff);
+      if (fStatus === 'overdue') return r.eff === 'overdue';
+      if (fStatus === 'delayed') return r.eff === 'delayed';
+      if (fStatus === 'complete') return r.eff === 'complete';
+      return ['on-track','in-progress'].includes(r.eff);
+    });
+  } else {
+    rows = rows.filter(r => r.eff !== 'complete'); // default view hides done items
+  }
+  if (fDue) {
+    const today = new Date(); today.setHours(0,0,0,0);
+    rows = rows.filter(r => {
+      if (!r.task.deadline) return false;
+      const d = new Date(r.task.deadline); d.setHours(0,0,0,0);
+      const diff = Math.round((d - today) / 86400000);
+      if (fDue === 'overdue') return diff < 0;
+      if (fDue === 'today')   return diff === 0;
+      if (fDue === 'week')    return diff >= 0 && diff <= 7;
+      if (fDue === 'later')   return diff > 7;
+      return true;
+    });
+  }
+
+  const priorityRank = { High: 0, Medium: 1, Low: 2 };
+  if (sort === 'priority') rows.sort((a,b) => priorityRank[a.priority] - priorityRank[b.priority]);
+  else if (sort === 'title') rows.sort((a,b) => (a.task.title||'').localeCompare(b.task.title||''));
+  else rows.sort((a,b) => new Date(a.task.deadline || '9999') - new Date(b.task.deadline || '9999'));
+
+  const titleEl = document.getElementById('ma-list-title');
+  if (titleEl) titleEl.textContent = rows.length + ' Actions & To-dos';
+
+  const listEl = document.getElementById('ma-list');
+  if (!listEl) return;
+
+  if (rows.length === 0) {
+    listEl.innerHTML = `
+      <div class="empty-state" style="padding:64px 24px;">
+        <div style="margin-bottom:16px;">
+          <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="#16A34A" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M22 11.08V12a10 10 0 11-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/>
+          </svg>
+        </div>
+        <h3 style="font-size:15px;font-weight:600;margin-bottom:8px;color:#1A1A1A;">You're all clear</h3>
+        <p style="font-size:13px;color:#6B7280;">No tasks match this view right now.</p>
+      </div>`;
+    return;
+  }
+
+  listEl.innerHTML = rows.map(r => {
+    const pill = maStatusPill(r.eff);
+    const icon = maIconFor(r.task.id || r.task.title || 'x');
+    const prioCls = r.priority === 'High' ? 'pcf-pill-red' : r.priority === 'Medium' ? 'pcf-pill-amber' : 'pcf-pill-grey';
+    const ownerName = r.task.owner || ownerLabel((r.task.owners||[])[0] || {}) || 'Unassigned';
+    return `
+      <div class="ma-row" onclick="viewProduct('${r.prod.id}','${r.task.id}')">
+        <input type="checkbox" onclick="event.stopPropagation(); toggleMyActionComplete('${r.prod.id}','${r.task.id}', this.checked)" ${r.eff === 'complete' ? 'checked' : ''}/>
+        <div class="ma-icon-sq" style="background:${icon.bg};color:${icon.fg};">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+        </div>
+        <div style="flex:1;min-width:0;">
+          <div style="font-size:13px;font-weight:600;color:#1A1A1A;">${r.task.title || 'Untitled task'}</div>
+          <div style="font-size:11px;color:var(--text-muted);margin-top:1px;">${r.prod.name}</div>
+        </div>
+        <span class="pcf-pill ${prioCls}" style="flex-shrink:0;">${r.priority}</span>
+        <div class="ma-avatar" title="${ownerName}">${maInitials(ownerName)}</div>
+        <div style="font-size:11px;color:${['overdue','delayed'].includes(r.eff) ? 'var(--red)' : 'var(--text-mid)'};flex-shrink:0;width:100px;">${maDueLabel(r.task.deadline)}</div>
+        <span class="pcf-pill ${pill.cls}" style="flex-shrink:0;">${pill.label}</span>
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--border-mid)" stroke-width="2" style="flex-shrink:0;"><path d="M9 18l6-6-6-6"/></svg>
+      </div>`;
+  }).join('');
 }
 
 /* ── PRODUCTS VIEW ── */
@@ -12810,6 +12997,12 @@ textarea.input-field { resize: vertical; line-height: 1.5; }
 .action-row-card { background:#fff; border:1px solid var(--border); border-radius:10px; padding:14px 16px; display:flex; align-items:flex-start; gap:14px; cursor:pointer; box-shadow:var(--shadow-xs); transition:box-shadow .15s, transform .15s, border-color .15s; }
 .action-row-card:hover { box-shadow:var(--shadow-sm); transform:translateY(-1px); border-color:var(--border-mid); }
 .action-owner-chip { display:flex; align-items:center; gap:5px; font-size:10px; color:var(--text-muted); font-weight:600; justify-content:flex-end; margin-top:4px; }
+
+.ma-row { display:flex; align-items:center; gap:12px; padding:12px 16px; border-bottom:1px solid var(--border); cursor:pointer; transition:background .15s; }
+.ma-row:hover { background:#FAFAF9; }
+.ma-row:last-child { border-bottom:none; }
+.ma-icon-sq { width:30px; height:30px; border-radius:8px; display:flex; align-items:center; justify-content:center; flex-shrink:0; }
+.ma-avatar { width:24px; height:24px; border-radius:50%; background:#1A1A1A; color:#fff; font-size:9px; font-weight:700; display:flex; align-items:center; justify-content:center; flex-shrink:0; }
 
 .pcf-progress-row { display:flex; align-items:center; gap:12px; margin-bottom:16px; }
 .pcf-progress-bar { flex:1; height:7px; background:#F0F0EE; border-radius:99px; overflow:hidden; }
