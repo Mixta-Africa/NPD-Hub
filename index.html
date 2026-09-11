@@ -576,10 +576,20 @@ function showApp() {
     document.body.appendChild(btn);
   }
 
-  // Populate user info in sidebar
-  document.getElementById('user-name').textContent  = currentUser.displayName || currentUser.email.split('@')[0];
-  document.getElementById('user-email').textContent = currentUser.email;
-  document.getElementById('user-avatar').textContent = (currentUser.displayName || currentUser.email)[0].toUpperCase();
+  // Populate user info in new global header
+  const userNameEl = document.getElementById('user-name');
+  if (userNameEl) userNameEl.textContent = currentPreferredName || currentUser.displayName || currentUser.email.split('@')[0];
+
+  const userAvatarEl = document.getElementById('user-avatar');
+  if (userAvatarEl) userAvatarEl.textContent = (currentPreferredName || currentUser.displayName || currentUser.email)[0].toUpperCase();
+
+  // We write the department/role into the subtitle slot
+  const userRoleEl = document.getElementById('user-email'); 
+  if (userRoleEl) {
+    userRoleEl.textContent = currentUserDept 
+      ? `${currentUserDept} · ${currentRole === 'admin' ? 'Admin' : 'Member'}` 
+      : (currentRole === 'admin' ? 'Admin' : 'Member');
+  }
 
   // Show/hide admin-only nav items
   document.querySelectorAll('[data-admin-only]').forEach(el => {
@@ -589,13 +599,6 @@ function showApp() {
   // Super admin nav — always hidden until SA session active
   const saNav = document.getElementById('nav-superadmin');
   if (saNav) saNav.style.display = 'none';
-
-  // Role badge
-  const badge = document.getElementById('role-badge');
-  if (badge) {
-    badge.textContent = currentRole === 'admin' ? 'Admin' : 'Member';
-    badge.className   = 'role-badge ' + (currentRole === 'admin' ? 'role-admin' : 'role-viewer');
-  }
 
   // Load all app config, templates, and team members
   loadAppConfig().then(() => seedConfigToFirebase());
@@ -763,7 +766,8 @@ window.loadView = (view) => {
     reports:    'Progress Reports',
     settings:   'Settings'
   };
-  document.getElementById('page-title').textContent = titles[view] || view;
+  const pageTitleEl = document.getElementById('page-title');   
+  if (pageTitleEl) pageTitleEl.textContent = titles[view] || view;
 
   // Render the view
   const content = document.getElementById('main-content');
