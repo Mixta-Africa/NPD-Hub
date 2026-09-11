@@ -2050,12 +2050,10 @@ function renderMyActions(el) {
         '<div id="standalone-list"><div class="loading-row" style="padding:8px 0;font-size:12px;">Loading...</div></div>' +
       '</div>' +
     '</div>' +
-    '<div id="ma-stats-row" style="margin-bottom:16px;"></div>' +
     '<div style="display:grid;grid-template-columns:2.3fr 1fr;gap:16px;align-items:start;">' +
       '<div>' +
         '<div class="panel" style="margin-bottom:16px;">' +
-          '<div style="display:flex;gap:8px;padding:14px 16px 0;flex-wrap:wrap;" id="ma-tabs"></div>' +
-          '<div style="display:flex;gap:8px;padding:14px 16px;flex-wrap:wrap;align-items:center;border-top:1px solid var(--border);margin-top:14px;">' +
+          '<div style="display:flex;gap:8px;padding:14px 16px;flex-wrap:wrap;align-items:center;">' +
             '<input id="ma-search" class="input-field" style="flex:2;min-width:180px;" placeholder="Search tasks or projects..." oninput="applyMyActionsFilters()"/>' +
             '<select id="ma-filter-priority" class="input-field" style="flex:1;min-width:110px;" onchange="applyMyActionsFilters()">' +
               '<option value="">Priority</option><option value="High">High</option><option value="Medium">Medium</option><option value="Low">Low</option>' +
@@ -2102,7 +2100,7 @@ function renderMyActions(el) {
   loadMyActions();
 }
 
-window.myActionsState = { tab: 'all', sort: 'due' };
+window.myActionsState = { sort: 'due' };
 
 /* ── STANDALONE PERSONAL TASKS ── */
 function standaloneRef() {
@@ -2209,9 +2207,11 @@ async function loadMyActions() {
         });
         const isCreator = (task.createdBy || '').toLowerCase().trim() === meEmail;
 
-        // Scope is strictly about YOUR relationship to the task — owning the
-        // parent project does not count (see the gap analysis: that was the bug).
-        if (!isAssigned && !isCreator) return;
+        // Strictly personal: a task only belongs on THIS page if the same
+        // person both created it and is assigned to it. Assigned-by-someone-
+        // else or created-for-someone-else tasks live in the Task Tracker,
+        // not here. This is a fixed rule for every user, not a filter option.
+        if (!isAssigned || !isCreator) return;
 
         const eff = resolveTaskStatus(task, prod);
         records.push({ task, prod, eff, isAssigned, isCreator });
@@ -2268,17 +2268,11 @@ function maIconFor(id) {
   return MA_ICON_PALETTE[h % MA_ICON_PALETTE.length];
 }
 
-window.setMyActionsTab = (tab) => {
-  window.myActionsState.tab = tab;
-  renderMyActionsList();
-};
-
 window.clearMyActionsFilters = () => {
   ['ma-search','ma-filter-priority','ma-filter-status','ma-filter-due'].forEach(id => {
     const el = document.getElementById(id);
     if (el) el.value = '';
   });
-  window.myActionsState.tab = 'all';
   renderMyActionsList();
 };
 
@@ -2293,77 +2287,15 @@ window.toggleMyActionComplete = async (productId, taskId, checked) => {
 
 function renderMyActionsList() {
   const all = window._myActionsData || [];
-  const state = window.myActionsState;
 
-  const withScope = r => ({ ...r, priority: maDerivePriority(r.eff) });
-  const scoped = all.map(withScope);
+  let rows = all.map(r => ({ ...r, priority: maDerivePriority(r.eff) }));
 
-  const tabCounts = {
-    all:      scoped.filter(r => r.eff !== 'complete').length,
-    mine:     scoped.filter(r => r.eff !== 'complete' && r.isAssigned && r.isCreator).length,
-    created:  scoped.filter(r => r.eff !== 'complete' && r.isCreator).length,
-    assigned: scoped.filter(r => r.eff !== 'complete' && r.isAssigned).length,
-  };
-
-  const tabsEl = document.getElementById('ma-tabs');
-  if (tabsEl) {
-    const tabDefs = [
-      ['all', 'All Tasks'], ['mine', 'My Tasks'],
-      ['created', 'Created by Me'], ['assigned', 'Assigned to Me'],
-    ];
-    tabsEl.innerHTML = tabDefs.map(([key, label]) =>
-      `<button class="pv-filter ${state.tab === key ? 'active' : ''}" onclick="setMyActionsTab('${key}')">${label} <span class="pv-count">${tabCounts[key]}</span></button>`
-    ).join('');
-  }
-
-  let rows = scoped.filter(r => {
-    if (state.tab === 'mine'     && !(r.isAssigned && r.isCreator)) return false;
-    if (state.tab === 'created'  && !r.isCreator)  return false;
-    if (state.tab === 'assigned' && !r.isAssigned) return false;
-    return true;
-  });
-
-  // Stat tiles computed on the current tab's scope, before search/dropdown filters
-  const onTrackN = rows.filter(r => ['on-track','in-progress'].includes(r.eff)).length;
-  const atRiskN  = rows.filter(r => ['due-soon','blocked'].includes(r.eff)).length;
-  const overdueN = rows.filter(r => ['overdue','delayed'].includes(r.eff)).length;
-  const totalN   = onTrackN + atRiskN + overdueN;
-  const pct = n => totalN ? Math.round((n / totalN) * 100) : 0;
-
-  const statsEl = document.getElementById('ma-stats-row');
-  if (statsEl) statsEl.innerHTML = `
-    <div class="stats-row">
-      <div class="stat-card dash-stat-card stat-tint-red">
-        <div class="stat-header"><div class="stat-icon-wrap"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--red)" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg></div></div>
-        <div class="stat-label">Total</div>
-        <div class="stat-value">${totalN}</div>
-        <div class="stat-nav-hint">tasks &amp; actions</div>
-      </div>
-      <div class="stat-card dash-stat-card stat-tint-green">
-        <div class="stat-header"><div class="stat-icon-wrap"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--green)" stroke-width="2"><path d="M22 11.08V12a10 10 0 11-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg></div></div>
-        <div class="stat-label">On Track</div>
-        <div class="stat-value" style="color:var(--green);">${onTrackN}</div>
-        <div class="stat-nav-hint" style="color:var(--green);">${pct(onTrackN)}%</div>
-      </div>
-      <div class="stat-card dash-stat-card stat-tint-amber">
-        <div class="stat-header"><div class="stat-icon-wrap"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--amber)" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/></svg></div></div>
-        <div class="stat-label">At Risk</div>
-        <div class="stat-value" style="color:var(--amber);">${atRiskN}</div>
-        <div class="stat-nav-hint" style="color:var(--amber);">${pct(atRiskN)}%</div>
-      </div>
-      <div class="stat-card dash-stat-card stat-tint-red">
-        <div class="stat-header"><div class="stat-icon-wrap"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--red)" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg></div></div>
-        <div class="stat-label">Overdue</div>
-        <div class="stat-value" style="color:var(--red);">${overdueN}</div>
-        <div class="stat-nav-hint" style="color:var(--red);">${pct(overdueN)}%</div>
-      </div>
-    </div>`;
 
   // Today's Focus — top 5 most urgent, independent of the tab/filter state below
   const focusEl = document.getElementById('ma-focus');
   if (focusEl) {
     const urgencyRank = { overdue: 0, delayed: 1, blocked: 2, 'due-soon': 3, 'on-track': 4, 'in-progress': 4, complete: 5 };
-    const focus = scoped
+    const focus = rows
       .filter(r => r.eff !== 'complete')
       .sort((a, b) => (urgencyRank[a.eff] - urgencyRank[b.eff]) || (new Date(a.task.deadline||'9999') - new Date(b.task.deadline||'9999')))
       .slice(0, 5);
@@ -6474,21 +6406,23 @@ function renderCalendar(el) {
       <span class="leg-item"><span class="leg-dot leg-blue"></span>Complete</span>
     </div>
     <div id="cal-month-view">
-    <div class="panel" style="margin-bottom:16px;">
-      <div class="cal-nav">
-        <button class="cal-nav-btn" onclick="calMove(-1)">&#8592;</button>
-        <span class="cal-month-label" id="cal-month-label"></span>
-        <button class="cal-nav-btn" onclick="calMove(1)">&#8594;</button>
-        <button class="cal-today-btn" onclick="calGoToday()">Today</button>
+    <div class="dashboard-row-2col">
+      <div class="panel" style="margin-bottom:0;">
+        <div class="cal-nav">
+          <button class="cal-nav-btn" onclick="calMove(-1)">&#8592;</button>
+          <span class="cal-month-label" id="cal-month-label"></span>
+          <button class="cal-nav-btn" onclick="calMove(1)">&#8594;</button>
+          <button class="cal-today-btn" onclick="calGoToday()">Today</button>
+        </div>
+        <div class="cal-grid-wrap">
+          <div class="cal-day-headers">${dayHeaders}</div>
+          <div class="cal-grid" id="cal-grid"></div>
+        </div>
       </div>
-      <div class="cal-grid-wrap">
-        <div class="cal-day-headers">${dayHeaders}</div>
-        <div class="cal-grid" id="cal-grid"></div>
+      <div class="panel" id="cal-upcoming-panel" style="margin-bottom:0;display:flex;flex-direction:column;">
+        <div class="panel-header"><span class="panel-title">All milestones this month</span></div>
+        <div class="panel-body" id="cal-milestone-list" style="overflow-y:auto;flex:1;min-height:0;"><div class="loading-row">Loading...</div></div>
       </div>
-    </div>
-    <div class="panel" id="cal-upcoming-panel">
-      <div class="panel-header"><span class="panel-title">All milestones this month</span></div>
-      <div class="panel-body" id="cal-milestone-list"><div class="loading-row">Loading...</div></div>
     </div>
     </div><!-- /cal-month-view -->
     <div id="cal-gantt-view" style="display:none;">
