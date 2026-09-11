@@ -74,6 +74,8 @@ import { getAuth, signInWithPopup, GoogleAuthProvider, signOut, onAuthStateChang
   from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js';
 import { getDatabase, ref, get, set, onValue }
   from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-database.js';
+import { getDatabase, ref, get, set, onValue, update }
+  from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-database.js';
 
 /* ─────────────────────────────────────────────
    FIREBASE CONFIG
@@ -1563,10 +1565,21 @@ function refreshDashboardUI() {
 
 async function loadDashboardStats() {
   try {
-    // Real-time listener — stores raw data in memory and triggers the smart filter
+    // 🚨 ENTERPRISE FIX: Elevate this to a Global Real-Time State Store
     const unsub = onValue(ref(db, 'products'), snap => {
-      window._dashRawProducts = snap.val() || {};
+      const data = snap.val() || {};
+      window._dashRawProducts = data;
+      
+      // Force the global cache to perfectly mirror the live database instantly
+      productListCache = data; 
+      
+      // Update UI components automatically when the DB changes
       refreshDashboardUI();
+      
+      // If the user is staring at the Products view, re-render it so it stays live
+      if (currentView === 'products' && typeof loadProductList === 'function') {
+        loadProductList(true); // Pass flag to skip redundant HTTP fetching
+      }
     }, { onlyOnce: false });
     
     registerListener('dashboard', unsub);
@@ -2173,48 +2186,40 @@ window.setProductFilter = (type, btn) => {
   loadProductList();
 };
 
-async function loadProductList() {
+async function loadProductList(skipFetch = false) {
   const area = document.getElementById('product-list-area');
   if (!area) return;
   try {
-    const snap     = await get(ref(db, 'products'));
-    const products = snap.val() || {};
-    productListCache = products;
+    // Rely on the Global State Store unless forced to fetch
+    if (!skipFetch || Object.keys(productListCache).length === 0) {
+      const snap = await get(ref(db, 'products'));
+      productListCache = snap.val() || {};
+    }
+    
+    const products = productListCache;
     const userKey  = sanitiseEmail(currentUser.email);
-    // SINGLE SOURCE OF TRUTH. This used to carry its own copy of the access
-    // rules, which silently bypassed the My View toggle — the duplicate said
-    // "admin sees everything" with no mode check. Never re-inline this logic;
-    // if access needs to change, change canUserSeeProduct and nothing else.
+    
     const visible  = Object.values(products)
       .filter(p => {
-        // Enforce Archive toggle
         if (_productFilter === 'archived' && p.status !== 'archived') return false;
         if (_productFilter !== 'archived' && p.status === 'archived') return false;
-        
-        // Enforce Visibility Rules
         return canUserSeeProduct(p, userKey);
       })
       .sort((a,b) => b.createdAt - a.createdAt);
 
-    // Live counts on the filter tabs, computed BEFORE the type filter applies
     const nProduct = visible.filter(p => (p.itemType || 'product') === 'product').length;
     const nProject = visible.filter(p => (p.itemType || 'product') === 'project').length;
     const setCount = (id, n) => { const e = document.getElementById(id); if (e) e.textContent = n; };
     setCount('pvc-all', visible.length); setCount('pvc-product', nProduct); setCount('pvc-project', nProject);
     setCount('pvc-archived', Object.values(products).filter(p => p.status === 'archived' && canUserSeeProduct(p, userKey)).length);
 
-    const list = _productFilter === 'all'
-      ? visible
-      : visible.filter(p => (p.itemType || 'product') === _productFilter);
+    const list = _productFilter === 'all' ? visible : visible.filter(p => (p.itemType || 'product') === _productFilter);
 
     if (list.length === 0) {
       const noun = _productFilter === 'project' ? 'projects' : _productFilter === 'product' ? 'products' : 'products or projects';
       area.innerHTML = '<div class="panel"><div class="empty-state"><span class="empty-icon" style="color:var(--text-muted);"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 4h2a2 2 0 012 2v14a2 2 0 01-2 2H6a2 2 0 01-2-2V6a2 2 0 012-2h2"/><rect x="8" y="2" width="8" height="4" rx="1"/></svg></span><h3>No ' + noun + ' yet</h3>' +
-        (visible.length > 0 && _productFilter !== 'all'
-          ? '<p>You have ' + visible.length + ' item' + (visible.length !== 1 ? 's' : '') + ' under a different type. Switch the filter above to see them.</p>'
-          : '<p>Create your first one to get started.</p>') +
-        `<button class="btn-primary" onclick="showCreateProduct()">+ New</button>` +
-        '</div></div>';
+        (visible.length > 0 && _productFilter !== 'all' ? '<p>You have ' + visible.length + ' item' + (visible.length !== 1 ? 's' : '') + ' under a different type. Switch the filter above to see them.</p>' : '<p>Create your first one to get started.</p>') +
+        `<button class="btn-primary" onclick="showCreateProduct()">+ New</button></div></div>`;
       return;
     }
 
@@ -4685,91 +4690,88 @@ window.saveProduct = async (existingId) => {
 
   const id    = existingId || generateId();
   const isNew = !existingId;
-  const dateChanges = []; // Array to catch any modified deadlines
-
-  // Owner
-  const ownerFieldEl = document.getElementById('f-owner');
-  const ownerKey     = isNew
-    ? (ownerFieldEl?.value || sanitiseEmail(currentUser.email))
-    : (productListCache[existingId]?.ownerId || sanitiseEmail(currentUser.email));
-  const ownerMember  = TEAM_MEMBERS[ownerKey];
-  const ownerName    = ownerMember?.name || currentUser.displayName || currentUser.email.split('@')[0];
-
-  // Tasks — new products use _editingTasks, existing update date inputs only
-  const tasks = {};
-  if (isNew) {
-    _editingTasks.forEach(t => {
-      const titleEl = document.querySelector('#terow-' + t.id + ' .task-edit-title');
-      if (titleEl) t.title = titleEl.value.trim() || t.title;
-      tasks[t.id] = { ...t, createdAt: Date.now(), createdBy: currentUser.email };
-    });
-  } else {
-    const existingTaskArr = getProductTasks(productListCache[existingId] || {});
-    existingTaskArr.forEach(t => {
-      const inputEl = document.getElementById('f-task-' + t.id);
-      const recEl   = document.getElementById('f-task-rec-' + t.id);
-      const d = inputEl ? inputEl.value : t.deadline;
-      const rec = recEl ? recEl.value : (t.recurrence || 'none');
-      
-      // If the input exists and the date was changed, flag it for the audit log
-      if (inputEl && (t.deadline || '') !== (d || '')) {
-        dateChanges.push({ id: t.id, name: t.title || t.name, oldD: t.deadline, newD: d });
-      }
-      
-      tasks[t.id] = { ...t, deadline: d || t.deadline, recurrence: rec, updatedAt: Date.now() };
-    });
-    const existingFBTasks = productListCache[existingId]?.tasks || {};
-    Object.keys(existingFBTasks).forEach(tid => { if (!tasks[tid]) tasks[tid] = existingFBTasks[tid]; });
-  }
+  const dateChanges = [];
 
   const itemType = (document.getElementById('f-item-type')?.value || 'product');
   const budget   = document.getElementById('f-budget')?.value || '';
   const spend    = document.getElementById('f-spend')?.value  || '';
-
-  const payload = {
-    id, name, description: desc, launchDate,
-    itemType: isNew ? itemType : (productListCache[existingId]?.itemType || 'product'),
-    budget: budget !== '' ? Number(budget) : (isNew ? null : (productListCache[existingId]?.budget ?? null)),
-    spend:  spend  !== '' ? Number(spend)  : (isNew ? null : (productListCache[existingId]?.spend  ?? null)),
-    tasks,
-    status:     'active',
-    taskSchema:          isNew
-      ? (_editingTasks.length > 0 && _editingTasks[0].pillarId ? 'sop'
-         : (_editingTasks.length > 0 && _editingTasks[0].importedAt ? 'imported' : 'custom'))
-      : (productListCache[existingId]?.taskSchema || 'sop'),
-    baselineLaunchDate:  isNew ? launchDate : (productListCache[existingId]?.baselineLaunchDate || launchDate),
-    ownerId:      ownerKey,
-    ownerName:    ownerName,
-    sharedWith:   isNew ? {} : (productListCache[existingId]?.sharedWith || {}),
-    alertsEnabled:     isNew ? true : (document.getElementById('f-alerts-enabled')?.checked ?? (productListCache[existingId]?.alertsEnabled ?? true)),
-    alertRecipients:   isNew ? [] : (document.getElementById('f-alert-recipients')?.value?.split(/\r?\n/).map(e=>e.trim()).filter(Boolean) || productListCache[existingId]?.alertRecipients || []),
-    defaultCCs:        isNew ? [] : (() => { const el = document.getElementById('f-default-ccs'); return el ? el.value.split(/\r?\n/).map(e=>e.trim()).filter(Boolean) : (productListCache[existingId]?.defaultCCs || []); })(),
-    escalationChain:   isNew ? [{ daysOverdue: 7, addEmails: [] }, { daysOverdue: 21, addEmails: [] }] : (productListCache[existingId]?.escalationChain || [{ daysOverdue: 7, addEmails: [] }, { daysOverdue: 21, addEmails: [] }]),
-    createdAt:  isNew ? Date.now() : (productListCache[existingId]?.createdAt || Date.now()),
-    updatedAt:  Date.now(),
-    createdBy:  isNew ? currentUser.email : (productListCache[existingId]?.createdBy || currentUser.email),
-  };
+  
+  const ownerFieldEl = document.getElementById('f-owner');
+  const ownerKey     = isNew ? (ownerFieldEl?.value || sanitiseEmail(currentUser.email)) : (productListCache[existingId]?.ownerId || sanitiseEmail(currentUser.email));
+  const ownerMember  = TEAM_MEMBERS[ownerKey];
+  const ownerName    = ownerMember?.name || currentUser.displayName || currentUser.email.split('@')[0];
 
   try {
-    await set(ref(db, 'products/' + id), payload);
-    productListCache[id] = payload;
-
     if (isNew) {
+      // For brand new products, a full 'set' payload is safe because there are no background logs to erase yet
+      const tasks = {};
+      _editingTasks.forEach(t => {
+        const titleEl = document.querySelector('#terow-' + t.id + ' .task-edit-title');
+        if (titleEl) t.title = titleEl.value.trim() || t.title;
+        tasks[t.id] = { ...t, createdAt: Date.now(), createdBy: currentUser.email };
+      });
+
+      const payload = {
+        id, name, description: desc, launchDate, itemType,
+        budget: budget !== '' ? Number(budget) : null,
+        spend:  spend  !== '' ? Number(spend)  : null,
+        tasks, status: 'active',
+        taskSchema: (_editingTasks.length > 0 && _editingTasks[0].pillarId ? 'sop' : (_editingTasks.length > 0 && _editingTasks[0].importedAt ? 'imported' : 'custom')),
+        baselineLaunchDate: launchDate, ownerId: ownerKey, ownerName, sharedWith: {},
+        alertsEnabled: true, alertRecipients: [], defaultCCs: [],
+        escalationChain: [{ daysOverdue: 7, addEmails: [] }, { daysOverdue: 21, addEmails: [] }],
+        createdAt: Date.now(), updatedAt: Date.now(), createdBy: currentUser.email,
+      };
+
+      await set(ref(db, 'products/' + id), payload);
+      productListCache[id] = payload;
       await logActivity(id, 'created', `Product "${name}" created`, `Launch: ${launchDate}`);
       closeProductModal();
       showStakeholderConfirm(payload);
+
     } else {
-      // Diff the core changes so we don't spam the activity log
+      // 🚨 ENTERPRISE FIX: Use atomic 'update' so we don't erase comments or activity logs
       const oldProd = productListCache[existingId] || {};
+      const updates = {};
+      
+      updates['name'] = name;
+      updates['description'] = desc;
+      updates['launchDate'] = launchDate;
+      updates['itemType'] = itemType;
+      updates['budget'] = budget !== '' ? Number(budget) : null;
+      updates['spend'] = spend !== '' ? Number(spend) : null;
+      updates['updatedAt'] = Date.now();
+      updates['alertsEnabled'] = document.getElementById('f-alerts-enabled')?.checked ?? true;
+      updates['alertRecipients'] = document.getElementById('f-alert-recipients')?.value?.split(/\r?\n/).map(e=>e.trim()).filter(Boolean) || [];
+      updates['defaultCCs'] = (() => { const el = document.getElementById('f-default-ccs'); return el ? el.value.split(/\r?\n/).map(e=>e.trim()).filter(Boolean) : []; })();
+
+      // Granularly patch each task so we don't overwrite task history
+      const existingTaskArr = getProductTasks(oldProd);
+      existingTaskArr.forEach(t => {
+        const inputEl = document.getElementById('f-task-' + t.id);
+        const recEl   = document.getElementById('f-task-rec-' + t.id);
+        const d = inputEl ? inputEl.value : t.deadline;
+        const rec = recEl ? recEl.value : (t.recurrence || 'none');
+        
+        if (inputEl && (t.deadline || '') !== (d || '')) {
+          dateChanges.push({ id: t.id, name: t.title || t.name, oldD: t.deadline, newD: d });
+        }
+        
+        const pathBase = oldProd.tasks?.[t.id] ? 'tasks' : 'pillars';
+        updates[`${pathBase}/${t.id}/deadline`] = d || t.deadline || '';
+        updates[`${pathBase}/${t.id}/recurrence`] = rec;
+        updates[`${pathBase}/${t.id}/updatedAt`] = Date.now();
+      });
+
+      // Send the atomic patch request
+      await update(ref(db, 'products/' + existingId), updates);
+
+      // Log the diffs cleanly
       const diffs = [];
       if (oldProd.name !== name) diffs.push(`Name changed`);
       if (oldProd.launchDate !== launchDate) diffs.push(`Launch: ${formatDate(oldProd.launchDate)} ➔ ${formatDate(launchDate)}`);
+      if (diffs.length > 0) await logActivity(existingId, 'status', `Product details updated`, diffs.join(' · '));
       
-      if (diffs.length > 0) {
-        await logActivity(existingId, 'status', `Product details updated`, diffs.join(' · '));
-      }
-      
-      // Fire the Date Change Audit Logs
       if (dateChanges.length > 0) {
         for (const change of dateChanges) {
           const oldText = change.oldD ? formatDate(change.oldD) : 'No date';
@@ -4780,7 +4782,6 @@ window.saveProduct = async (existingId) => {
       
       closeProductModal();
       showToast('Product updated.', 'success');
-      loadProductList();
     }
   } catch(e) {
     showToast('Save failed: ' + e.message, 'error');
