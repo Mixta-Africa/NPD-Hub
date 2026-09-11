@@ -994,6 +994,26 @@ function pillarsToTasks(pillars) {
 }
 
 function getProductTasks(prod) {
+  if (!prod) return [];
+  
+  // 1. Extract raw tasks from whichever schema exists
+  const rawTasks = prod.tasks ? Object.values(prod.tasks) : (prod.pillars ? pillarsToTasks(prod.pillars) : []);
+  
+  // 2. Map valid IDs to prevent Ghost Link crashes
+  const validIds = new Set(rawTasks.map(t => t.id));
+
+  // 3. Normalize schema and strip bad data before the UI ever sees it
+  const normalizedTasks = rawTasks.map(t => {
+    return {
+      ...t,
+      status: t.status || t.taskStatus || 'on-track',
+      predecessors: (t.predecessors || []).filter(pid => validIds.has(pid))
+    };
+  });
+
+  // 4. Sort and return the sanitized array
+  return normalizedTasks.sort((a,b) => (a.order||0) - (b.order||0));
+}
 
 async function loadSavedTemplates() {
   try {
