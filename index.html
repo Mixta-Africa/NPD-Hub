@@ -1276,7 +1276,7 @@ function generateDependencyMap(tasks, prod) {
     else if (eff === 'delayed' || eff === 'overdue'){ stroke = '#C0282D'; fill = '#FEF2F2'; }
     else if (eff === 'due-soon' || eff === 'blocked'){ stroke = '#D97706'; fill = '#FFFBEB'; }
     graph += '  style ' + nid[t.id] + ' fill:' + fill + ',stroke:' + stroke +
-             ',stroke-width:2px,color:#1A1A1A\n';
+             ',stroke-width:2px,color:#1A1A1A,rx:6,ry:6\n';
     if (eff === 'blocked') graph += '  style ' + nid[t.id] + ' stroke-dasharray: 5 5\n';
   });
 
@@ -2218,19 +2218,23 @@ async function loadMyActions() {
 
     myTasks.sort((a, b) => a.priority - b.priority);
 
-    const sectionLabels = { 0: 'Blocked', 1: 'Overdue', 2: 'Delayed', 3: 'Due this week' };
-    const sectionColors = { 0: '#D97706', 1: '#C0282D', 2: '#C0282D', 3: '#D97706' };
-    const sectionBg     = { 0: '#FFFBEB', 1: '#FEF2F2', 2: '#FEF2F2', 3: '#FFFBEB' };
+    const sectionLabels   = { 0: 'Blocked', 1: 'Overdue', 2: 'Delayed', 3: 'Due this week' };
+    const sectionColors   = { 0: '#D97706', 1: '#C0282D', 2: '#C0282D', 3: '#D97706' };
+    const sectionPillCls  = { 0: 'pcf-pill-amber', 1: 'pcf-pill-red', 2: 'pcf-pill-red', 3: 'pcf-pill-amber' };
+    const sectionCounts   = {};
+    myTasks.forEach(t => { sectionCounts[t.priority] = (sectionCounts[t.priority] || 0) + 1; });
 
     let lastPriority = -1;
-    let html = '<div style="display:flex;flex-direction:column;gap:8px;">';
+    let html = '<div style="display:flex;flex-direction:column;gap:10px;">';
 
     myTasks.forEach(({ task, prod, eff, isBlocked, blockedNames, priority }) => {
       if (priority !== lastPriority) {
-        if (lastPriority !== -1) html += '</div><div style="height:8px;"></div>';
         const lbl = sectionLabels[priority];
-        const clr = sectionColors[priority];
-        html += `<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.08em;color:${clr};padding:0 2px;margin-bottom:4px;">${lbl}</div>`;
+        const cnt = sectionCounts[priority];
+        html += `<div style="display:flex;align-items:center;gap:8px;${lastPriority !== -1 ? 'margin-top:14px;' : ''}">
+          <span class="pcf-pill ${sectionPillCls[priority]}" style="text-transform:uppercase;">${lbl}</span>
+          <span style="font-size:11px;color:var(--text-muted);">${cnt} task${cnt !== 1 ? 's' : ''}</span>
+        </div>`;
         lastPriority = priority;
       }
 
@@ -2239,7 +2243,6 @@ async function loadMyActions() {
         : null;
       const deadlineStr = task.deadline ? formatDate(task.deadline) : 'No date';
       const color  = sectionColors[priority];
-      const bgCol  = sectionBg[priority];
 
       html += `
         <div class="action-row-card" style="border-left:3px solid ${color};" onclick="viewProduct('${prod.id}', '${task.id}')">
@@ -3669,12 +3672,19 @@ async function loadProjectDashboard(productId) {
         });
       });
 
-      const statCard = (label, val, color, filterHint) =>
-        '<div class="stat-card dash-stat-card" style="border-top:3px solid ' + color + ';' + (filterHint ? 'cursor:pointer;' : '') + '"' +
-          (filterHint ? ' onclick="scrollToDept()"' : '') + '>' +
+      const statCard = (label, val, color, tint, iconSvg, filterHint) =>
+        '<div class="stat-card dash-stat-card ' + tint + '"' + (filterHint ? ' style="cursor:pointer;" onclick="scrollToDept()"' : '') + '>' +
+          '<div class="stat-header">' +
+            '<div class="stat-icon-wrap">' + iconSvg + '</div>' +
+          '</div>' +
           '<div class="stat-label">' + label + '</div>' +
           '<div class="stat-value" style="color:' + color + ';">' + val + '</div>' +
         '</div>';
+
+      const icoTrend  = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="' + (pct >= 75 ? 'var(--green)' : pct >= 40 ? 'var(--amber)' : 'var(--red)') + '" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>';
+      const icoCheck  = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--green)" stroke-width="2"><path d="M22 11.08V12a10 10 0 11-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>';
+      const needsClr  = (delayed + blocked) > 0 ? 'var(--red)' : 'var(--green)';
+      const icoWarn   = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="' + needsClr + '" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>';
 
       body.innerHTML =
         '<div class="view-header">' +
@@ -3704,10 +3714,10 @@ async function loadProjectDashboard(productId) {
         forecastHtml + 
 
         '<div class="stats-row">' +
-          statCard('Progress',  pct + '%',      pct >= 75 ? 'var(--green)' : pct >= 40 ? 'var(--amber)' : 'var(--red)') +
-          statCard('Complete',  done,           'var(--green)') +
-          statCard('On track',  onTrack,        'var(--green)') +
-          statCard('Needs action', delayed + blocked, (delayed + blocked) > 0 ? 'var(--red)' : 'var(--green)') +
+          statCard('Progress',  pct + '%',      pct >= 75 ? 'var(--green)' : pct >= 40 ? 'var(--amber)' : 'var(--red)', pct >= 75 ? 'stat-tint-green' : pct >= 40 ? 'stat-tint-amber' : 'stat-tint-red', icoTrend) +
+          statCard('Complete',  done,           'var(--green)', 'stat-tint-green', icoCheck) +
+          statCard('On track',  onTrack,        'var(--green)', 'stat-tint-green', icoCheck) +
+          statCard('Needs action', delayed + blocked, needsClr, (delayed + blocked) > 0 ? 'stat-tint-red' : 'stat-tint-green', icoWarn, true) +
         '</div>' +
         
        // --- INJECT DEPENDENCY MAP ---
@@ -3756,6 +3766,11 @@ async function loadProjectDashboard(productId) {
                     const safeId = 'mermaid-svg-' + Date.now();
                     mermaid.render(safeId, dependencyMapSyntax, (svgCode) => {
                       container.innerHTML = svgCode;
+                      // Soft per-node shadow — drop-shadow renders once per opaque
+                      // shape in the SVG, so each task box gets its own lift
+                      // without touching every node individually.
+                      const svgEl = container.querySelector('svg');
+                      if (svgEl) svgEl.style.filter = 'drop-shadow(0 1px 3px rgba(16,24,40,0.12))';
                     });
                   }
                 } catch(e) { 
@@ -10588,7 +10603,7 @@ async function openEmailComposer({
         </div>
       </div>
 
-      <div style="padding:16px 22px;flex:1;overflow-y:auto;display:flex;flex-direction:column;gap:10px;">
+      <div style="padding:16px 22px;flex:1;min-height:0;overflow-y:auto;display:flex;flex-direction:column;gap:10px;">
         <div style="display:flex;align-items:center;justify-content:space-between;">
           <label class="email-field-label">Body</label>
           <div style="display:flex;gap:8px;align-items:center;">
@@ -12105,7 +12120,7 @@ a { color: inherit; text-decoration: none; }
 .sidebar-brand { font-family: 'Poppins', sans-serif; font-size: 13px; font-weight: 700; color: white; letter-spacing: 0.5px; line-height: 1.2; }
 .sidebar-subbrand { font-size: 9px; color: var(--sidebar-text); text-transform: uppercase; letter-spacing: 0.1em; line-height: 1.2; }
 
-.sidebar-nav { flex: 1; overflow-y: auto; padding: 10px; }
+.sidebar-nav { flex: 1; overflow-y: auto; padding: 10px; min-height: 0; }
 .nav-section-label { font-size: 9px; font-weight: 700; color: #52525B; text-transform: uppercase; letter-spacing: 0.1em; padding: 10px 10px 4px; }
 .nav-item {
   display: flex; align-items: center; gap: 8px; padding: 7px 10px; border-radius: 6px;
@@ -12126,7 +12141,7 @@ a { color: inherit; text-decoration: none; }
 .sa-hidden-dot { cursor: default; user-select: none; }
 
 /* ─── MAIN HEADER ─── */
-#main-area { flex: 1; display: flex; flex-direction: column; overflow: hidden; min-width: 0; background: var(--bg); }
+#main-area { flex: 1; display: flex; flex-direction: column; overflow: hidden; min-width: 0; min-height: 0; background: var(--bg); }
 #main-header {
   height: var(--header-h); background: var(--surface);
   display: flex; align-items: center; justify-content: space-between; padding: 0 20px; flex-shrink: 0;
@@ -12148,7 +12163,7 @@ a { color: inherit; text-decoration: none; }
 .header-user-name { font-size: 11px; font-weight: 600; color: var(--text); line-height: 1.1; }
 .header-user-role { font-size: 9px; color: var(--text-muted); line-height: 1.1; margin-top: 1px; }
 
-.main-content { flex: 1; overflow-y: auto; padding: 16px 20px; }
+.main-content { flex: 1; overflow-y: auto; padding: 16px 20px; min-height: 0; }
 .header-toggle { background: none; border: none; padding: 6px; border-radius: 6px; color: var(--text-mid); display: flex; cursor: pointer; }
 .header-toggle:hover { background: var(--bg); }
 
@@ -12273,7 +12288,7 @@ a { color: inherit; text-decoration: none; }
 .modal-title { font-size: 14px; font-weight: 600; }
 .modal-close { background: none; border: none; font-size: 16px; color: var(--text-muted); padding: 4px 8px; border-radius: 6px; }
 .modal-close:hover { background: var(--bg); }
-.modal-body  { overflow-y: auto; padding: 20px; flex: 1; }
+.modal-body  { overflow-y: auto; padding: 20px; flex: 1; min-height: 0; }
 
 .form-section-label { font-size: 10px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: .07em; margin-bottom: 12px; }
 .form-hint { font-weight: 400; color: var(--text-muted); text-transform: none; letter-spacing: 0; font-size: 10px; }
