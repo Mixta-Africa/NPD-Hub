@@ -1695,10 +1695,8 @@ function _updateDashboardUI(list) {
         if (task.status === 'complete' || task.taskStatus === 'complete') return;
         activeTaskCount++;
         const eff = resolveTaskStatus(task);
-        // On track only counts tasks that HAVE a deadline and are genuinely on track
         if (task.deadline && (eff === 'on-track' || eff === 'due-soon')) ontrack++;
         if (eff === 'overdue' || eff === 'delayed') overdue++;
-        // Upcoming deadlines panel — tasks due within 7 days (non-complete)
         if (!task.deadline) return;
         const due = new Date(task.deadline); due.setHours(0,0,0,0);
         if (due >= today && due <= weekEnd) {
@@ -1716,9 +1714,7 @@ function _updateDashboardUI(list) {
     });
 
     document.getElementById('stat-active').textContent  = list.length;
-    // Portfolio slip + at-risk summary
-    const slipped = list.filter(p => p.baselineLaunchDate && p.baselineLaunchDate !== p.launchDate &&
-      new Date(p.launchDate) > new Date(p.baselineLaunchDate));
+    const slipped = list.filter(p => p.baselineLaunchDate && p.baselineLaunchDate !== p.launchDate && new Date(p.launchDate) > new Date(p.baselineLaunchDate));
     const atRiskCount = list.filter(p => {
       const tasks  = getProductTasks(p).filter(t => canViewTask(t, p));
       const issues = tasks.filter(t => {
@@ -1730,6 +1726,7 @@ function _updateDashboardUI(list) {
       const days = launch ? Math.round((launch - today) / 86400000) : null;
       return issues >= 2 && days !== null && days >= 0 && days <= 21;
     }).length;
+
     const slipEl  = document.getElementById('stat-slip');
     if (slipEl) {
       const parts = [];
@@ -1744,88 +1741,16 @@ function _updateDashboardUI(list) {
       if (atRiskCount > 0) parts.push(atRiskCount + ' at risk');
       slipEl.textContent = parts.join(' · ');
     }
+
     document.getElementById('stat-ontrack').textContent = ontrack || '0';
     const hintEl = document.getElementById('stat-ontrack-hint');
     if (hintEl) hintEl.textContent = activeTaskCount > 0 ? ontrack + ' of ' + activeTaskCount + ' active tasks → see tasks' : 'See the tasks →';
     document.getElementById('stat-overdue').textContent = overdue || '0';
     document.getElementById('stat-week').textContent    = thisWeek || '0';
 
-   function _updateDashboardUI(list) {
-  try {
-    const today = new Date(); today.setHours(0,0,0,0);
-    const weekEnd = new Date(today); weekEnd.setDate(weekEnd.getDate() + 7);
-
-    let activeTaskCount = 0, ontrack = 0, overdue = 0, thisWeek = 0;
-    const upcomingDeadlines = [];
-
-    list.forEach(prod => {
-      const tasks = getProductTasks(prod).filter(t => canViewTask(t, prod));
-      tasks.forEach(task => {
-        if (task.status === 'complete' || task.taskStatus === 'complete') return;
-        activeTaskCount++;
-        const eff = resolveTaskStatus(task);
-        // On track only counts tasks that HAVE a deadline and are genuinely on track
-        if (task.deadline && (eff === 'on-track' || eff === 'due-soon')) ontrack++;
-        if (eff === 'overdue' || eff === 'delayed') overdue++;
-        // Upcoming deadlines panel — tasks due within 7 days (non-complete)
-        if (!task.deadline) return;
-        const due = new Date(task.deadline); due.setHours(0,0,0,0);
-        if (due >= today && due <= weekEnd) {
-          thisWeek++;
-          upcomingDeadlines.push({
-            product:   prod.name,
-            productId: prod.id,
-            pillar:    task.title || task.name,
-            pillarId:  task.id,
-            date:      task.deadline,
-            status:    eff,
-          });
-        }
-      });
-    });
-
-    document.getElementById('stat-active').textContent  = list.length;
-    // Portfolio slip + at-risk summary
-    const slipped = list.filter(p => p.baselineLaunchDate && p.baselineLaunchDate !== p.launchDate &&
-      new Date(p.launchDate) > new Date(p.baselineLaunchDate));
-    const atRiskCount = list.filter(p => {
-      const tasks  = getProductTasks(p).filter(t => canViewTask(t, p));
-      const issues = tasks.filter(t => {
-        const eff = resolveTaskStatus(t);
-        return eff === 'overdue' || eff === 'delayed';
-      }).length;
-      const launch = p.launchDate ? new Date(p.launchDate) : null;
-      if (launch) launch.setHours(0,0,0,0);
-      const days = launch ? Math.round((launch - today) / 86400000) : null;
-      return issues >= 2 && days !== null && days >= 0 && days <= 21;
-    }).length;
-    const slipEl  = document.getElementById('stat-slip');
-    if (slipEl) {
-      const parts = [];
-      if (slipped.length > 0) {
-        const avgSlip = Math.round(slipped.reduce((sum, p) => {
-          const bl  = new Date(p.baselineLaunchDate); bl.setHours(0,0,0,0);
-          const cur = new Date(p.launchDate);         cur.setHours(0,0,0,0);
-          return sum + Math.round((cur - bl) / 86400000);
-        }, 0) / slipped.length);
-        parts.push(slipped.length + ' slipped · avg ' + avgSlip + 'd');
-      }
-      if (atRiskCount > 0) parts.push(atRiskCount + ' at risk');
-      slipEl.textContent = parts.join(' · ');
-    }
-    document.getElementById('stat-ontrack').textContent = ontrack || '0';
-    const hintEl = document.getElementById('stat-ontrack-hint');
-    if (hintEl) hintEl.textContent = activeTaskCount > 0 ? ontrack + ' of ' + activeTaskCount + ' active tasks → see tasks' : 'See the tasks →';
-    document.getElementById('stat-overdue').textContent = overdue || '0';
-    document.getElementById('stat-week').textContent    = thisWeek || '0';
-
-    // Recent products panel (WITH THUMBNAILS)
     const recentEl = document.getElementById('dash-recent');
     if (list.length === 0) {
-      recentEl.innerHTML = '<div class="empty-state-sm">' +
-        '<span class="empty-icon" style="color:var(--text-muted);">' + ICON.clipboard + '</span>' +
-        '<p>Nothing here yet. <button class="btn-primary-sm" onclick="loadView(\'products\')">Create one</button></p>' +
-        '</div>';
+      recentEl.innerHTML = '<div class="empty-state-sm"><span class="empty-icon" style="color:var(--text-muted);">' + ICON.clipboard + '</span><p>Nothing here yet. <button class="btn-primary-sm" onclick="showCreateProduct()">Create one</button></p></div>';
     } else {
       const sorted = list.sort((a,b) => b.createdAt - a.createdAt).slice(0, 4);
       recentEl.innerHTML = sorted.map((p, index) => {
@@ -1838,7 +1763,6 @@ function _updateDashboardUI(list) {
         const launchD  = p.launchDate ? new Date(p.launchDate) : null;
         const daysLeft = launchD ? Math.round((launchD - today) / 86400000) : null;
         
-        // Placeholder images to match the mockup vibe until custom upload is built
         const defaultImages = [
           'https://images.unsplash.com/photo-1600607687920-4e2a09cf159d?w=150&h=150&fit=crop',
           'https://images.unsplash.com/photo-1545324418-cc1a3fa10c00?w=150&h=150&fit=crop',
@@ -1847,32 +1771,38 @@ function _updateDashboardUI(list) {
         ];
         const thumbUrl = p.imageUrl || defaultImages[index % 4];
 
-        return `<div class="dash-product-row" onclick="openProjectDashboard('${p.id}')">
-          <img src="${thumbUrl}" style="width:56px;height:56px;border-radius:8px;object-fit:cover;flex-shrink:0;border:1px solid var(--border);" />
-          <div style="flex:1;min-width:0;">
-            <div class="dash-product-name">${p.name}</div>
-            <div style="font-size:11px;color:var(--text-muted);margin-top:2px;">${(p.itemType || 'product') === 'project' ? 'Internal Project' : 'Real Estate Development'}</div>
-            <div style="margin-top:8px;display:flex;align-items:center;gap:12px;">
-              <div style="flex:1;height:4px;background:#F0F0EE;border-radius:2px;overflow:hidden;">
-                <div style="height:4px;width:${pct}%;background:${healthColor};border-radius:2px;transition:width 0.5s ease;"></div>
-              </div>
-              <span style="font-size:10px;font-weight:600;color:var(--text-muted);flex-shrink:0;width:32px;text-align:right;">${pct}%</span>
-            </div>
-          </div>
-          <div style="display:flex;flex-direction:column;align-items:flex-end;gap:8px;">
-            <div style="font-size:11px;color:var(--text-muted);display:flex;align-items:center;gap:4px;">
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
-              ${p.launchDate ? formatDate(p.launchDate) : 'No date'}
-            </div>
-            ${daysLeft !== null ? `<span style="font-size:10px;font-weight:600;color:${daysLeft < 0 ? 'var(--red)' : 'var(--green)'};background:${daysLeft < 0 ? 'var(--red-light)' : 'var(--green-light)'};padding:3px 10px;border-radius:12px;display:inline-flex;align-items:center;gap:4px;">
-              ${daysLeft < 0 ? `<span style="width:6px;height:6px;border-radius:50%;background:var(--red);"></span> ${Math.abs(daysLeft)}d overdue` : `<span style="width:6px;height:6px;border-radius:50%;background:var(--green);"></span> On track`}
-            </span>` : ''}
-          </div>
-        </div>`;
+        let daysLeftHtml = '';
+        if (daysLeft !== null) {
+          if (daysLeft < 0) {
+            daysLeftHtml = '<span style="font-size:10px;font-weight:600;color:var(--red);background:var(--red-light);padding:3px 10px;border-radius:12px;display:inline-flex;align-items:center;gap:4px;"><span style="width:6px;height:6px;border-radius:50%;background:var(--red);"></span> ' + Math.abs(daysLeft) + 'd overdue</span>';
+          } else {
+            daysLeftHtml = '<span style="font-size:10px;font-weight:600;color:var(--green);background:var(--green-light);padding:3px 10px;border-radius:12px;display:inline-flex;align-items:center;gap:4px;"><span style="width:6px;height:6px;border-radius:50%;background:var(--green);"></span> On track</span>';
+          }
+        }
+
+        return '<div class="dash-product-row" onclick="openProjectDashboard(\\'' + p.id + '\\')">' +
+          '<img src="' + thumbUrl + '" style="width:56px;height:56px;border-radius:8px;object-fit:cover;flex-shrink:0;border:1px solid var(--border);" />' +
+          '<div style="flex:1;min-width:0;">' +
+            '<div class="dash-product-name">' + p.name + '</div>' +
+            '<div style="font-size:11px;color:var(--text-muted);margin-top:2px;">' + ((p.itemType || 'product') === 'project' ? 'Internal Project' : 'Real Estate Development') + '</div>' +
+            '<div style="margin-top:8px;display:flex;align-items:center;gap:12px;">' +
+              '<div style="flex:1;height:4px;background:#F0F0EE;border-radius:2px;overflow:hidden;">' +
+                '<div style="height:4px;width:' + pct + '%;background:' + healthColor + ';border-radius:2px;transition:width 0.5s ease;"></div>' +
+              '</div>' +
+              '<span style="font-size:10px;font-weight:600;color:var(--text-muted);flex-shrink:0;width:32px;text-align:right;">' + pct + '%</span>' +
+            '</div>' +
+          '</div>' +
+          '<div style="display:flex;flex-direction:column;align-items:flex-end;gap:8px;">' +
+            '<div style="font-size:11px;color:var(--text-muted);display:flex;align-items:center;gap:4px;">' +
+              '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>' +
+              (p.launchDate ? formatDate(p.launchDate) : 'No date') +
+            '</div>' +
+            daysLeftHtml +
+          '</div>' +
+        '</div>';
       }).join('');
     }
 
-    // Deadlines panel
     const dlEl = document.getElementById('dash-deadlines');
     if (upcomingDeadlines.length === 0) {
       dlEl.innerHTML = '<div class="empty-state-sm"><span class="empty-icon" style="color:var(--text-muted);"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg></span><p>No deadlines this week.</p></div>';
@@ -1887,7 +1817,7 @@ function _updateDashboardUI(list) {
                         : daysUntil === 0 ? 'Today'
                         : daysUntil === 1 ? 'Tomorrow'
                         : formatDate(d.date);
-        return '<div class="deadline-row" style="cursor:pointer;" onclick="viewProduct(\'' + d.productId + '\', \'' + d.pillarId + '\')" title="Click to view task details">' +
+        return '<div class="deadline-row" style="cursor:pointer;" onclick="viewProduct(\\'' + d.productId + '\\', \\'' + d.pillarId + '\\')" title="Click to view task details">' +
           '<div class="deadline-dot" style="background:' + dotColor + ';"></div>' +
           '<div class="deadline-info">' +
             '<div class="deadline-pillar">' + d.pillar + '</div>' +
@@ -1895,7 +1825,7 @@ function _updateDashboardUI(list) {
           '</div>' +
           '<div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px;flex-shrink:0;">' +
             '<span style="font-size:10px;font-weight:600;color:' + dotColor + ';white-space:nowrap;">' + dateLabel + '</span>' +
-            '<button class="deadline-remind-btn" onclick="event.stopPropagation(); showReminderModal(\'' + d.productId + '\',\'' + d.pillarId + '\',\'' + d.pillar + '\',\'' + d.product + '\',\'' + d.date + '\')" title="Send reminder">' +
+            '<button class="deadline-remind-btn" onclick="event.stopPropagation(); showReminderModal(\\'' + d.productId + '\\',\\'' + d.pillarId + '\\',\\'' + d.pillar + '\\',\\'' + d.product + '\\',\\'' + d.date + '\\')" title="Send reminder">' +
               ICON.bell + ' Remind' +
             '</button>' +
           '</div>' +
@@ -1903,7 +1833,6 @@ function _updateDashboardUI(list) {
       }).join('');
     }
 
-    // 🚨 FIRE THE CHART RENDERER 
     if (typeof renderDashboardCharts === 'function') {
       renderDashboardCharts(list);
     }
