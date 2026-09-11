@@ -2427,13 +2427,29 @@ function renderProductCard(p) {
   const healthTip = delayed > 0 ? `${delayed} delayed`
                   : pct === 100 ? 'Complete' : 'On track';
 
+  // Health pill (On track / Delayed / Complete) — mirrors the dot colour
+  const healthBadge = delayed > 0
+    ? '<span class="pcf-pill pcf-pill-red">Delayed</span>'
+    : pct === 100
+      ? '<span class="pcf-pill pcf-pill-blue">Complete</span>'
+      : '<span class="pcf-pill pcf-pill-green">On track</span>';
+
+  // Delivery-window tag computed from the launch date (e.g. "Q4 2026")
+  const periodBadge = (() => {
+    if (!p.launchDate) return '';
+    const d = new Date(p.launchDate);
+    if (isNaN(d)) return '';
+    const q = Math.floor(d.getMonth() / 3) + 1;
+    return `<span class="pcf-pill pcf-pill-grey">Q${q} ${d.getFullYear()}</span>`;
+  })();
+
   return `
     <div class="product-card-full">
       <div class="pcf-header">
         <div class="pcf-header-left">
           <div class="pcf-health-dot ${healthCls}" title="${healthTip}"></div>
           <div>
-            <div class="pcf-name-row"><span class="pcf-name" style="cursor:pointer;" title="Open dashboard" onclick="openProjectDashboard('${p.id}')">${p.name}</span>${typeBadge}${accessBadge(p)}${slipHtml}${atRiskBadge}${forecastBadge}${countdownChip}</div>
+            <div class="pcf-name-row"><span class="pcf-name" style="cursor:pointer;" title="Open dashboard" onclick="openProjectDashboard('${p.id}')">${p.name}</span>${typeBadge}${healthBadge}${periodBadge}${accessBadge(p)}${slipHtml}${atRiskBadge}${forecastBadge}${countdownChip}</div>
             ${(p.itemType === 'project' && canViewBudget(p) && (p.budget || p.spend)) ? `
               <div style="margin-top:6px;">
                 <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--text-muted);margin-bottom:3px;">
@@ -2455,17 +2471,25 @@ function renderProductCard(p) {
 
       <div class="pcf-progress-row">
         <div class="pcf-progress-bar">
-          <div class="pcf-progress-fill" style="width:${pct}%"></div>
+          <div class="pcf-progress-fill ${delayed > 0 ? 'pcf-fill-red' : 'pcf-fill-green'}" style="width:${pct}%"></div>
         </div>
         <span class="pcf-pct">${pct}%</span>
       </div>
 
       <div class="pcf-stats">
-        <div class="pcf-stat"><span class="pcf-stat-val green">${complete}</span><span class="pcf-stat-lbl">done</span></div>
-        <div class="pcf-stat-div"></div>
-        <div class="pcf-stat"><span class="pcf-stat-val">${onTrack}</span><span class="pcf-stat-lbl">on track</span></div>
-        ${delayed > 0 ? `<div class="pcf-stat-div"></div><div class="pcf-stat"><span class="pcf-stat-val red">${delayed}</span><span class="pcf-stat-lbl">delayed</span></div>` : ''}
-        <div class="pcf-stat-spacer"></div>
+        <div class="pcf-stat-box">
+          <div class="pcf-stat-icon grey"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 4h2a2 2 0 012 2v14a2 2 0 01-2 2H6a2 2 0 01-2-2V6a2 2 0 012-2h2"/><rect x="8" y="2" width="8" height="4" rx="1"/></svg></div>
+          <div><div class="pcf-stat-box-val">${allTasks.length}</div><div class="pcf-stat-box-lbl">Total Tasks</div></div>
+        </div>
+        <div class="pcf-stat-box">
+          <div class="pcf-stat-icon green"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/></svg></div>
+          <div><div class="pcf-stat-box-val">${onTrack}</div><div class="pcf-stat-box-lbl">On Track</div></div>
+        </div>
+        ${delayed > 0 ? `
+        <div class="pcf-stat-box">
+          <div class="pcf-stat-icon red"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg></div>
+          <div><div class="pcf-stat-box-val">${delayed}</div><div class="pcf-stat-box-lbl">Overdue</div></div>
+        </div>` : ''}
         <span class="pcf-owner-chip">
           <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 3.6-7 8-7s8 3 8 7"/></svg>
           ${p.ownerName?.split(' ')[0] || '—'}
@@ -12464,6 +12488,55 @@ textarea.input-field { resize: vertical; line-height: 1.5; }
 #sign-in-btn { width: 100%; padding: 12px; background: white; border: 1px solid var(--border-mid); border-radius: 8px; font-size: 13px; font-weight: 500; color: var(--text); display: flex; align-items: center; justify-content: center; gap: 10px; transition: background 0.2s; box-shadow: 0 1px 2px rgba(0,0,0,0.05); }
 #sign-in-btn:hover { background: var(--bg); }
 #login-error { display: none; color: var(--red); font-size: 12px; margin-top: 12px; background: var(--red-light); padding: 8px; border-radius: 6px; }
+
+/* ═══ PRODUCTS & PROJECTS — CARD REDESIGN ═══════════════════ */
+.pv-filter-row { display:flex; gap:8px; margin-bottom:16px; }
+.pv-filter { background:#fff; border:1px solid var(--border); border-radius:99px; padding:7px 16px; font-size:12px; font-weight:600; color:var(--text-mid); cursor:pointer; display:flex; align-items:center; gap:6px; transition:all 0.15s; font-family:'Poppins',sans-serif; }
+.pv-filter:hover { border-color:var(--border-mid); }
+.pv-filter.active { background:var(--red); border-color:var(--red); color:#fff; }
+.pv-filter .pv-count { font-size:10px; font-weight:700; background:rgba(0,0,0,0.06); color:var(--text-muted); padding:1px 7px; border-radius:99px; }
+.pv-filter.active .pv-count { background:rgba(255,255,255,0.25); color:#fff; }
+
+.product-grid { display:flex; flex-direction:column; gap:14px; }
+.product-card-full { background:#fff; border:1px solid var(--border); border-radius:12px; padding:20px; transition:box-shadow 0.15s, border-color 0.15s; }
+.product-card-full:hover { box-shadow:0 3px 14px rgba(0,0,0,0.05); border-color:var(--border-mid); }
+
+.pcf-header { display:flex; justify-content:space-between; align-items:flex-start; gap:16px; margin-bottom:16px; }
+.pcf-header-left { display:flex; align-items:flex-start; gap:12px; min-width:0; }
+.pcf-health-dot { width:10px; height:10px; border-radius:50%; margin-top:7px; flex-shrink:0; }
+.pcf-health-dot.pcf-health-green { background:var(--green); }
+.pcf-health-dot.pcf-health-red   { background:var(--red); }
+.pcf-health-dot.pcf-health-done  { background:var(--blue); }
+.pcf-name-row { display:flex; align-items:center; flex-wrap:wrap; gap:8px; row-gap:6px; }
+.pcf-name { font-size:16px; font-weight:700; color:#1A1A1A; letter-spacing:-0.2px; }
+.pcf-desc { font-size:12px; color:var(--text-muted); margin-top:6px; line-height:1.5; max-width:640px; }
+.pcf-header-right { display:flex; align-items:center; gap:10px; flex-shrink:0; }
+
+.pcf-pill { font-size:10px; font-weight:700; padding:3px 10px; border-radius:99px; letter-spacing:.02em; white-space:nowrap; }
+.pcf-pill-green { background:var(--green-light); color:var(--green); }
+.pcf-pill-red   { background:var(--red-light);   color:var(--red); }
+.pcf-pill-blue  { background:var(--blue-light);  color:var(--blue); }
+.pcf-pill-grey  { background:#F3F4F6; color:var(--text-mid); }
+
+.pcf-progress-row { display:flex; align-items:center; gap:12px; margin-bottom:16px; }
+.pcf-progress-bar { flex:1; height:7px; background:#F0F0EE; border-radius:99px; overflow:hidden; }
+.pcf-progress-fill { height:7px; border-radius:99px; }
+.pcf-fill-green { background:var(--green); }
+.pcf-fill-red   { background:var(--red); }
+.pcf-pct { font-size:12px; font-weight:700; color:var(--text-mid); flex-shrink:0; width:36px; text-align:right; }
+
+.pcf-stats { display:flex; align-items:center; gap:10px; margin-bottom:16px; flex-wrap:wrap; }
+.pcf-stat-box { display:flex; align-items:center; gap:10px; background:#FAFAF9; border:1px solid var(--border); border-radius:10px; padding:9px 14px; flex:1; min-width:130px; }
+.pcf-stat-icon { width:28px; height:28px; border-radius:7px; display:flex; align-items:center; justify-content:center; flex-shrink:0; }
+.pcf-stat-icon.grey  { background:#F3F4F6; color:var(--text-mid); }
+.pcf-stat-icon.green { background:var(--green-light); color:var(--green); }
+.pcf-stat-icon.red   { background:var(--red-light); color:var(--red); }
+.pcf-stat-box-val { font-size:15px; font-weight:700; color:#1A1A1A; line-height:1; }
+.pcf-stat-box-lbl { font-size:10px; color:var(--text-muted); margin-top:3px; }
+.pcf-owner-chip { display:flex; align-items:center; gap:6px; font-size:11px; color:var(--text-muted); font-weight:600; margin-left:auto; padding-left:12px; flex-shrink:0; }
+.pcf-badge-grey { color: var(--text-muted); display:inline-flex; align-items:center; margin-left:6px; }
+
+.pcf-actions { display:flex; flex-wrap:wrap; gap:8px; padding-top:14px; border-top:1px solid var(--border); }
 
 /* ─── DASHBOARD FINESSE & GRID STRICTNESS ─── */
 .dash-grid-fix { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr); gap: 24px; align-items: start; margin-bottom: 24px; }
