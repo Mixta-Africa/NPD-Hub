@@ -2582,6 +2582,13 @@ window.approveSuggestion = async (id) => {
     await update(ref(db, 'brainSuggestions/' + id), {
       status: 'approved', resolvedAt: Date.now(), resolvedBy: currentUser.email,
     });
+    // Positive feedback signal — carries the actual content, not just an
+    // opaque id, so a future cycle can recognize "this kind of flag lands."
+    await push(ref(db, 'brainMemory'), {
+      type: 'feedback', createdAt: Date.now(), suggestionId: id,
+      productId: s.productId || null, taskId: s.taskId || null,
+      note: `Approved: "${s.title || 'suggestion'}" — ${s.reasoning || ''}`.trim(),
+    });
     loadDecisions();
   } catch(e) {
     showToast('Could not apply that suggestion.', 'error');
@@ -2591,14 +2598,20 @@ window.approveSuggestion = async (id) => {
 
 window.dismissSuggestion = async (id) => {
   try {
+    const snap = await get(ref(db, 'brainSuggestions/' + id));
+    const s = snap.val();
+
     await update(ref(db, 'brainSuggestions/' + id), {
       status: 'dismissed', resolvedAt: Date.now(), resolvedBy: currentUser.email,
     });
-    // Feedback signal for the memory log — kept lightweight and factual,
-    // not a guess at why, so the reasoning job can weigh it appropriately.
+    // Feedback signal for the memory log — carries the actual title and
+    // reasoning that was dismissed, not just an opaque id, so a future
+    // cycle can actually recognize "this was already raised and dismissed"
+    // instead of re-flagging the same thing every cycle.
     await push(ref(db, 'brainMemory'), {
       type: 'feedback', createdAt: Date.now(), suggestionId: id,
-      note: 'Suggestion dismissed without action.',
+      productId: s?.productId || null, taskId: s?.taskId || null,
+      note: `Dismissed: "${s?.title || 'suggestion'}" — ${s?.reasoning || ''}`.trim(),
     });
     loadDecisions();
   } catch(e) {
