@@ -3643,11 +3643,15 @@ function canViewTask(task, prod) {
   const myEmail = (currentUser.email || '').toLowerCase();
   const myDept  = (currentUserDept || '').toLowerCase();
 
-  // 1. Check if the user is explicitly assigned to this task
+  // 1. Check if the user is explicitly assigned to this task.
+  // An owner record with an email names a SPECIFIC PERSON — department is
+  // just their org label for reporting, not a grant of access. Department
+  // membership only counts when the record has no individual named at all
+  // (a genuine "assigned to the whole department" record).
   const owners = typeof taskOwnerList === 'function' ? taskOwnerList(task) : (task.owners || []);
   const isTaskOwner = owners.some(o => {
-    if (o.email && o.email.toLowerCase() === myEmail) return true;
-    if (o.dept && myDept && o.dept.toLowerCase() === myDept) return true;
+    if (o.email) return o.email.toLowerCase() === myEmail;
+    if (o.dept && myDept) return o.dept.toLowerCase() === myDept;
     return false;
   });
 
@@ -4064,23 +4068,29 @@ async function loadProjectDashboard(productId) {
           statCard('Needs action', delayed + blocked, needsClr, (delayed + blocked) > 0 ? 'stat-tint-red' : 'stat-tint-green', icoWarn, true) +
         '</div>' +
         
-       // --- INJECT DEPENDENCY MAP ---
+       // --- INJECT DEPENDENCY MAP (collapsed by default — not everyone
+       // needs it open, and it eats real vertical space when it is) ---
         (dependencyMapSyntax ? `
           <div class="panel" style="margin-bottom:16px;">
-            <div class="panel-header">
-              <span class="panel-title">Dependency Map</span>
+            <div class="panel-header" style="cursor:pointer;" onclick="toggleDepMap('${p.id}')">
+              <span class="panel-title" style="display:flex;align-items:center;gap:6px;">
+                <svg id="dep-map-chevron-${p.id}" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="transition:transform .15s;"><path d="M9 18l6-6-6-6"/></svg>
+                Dependency Map
+              </span>
               <span style="font-size:11px;color:var(--text-muted);">Sequence, owners and what is blocking what</span>
             </div>
-            <div style="padding:10px 18px 0;display:flex;gap:16px;flex-wrap:wrap;font-size:10px;color:var(--text-muted);">
-              <span><span style="display:inline-block;width:9px;height:9px;border-radius:2px;background:#F0FDF4;border:1.5px solid #16A34A;margin-right:4px;vertical-align:-1px;"></span>On track</span>
-              <span><span style="display:inline-block;width:9px;height:9px;border-radius:2px;background:#FFFBEB;border:1.5px solid #D97706;margin-right:4px;vertical-align:-1px;"></span>Due soon / blocked</span>
-              <span><span style="display:inline-block;width:9px;height:9px;border-radius:2px;background:#FEF2F2;border:1.5px solid #C0282D;margin-right:4px;vertical-align:-1px;"></span>Overdue / delayed</span>
-              <span><span style="display:inline-block;width:9px;height:9px;border-radius:2px;background:#EFF6FF;border:1.5px solid #2563EB;margin-right:4px;vertical-align:-1px;"></span>Complete</span>
-              <span style="border-left:1px solid var(--border);padding-left:14px;"><strong>&#8658;</strong> cleared &nbsp; <strong>&#8594;</strong> waiting on</span>
-            </div>
-            <div class="panel-body" style="overflow:auto; max-height:420px; background:#FAFAF9; border-radius:8px;">
-              <div id="mermaid-container-${p.id}" style="text-align:center; padding:24px; font-size:12px; color:var(--text-muted);">
-                <span class="spinner-sm"></span> Drawing map...
+            <div id="dep-map-body-${p.id}" style="display:none;">
+              <div style="padding:10px 18px 0;display:flex;gap:16px;flex-wrap:wrap;font-size:10px;color:var(--text-muted);">
+                <span><span style="display:inline-block;width:9px;height:9px;border-radius:2px;background:#F0FDF4;border:1.5px solid #16A34A;margin-right:4px;vertical-align:-1px;"></span>On track</span>
+                <span><span style="display:inline-block;width:9px;height:9px;border-radius:2px;background:#FFFBEB;border:1.5px solid #D97706;margin-right:4px;vertical-align:-1px;"></span>Due soon / blocked</span>
+                <span><span style="display:inline-block;width:9px;height:9px;border-radius:2px;background:#FEF2F2;border:1.5px solid #C0282D;margin-right:4px;vertical-align:-1px;"></span>Overdue / delayed</span>
+                <span><span style="display:inline-block;width:9px;height:9px;border-radius:2px;background:#EFF6FF;border:1.5px solid #2563EB;margin-right:4px;vertical-align:-1px;"></span>Complete</span>
+                <span style="border-left:1px solid var(--border);padding-left:14px;"><strong>&#8658;</strong> cleared &nbsp; <strong>&#8594;</strong> waiting on</span>
+              </div>
+              <div class="panel-body" style="overflow:auto; max-height:420px; background:#FAFAF9; border-radius:8px;">
+                <div id="mermaid-container-${p.id}" style="text-align:center; padding:24px; font-size:12px; color:var(--text-muted);">
+                  <span class="spinner-sm"></span> Drawing map...
+                </div>
               </div>
             </div>
           </div>` : '') +
@@ -4402,10 +4412,9 @@ function canUserSeeProduct(p, userKey) {
       if (!canViewTask(t, p)) return false;
       
       const owners = (t.owners && t.owners.length) ? t.owners : [{ dept: t.ownerDept || '', email: t.ownerEmail || '' }];
-      return owners.some(o =>
-        (o.dept && o.dept.toLowerCase() === myDept) ||
-        (o.email && o.email.toLowerCase() === myEmail)
-      );
+      // Same rule as canViewTask: a named individual's department is a label,
+      // not a grant — only an un-named, dept-only record opens it by department.
+      return owners.some(o => o.email ? o.email.toLowerCase() === myEmail : (o.dept && o.dept.toLowerCase() === myDept));
     });
   }
   return false;
@@ -4656,6 +4665,15 @@ window.cycleTaskVisibility = async (productId, taskId) => {
   if (body) body.innerHTML = buildPillarDetail(productListCache[productId]);
 };
 
+window.toggleDepMap = (productId) => {
+  const body = document.getElementById('dep-map-body-' + productId);
+  const chevron = document.getElementById('dep-map-chevron-' + productId);
+  if (!body) return;
+  const isHidden = body.style.display === 'none';
+  body.style.display = isHidden ? 'block' : 'none';
+  if (chevron) chevron.style.transform = isHidden ? 'rotate(90deg)' : 'rotate(0deg)';
+};
+
 window.clearTaskAck = async (productId, taskId) => {
   const prod = productListCache[productId];
   if (!prod) return;
@@ -4699,11 +4717,11 @@ async function bulkSetVisibility(target) {
         if (getTaskVisibility(task) === target) continue;
 
         if (!isAdminSweep) {
-          // Members may only change tasks they own
+          // Members may only change tasks they own — same rule as canViewTask:
+          // a named person's dept label is not a grant to their whole department.
           const owners = taskOwnerList(task);
           const mine = owners.some(o =>
-            (o.email && o.email.toLowerCase() === myEmail) ||
-            (o.dept && myDept && o.dept.toLowerCase() === myDept));
+            o.email ? o.email.toLowerCase() === myEmail : (o.dept && myDept && o.dept.toLowerCase() === myDept));
           if (!mine && prod.ownerId !== sanitiseEmail(currentUser.email)) continue;
         }
         await set(ref(db, 'products/' + pid + '/' + path + '/' + tid + '/visibility'), target);
@@ -6312,7 +6330,18 @@ function loadDashboardEmailLog() {
         const prod = products[pid];
         if (!prod) return;
         if (!canUserSeeProduct(prod, userKey)) return;
-        Object.values(entries).forEach(e => all.push(Object.assign({ productName: prod.name }, e)));
+        const isOwnerOrAdmin = currentRole === 'admin' || isSuperAdmin || prod.ownerId === userKey;
+        // Seeing the product at all is not the same as seeing every email
+        // logged for it — a task-scoped email needs real access to THAT task.
+        Object.values(entries).forEach(e => {
+          if (e.taskId) {
+            const task = (prod.tasks && prod.tasks[e.taskId]) || (prod.pillars && prod.pillars[e.taskId]);
+            if (!task || !canViewTask(task, prod)) return;
+          } else if (!isOwnerOrAdmin) {
+            return;
+          }
+          all.push(Object.assign({ productName: prod.name }, e));
+        });
       });
       
       if (all.length === 0) {
@@ -6439,7 +6468,27 @@ async function loadEmailLog(productId) {
       el.innerHTML = '<div style="text-align:center;padding:28px 0;font-size:12px;color:#9CA3AF;">No emails sent for this item yet.</div>';
       return;
     }
-    const logs = Object.values(snap.val()).sort((a,b) => b.sentAt - a.sentAt);
+    const prod = productListCache[productId];
+    const userKey = sanitiseEmail(currentUser.email);
+    const isOwnerOrAdmin = currentRole === 'admin' || isSuperAdmin || (prod && prod.ownerId === userKey);
+
+    // Same rule as the dashboard feed: seeing this product's Comms tab at all
+    // doesn't mean seeing every email about every task in it. A task-scoped
+    // email only shows if you can genuinely view that task; a whole-product
+    // email (report, onboarding, handover) is owner/admin only.
+    const logs = Object.values(snap.val()).filter(l => {
+      if (!prod) return isOwnerOrAdmin;
+      if (l.taskId) {
+        const task = (prod.tasks && prod.tasks[l.taskId]) || (prod.pillars && prod.pillars[l.taskId]);
+        return task ? canViewTask(task, prod) : isOwnerOrAdmin;
+      }
+      return isOwnerOrAdmin;
+    }).sort((a,b) => b.sentAt - a.sentAt);
+
+    if (logs.length === 0) {
+      el.innerHTML = '<div style="text-align:center;padding:28px 0;font-size:12px;color:#9CA3AF;">No emails you have access to for this item yet.</div>';
+      return;
+    }
     window._productEmailLogs = logs; // Store globally for the preview modal
     
     const typeLabel = { deadline_alert:'Deadline alert', reminder:'Reminder', onboarding:'Onboarding',
@@ -10867,6 +10916,7 @@ window.showQuickUpdate = async (productId) => {
       '<input type="text" class="qu-note-input" placeholder="Add a note..." value="' + (t.notes || '') + '" ' +
         'onblur="quickSaveNote(\'' + productId + '\',\'' + t.id + '\',this.value)" ' +
         'style="width:100%;margin-top:8px;padding:6px 10px;border:1px solid var(--border);border-radius:6px;font-size:11px;font-family:Poppins,sans-serif;color:var(--text);outline:none;">' +
+      '<div id="qu-hist-' + t.id + '">' + buildQuickUpdateHistory(t) + '</div>' +
     '</div>';
   };
 
@@ -10917,12 +10967,49 @@ window.showQuickUpdate = async (productId) => {
 
 window.quickSaveNote = async (productId, taskId, notes) => {
   try {
+    const prevNotes = productListCache[productId]?.tasks?.[taskId]?.notes || '';
     await set(ref(db, 'products/' + productId + '/tasks/' + taskId + '/notes'), notes);
     if (productListCache[productId]?.tasks?.[taskId]) {
       productListCache[productId].tasks[taskId].notes = notes;
     }
+    // The note field itself is just "current state" — this is the actual
+    // log. Only fires when the text genuinely changed, so re-focusing the
+    // field without editing it doesn't spam a duplicate entry.
+    if (notes.trim() && notes.trim() !== prevNotes.trim()) {
+      const updateId = 'upd_' + Date.now();
+      const task = productListCache[productId]?.tasks?.[taskId];
+      const entry = {
+        id: updateId, text: notes.trim(),
+        userEmail: currentUser.email,
+        userName: currentPreferredName || currentUser.displayName || currentUser.email.split('@')[0],
+        createdAt: Date.now(),
+      };
+      await set(ref(db, 'products/' + productId + '/tasks/' + taskId + '/updates/' + updateId), entry);
+      if (task) {
+        if (!task.updates) task.updates = {};
+        task.updates[updateId] = entry;
+      }
+      if (typeof logActivity === 'function') {
+        logActivity(productId, 'update', 'Task update: ' + (task?.title || taskId), notes.trim().slice(0, 200));
+      }
+      const histEl = document.getElementById('qu-hist-' + taskId);
+      if (histEl) histEl.innerHTML = buildQuickUpdateHistory(task);
+    }
   } catch(e) { console.warn('Note save failed', e); }
 };
+
+// Compact, always-visible history for a task's updates — newest first,
+// capped so the modal doesn't grow unbounded on a long-running task.
+function buildQuickUpdateHistory(t) {
+  const entries = t?.updates ? Object.values(t.updates).sort((a, b) => b.createdAt - a.createdAt).slice(0, 5) : [];
+  if (entries.length === 0) return '';
+  return '<div style="margin-top:6px;padding-top:6px;border-top:1px dashed var(--border);display:flex;flex-direction:column;gap:4px;">' +
+    entries.map(e => {
+      const when = new Date(e.createdAt).toLocaleDateString('en-GB', { day:'numeric', month:'short', hour:'2-digit', minute:'2-digit' });
+      return '<div style="font-size:10px;color:var(--text-muted);"><strong style="color:var(--text-mid);">' + (e.userName || 'Someone') + '</strong> · ' + when + ' — ' + String(e.text).slice(0, 140) + '</div>';
+    }).join('') +
+    '</div>';
+}
 
 window.quickSetStatus = async (productId, taskId, newStatus, btn) => {
   // Optimistic UI — update buttons immediately
