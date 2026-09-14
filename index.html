@@ -1807,6 +1807,9 @@ function _updateDashboardUI(list) {
             <div class="pcf-thumb-edit" onclick="event.stopPropagation(); changeProjectPicture('${p.id}', '${(p.name||'').replace(/'/g, "\\'")}')" title="Change picture">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 19a2 2 0 01-2 2H3a2 2 0 01-2-2V8a2 2 0 012-2h4l2-3h6l2 3h4a2 2 0 012 2z"/><circle cx="12" cy="13" r="4"/></svg>
             </div>
+            <div class="pcf-thumb-badge" onclick="event.stopPropagation(); changeProjectPicture('${p.id}', '${(p.name||'').replace(/'/g, "\\'")}')" title="Change picture">
+              <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M23 19a2 2 0 01-2 2H3a2 2 0 01-2-2V8a2 2 0 012-2h4l2-3h6l2 3h4a2 2 0 012 2z"/><circle cx="12" cy="13" r="3.2"/></svg>
+            </div>
           </div>
           <div style="flex:1; min-width:0; display:flex; flex-direction:column; gap:6px;">
             <div style="display:flex; justify-content:space-between; align-items:flex-start;">
@@ -13389,6 +13392,12 @@ textarea.input-field { resize: vertical; line-height: 1.5; }
 .pcf-thumb-wrap { position:relative; flex-shrink:0; }
 .pcf-thumb-edit { position:absolute; inset:0; background:rgba(0,0,0,0.45); border-radius:8px; display:flex; align-items:center; justify-content:center; color:#fff; opacity:0; transition:opacity .15s; cursor:pointer; }
 .pcf-thumb-wrap:hover .pcf-thumb-edit { opacity:1; }
+/* Always-visible small badge — the hover overlay alone is invisible on
+   touch devices and easy to miss even with a mouse. This is the part
+   people can actually see and tap without guessing it's there. */
+.pcf-thumb-badge { position:absolute; bottom:-3px; right:-3px; width:16px; height:16px; border-radius:50%; background:#1A1A1A; color:#fff; display:flex; align-items:center; justify-content:center; border:2px solid #fff; cursor:pointer; transition:transform .15s; }
+.pcf-thumb-badge:hover { transform:scale(1.15); }
+.pcf-thumb-wrap:hover .pcf-thumb-badge { opacity:0; pointer-events:none; }
 
 
 /* ─── DASHBOARD FINESSE & GRID STRICTNESS ─── */
