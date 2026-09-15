@@ -19,6 +19,34 @@ const NPD_ROOT_FOLDER = 'NPD Hub — Mixta Africa';
 // ─── SENDER NAME shown in outgoing emails ─────────────────────
 const SENDER_NAME  = 'Mixta Africa NPD Hub';
 
+// ─── LIVE DASHBOARD URL — used for every deep link in every email ───
+const HUB_URL = 'https://npd-hub.pages.dev';
+
+/* Deep link into the Hub.
+   Every automated message carries one so the recipient lands on the exact
+   thing being discussed rather than a generic dashboard they then have to
+   search. The Hub reads these params on load and routes accordingly. */
+function hubLink(opts) {
+  opts = opts || {};
+  var q = [];
+  if (opts.productId) q.push('p=' + encodeURIComponent(opts.productId));
+  if (opts.taskId)    q.push('t=' + encodeURIComponent(opts.taskId));
+  if (opts.view)      q.push('view=' + encodeURIComponent(opts.view));
+  return HUB_URL + (q.length ? '?' + q.join('&') : '');
+}
+
+/* Standard call-to-action block. One definition so every email gets the
+   same affordance and nothing drifts. */
+function hubButton(label, url) {
+  return '<div style="padding:4px 28px 22px;">' +
+    '<a href="' + url + '" style="display:inline-block;background:#C0282D;color:#fff;' +
+    'padding:11px 26px;border-radius:5px;text-decoration:none;font-weight:700;font-size:13px;">' +
+    label + '</a>' +
+    '<div style="font-size:11px;color:#9a9a96;margin-top:8px;">' +
+    'Sign in with your Mixta Africa account to see everything assigned to you.</div>' +
+  '</div>';
+}
+
 // ─────────────────────────────────────────────────────────────
 //  DAILY DEADLINE CHECK — GAS Time-Based Trigger
 //  
@@ -42,21 +70,26 @@ var FIREBASE_DB_URL = 'https://mixta-npd-hub-default-rtdb.firebaseio.com'; // Se
 var FIREBASE_DB_SECRET = 'pdz1ORn2cMha71Xft2NzbJcaR8nv2RYoTRdgTM0z';
 
 function installDailyTrigger() {
-  // Delete any existing daily triggers to avoid duplicates
   var triggers = ScriptApp.getProjectTriggers();
   triggers.forEach(function(t) {
     if (t.getHandlerFunction() === 'dailyDeadlineCheck') {
       ScriptApp.deleteTrigger(t);
     }
   });
-  // Create new daily trigger at 7am
+  
+  // Read configured hour from Firebase (default 7am)
+  var authParam = '?auth=' + FIREBASE_DB_SECRET;
+  var schedSnap = JSON.parse(UrlFetchApp.fetch(FIREBASE_DB_URL + '/config/emailSchedule.json' + authParam, { muteHttpExceptions: true }).getContentText()) || {};
+  var hour = schedSnap.alertHour !== undefined ? parseInt(schedSnap.alertHour) : 7;
+  
   ScriptApp.newTrigger('dailyDeadlineCheck')
     .timeBased()
-    .atHour(7)
+    .atHour(hour)
     .everyDays(1)
     .inTimezone('Africa/Lagos')
     .create();
-  Logger.log('Daily trigger installed: dailyDeadlineCheck fires every day at 7am WAT');
+    
+  Logger.log('Daily trigger installed: dailyDeadlineCheck fires every day at ' + hour + ':00 WAT');
 }
 
 /* ══════════════════════════════════════════════════════════════
@@ -95,7 +128,21 @@ function logEmailSent(productId, record) {
 
 function buildSenderOpts(body, htmlBody) {
   var opts = { htmlBody: htmlBody };
-  var who  = body && (body.sentByName || body.senderName);
+  var ownerName = '';
+  if (body && body.productId) {
+    try {
+      var authParam = '?auth=' + FIREBASE_DB_SECRET;
+      var raw = UrlFetchApp.fetch(
+        FIREBASE_DB_URL + '/products/' + body.productId + '/ownerName.json' + authParam,
+        { muteHttpExceptions: true }
+      ).getContentText();
+      ownerName = raw && raw !== 'null' ? JSON.parse(raw) : '';
+    } catch(e) { Logger.log('buildSenderOpts owner lookup failed: ' + e.message); }
+  }
+  // Project owner wins whenever we can resolve one — recipients should
+  // consistently see who owns the work, not whichever teammate clicked
+  // Send. Falls back to whoever triggered the send, then the generic name.
+  var who  = ownerName || (body && (body.sentByName || body.senderName));
   var mail = body && (body.sentByEmail || body.senderEmail);
   opts.name = who ? who + ' (NPD Hub)' : SENDER_NAME;
   if (mail && mail.indexOf('@') > -1) opts.replyTo = mail;
@@ -338,7 +385,8 @@ function dailyDeadlineCheck() {
   }
 
   var today = new Date(); today.setHours(0,0,0,0);
-  var THRESHOLD_DAYS = 3;
+  // No lead-time threshold anymore -- every active task with a deadline
+  // gets a daily countdown email regardless of how far out it is.
 
   // Fetch products from Firebase
   var authParam    = FIREBASE_DB_SECRET ? '?auth=' + FIREBASE_DB_SECRET : '';
@@ -401,10 +449,10 @@ function dailyDeadlineCheck() {
         daysOverdue = diff < 0 ? Math.abs(diff) : 0;
       }
 
-      // Skip future tasks that are not delayed and not within threshold
-      if (!isDelayed && diff !== null && diff > THRESHOLD_DAYS) return;
-      // Skip tasks with no deadline that are not delayed
-      if (!isDelayed && diff === null) return;
+      // Every non-complete task with a deadline gets a daily countdown
+      // email now -- no 3-day cutoff. A task with several dependencies
+      // needs longer visibility than the last 3 days can give it.
+      if (!isDelayed && diff === null) return; // still skip: no deadline and not explicitly delayed
 
       var alertType = diff === null
         ? 'delayed'
@@ -432,6 +480,7 @@ function dailyDeadlineCheck() {
       alerts.push({
         productName: prod.name,
         productId:   prod.id,
+        productOwnerName: prod.ownerName || '',
         pillarName:  task.title || task.name || 'Unknown task',
         pillarId:    task.id,
         ownerDept:   ownerLabel,
@@ -470,6 +519,7 @@ function dailyDeadlineCheck() {
     var threadId   = prod ? prod.gmailThreadId : null;
 
     if (threadId) {
+      var threadReplySucceeded = false;
       try {
         var thread = GmailApp.getThreadById(threadId);
         // Private tasks never go into the shared thread — strip them out and
@@ -521,9 +571,10 @@ function dailyDeadlineCheck() {
                 '<tbody>' + tableRows + '</tbody>' +
               '</table>' +
             '</div>' +
-            '<div style="padding:16px 28px;">' +
+            '<div style="padding:16px 28px 6px;">' +
               '<p style="font-size:11px;color:#9a9a96;margin:0;">Kindly update task statuses on the NPD Hub. If any item is blocked, flag it immediately.</p>' +
             '</div>' +
+            hubButton('Open this project', hubLink({ productId: productId })) +
             '<div style="background:#f8f8f7;padding:10px 28px;border-top:1px solid #e5e4e0;display:flex;justify-content:space-between;">' +
               '<span style="font-size:11px;color:#9a9a96;">Mixta Africa NPD Hub · Automated Alert</span>' +
               '<span style="font-size:11px;color:#9a9a96;">' + dateStr + '</span>' +
@@ -538,27 +589,37 @@ function dailyDeadlineCheck() {
 
           var replyOpts = {
             htmlBody: htmlBody,
-            name:     SENDER_NAME,
+            name:     (prod && prod.ownerName) ? prod.ownerName + ' (NPD Hub)' : SENDER_NAME,
           };
           if (allRecips.length > 0) replyOpts.to = allRecips.join(',');
           thread.reply('', replyOpts);
+          threadReplySucceeded = true; // set immediately after the real send — nothing below can un-send it
           totalSent += allRecips.length;
+          var threadBodyText = prodAlerts.map(function(a) {
+            var daysStr = a.daysUntil === null ? 'No date'
+              : a.daysUntil < 0 ? Math.abs(a.daysUntil) + 'd overdue'
+              : a.daysUntil === 0 ? 'Due today' : a.daysUntil + 'd remaining';
+            return a.pillarName + ' — ' + (a.ownerDept || 'Unassigned') + ' — ' + daysStr;
+          }).join('\n');
           logEmailSent(productId, {
             type: 'deadline_alert', trigger: 'automated',
             subject: 'Deadline alert — ' + (prod ? prod.name : productId),
             to: allRecips, cc: [],
             taskTitles: prodAlerts.map(function(a) { return a.pillarName; }),
             sentBy: 'NPD Hub (automated daily check)',
+            body: 'Deadline alert for ' + (prod ? prod.name : productId) + ':\n\n' + threadBodyText,
           });
           Logger.log('Thread reply: ' + (prod.name || productId) + ' -> ' + allRecips.length + ' recipients');
-          return;
         }
       } catch(threadErr) {
-        Logger.log('Thread reply failed: ' + threadErr.message + ' — falling back to alert emails');
+        Logger.log('Thread reply failed: ' + threadErr.message +
+          (threadReplySucceeded ? ' (after the reply itself already sent — NOT re-sending as individual emails)' : ' — falling back to individual alert emails'));
       }
+      // The reply genuinely went out — never fall through to a second, duplicate send for it.
+      if (threadReplySucceeded) return;
     }
 
-    // No thread or thread failed — send as individual alert emails
+    // No thread, or the thread path failed before anything was actually sent — send as individual alert emails
     var result = checkAndSendDeadlineAlerts({ alerts: prodAlerts });
     totalSent += (result.sent || 0);
     Logger.log('Alert emails: ' + (prod ? prod.name : productId) + ' -> ' + (result.sent || 0) + ' sent');
@@ -776,6 +837,7 @@ function buildTodoEmail(email, data, digestType, today) {
           buildTableSection(data.onTrack, 'Coming up', '#16A34A')) +
       '<p style="font-size:11px;color:#9a9a96;margin-top:16px;line-height:1.6;">Kindly review your tasks and update statuses on the NPD Hub. If any item is blocked or requires escalation, flag it on the dashboard immediately.</p>' +
     '</div>' +
+    hubButton('Open my tasks', hubLink({ view: 'myactions' })) +
 
     '<div style="background:#f8f8f7;padding:12px 28px;border-top:1px solid #e5e4e0;display:flex;justify-content:space-between;">' +
       '<span style="font-size:11px;color:#9a9a96;">Mixta Africa — NPD Hub</span>' +
@@ -881,8 +943,16 @@ function generateRetrospective(prod, authParam) {
     '</div></div></body></html>';
 
   var subject = '[Launched] Retrospective: ' + prod.name + ' — ' + prod.launchDate;
+  var retroSenderName = prod.ownerName ? prod.ownerName + ' (NPD Hub)' : SENDER_NAME;
   recipients.forEach(function(email) {
-    try { GmailApp.sendEmail(email, subject, '', { htmlBody: html, name: SENDER_NAME }); } catch(e) { Logger.log('Retro email failed: ' + e.message); }
+    try { GmailApp.sendEmail(email, subject, '', { htmlBody: html, name: retroSenderName }); } catch(e) { Logger.log('Retro email failed: ' + e.message); }
+  });
+
+  logEmailSent(prod.id, {
+    type: 'report', trigger: 'automated',
+    subject: subject, to: recipients, cc: [],
+    sentBy: 'NPD Hub (automated)',
+    body: retro.summary,
   });
 }
 
@@ -921,11 +991,13 @@ function doPost(e) {
       case 'replyToThread':         result = replyToThread(body);                break;
       case 'getThreadSubject':      result = getThreadSubject(body);             break;
       case 'gccoGenerateLink':      result = gccoGenerateLink(body);             break;
+      case 'sendAssignmentAlert':   result = sendAssignmentAlert(body);          break;
       case 'exportProjectTracker':  result = exportProjectTracker(body);         break;
       case 'syncProjectToSheet':    result = syncProjectToSheet(body);           break;
       case 'sendTodoDigest':        result = sendTodoDigest(body);              break;
       case 'ping':                  result = { ok: true, message: 'NPD Hub GAS v2.1 is live.', ts: new Date().toISOString() }; break;
-      default:                      result = { ok: false, error: 'Unknown action: ' + action };
+      case 'updateTriggers':        result = updateTriggers(body);            break;
+      default:                      result = { ok: false, error: 'Unknown action: ' + action };            break;
     }
 
     return ContentService
@@ -936,6 +1008,16 @@ function doPost(e) {
     return ContentService
       .createTextOutput(JSON.stringify({ ok: false, error: err.message }))
       .setMimeType(ContentService.MimeType.JSON);
+  }
+}
+
+function updateTriggers(body) {
+  try {
+    installDailyTrigger();
+    installTodoTrigger();
+    return { ok: true, message: 'Triggers successfully rebuilt' };
+  } catch (err) {
+    return { ok: false, error: err.message };
   }
 }
 
@@ -1041,6 +1123,7 @@ function ensureProjectSheet(productId, productName, authParam) {
 }
 
 /* ── FORWARD: Hub → Sheet ─────────────────────────────────── */
+/* ── FORWARD: Hub → Sheet ─────────────────────────────────── */
 function syncProjectToSheet(body) {
   try {
     var authParam = '?auth=' + FIREBASE_DB_SECRET;
@@ -1053,7 +1136,14 @@ function syncProjectToSheet(body) {
     if (!prod) return { ok: false, error: 'Product not found' };
 
     var sheetId = ensureProjectSheet(productId, prod.name || productId, authParam);
-    var sh = SpreadsheetApp.openById(sheetId).getSheetByName('Tasks');
+    var ss = SpreadsheetApp.openById(sheetId);
+    
+    // Grant secure access to the authorized users
+    if (body.authorizedEmails && body.authorizedEmails.length > 0) {
+      ss.addEditors(body.authorizedEmails);
+    }
+    
+    var sh = ss.getSheetByName('Tasks');
 
     var tasks = Object.values(prod.tasks || {}).filter(isSyncable);
     var stamp = Utilities.formatDate(new Date(), 'Africa/Lagos', 'dd MMM yyyy HH:mm');
@@ -1220,13 +1310,19 @@ function test_pollSheets() { pollSheetsToFirebase(); }
 
 function exportProjectTracker(body) {
   try {
-    var name    = body.productName || 'Untitled';
-    var tasks   = body.tasks || [];
-    var isProj  = (body.itemType || 'product') === 'project';
-    var stamp   = Utilities.formatDate(new Date(), 'Africa/Lagos', 'dd MMM yyyy');
+    var name     = body.productName || 'Untitled';
+    var tasks    = body.tasks || [];
+    var isProj   = (body.itemType || 'product') === 'project';
+    var stamp    = Utilities.formatDate(new Date(), 'Africa/Lagos', 'dd MMM yyyy');
     var fileName = name + ' — Tracker — ' + stamp;
 
     var ss = SpreadsheetApp.create(fileName);
+    
+    // Grant secure access to the authorized users
+    if (body.authorizedEmails && body.authorizedEmails.length > 0) {
+      ss.addEditors(body.authorizedEmails);
+    }
+    
     var sh = ss.getActiveSheet();
     sh.setName('Tracker');
 
@@ -1341,6 +1437,155 @@ function exportProjectTracker(body) {
     };
   } catch(err) {
     Logger.log('exportProjectTracker error: ' + err.message);
+    return { ok: false, error: err.message };
+  }
+}
+
+
+/* ══════════════════════════════════════════════════════════════
+   ASSIGNMENT ALERT
+   Sent when a task is assigned or reassigned. Deliberately the same
+   visual weight as an automated deadline alert — a human handing you
+   work should not feel less official than a cron job.
+   ══════════════════════════════════════════════════════════════ */
+function sendAssignmentAlert(body) {
+  try {
+    var to = body.toEmails || [];
+    if (to.length === 0) return { ok: false, error: 'No recipients' };
+
+    var isReassign = !!body.previousOwner;
+    var taskLink   = hubLink({ productId: body.productId, taskId: body.taskId, view: 'myactions' });
+    var deadlineTxt = body.deadline
+      ? new Date(body.deadline).toLocaleDateString('en-GB', { day:'numeric', month:'short', year:'numeric' })
+      : 'No deadline set';
+
+    var daysTxt = '';
+    if (body.deadline) {
+      var d = new Date(body.deadline); d.setHours(0,0,0,0);
+      var t = new Date(); t.setHours(0,0,0,0);
+      var diff = Math.round((d - t) / 86400000);
+      daysTxt = diff < 0 ? Math.abs(diff) + ' days overdue'
+              : diff === 0 ? 'Due today'
+              : diff === 1 ? 'Due tomorrow'
+              : 'Due in ' + diff + ' days';
+    }
+    var urgent = body.deadline && daysTxt.indexOf('overdue') > -1;
+
+    var sent = 0, errors = [];
+    var assignmentBodyText = (isReassign
+        ? (body.taskTitle || 'Task') + ' was reassigned from ' + (body.previousOwner || 'a previous owner') + ' to the recipient(s).'
+        : (body.taskTitle || 'Task') + ' was assigned to the recipient(s).') +
+        '\n\nProduct: ' + (body.productName || '') +
+        '\nDeadline: ' + deadlineTxt +
+        (body.reason ? '\nNote: ' + body.reason : '');
+
+    // --- NEW: Custom Name & Tone Dictionary ---
+    var customNames = {
+      'd.alli@mixtafrica.com': 'DA',
+      'deji.alli@mixtafrica.com': 'DA',
+      'b.ajayi@mixtafrica.com': 'BA',
+      's.hughes@mixtafrica.com': 'Mrs H',
+      'u.ndubuisi@mixtafrica.com': 'Ugo',
+      't.akinsulire@mixtafrica.com': 'Tola',
+      'p.ozolua@mixtafrica.com': 'Uncle P'
+    };
+
+    to.forEach(function(email) {
+      try {
+        var emailLower = String(email).toLowerCase().trim();
+        var isSenior = customNames.hasOwnProperty(emailLower);
+        
+        // Resolve the best display name
+        var displayName = '';
+        if (isSenior) {
+          displayName = customNames[emailLower];
+        } else {
+          // If standard mixta email (first.last@mixtafrica.com), grab the last name instead of the first initial.
+          // If no dot, just grab the first name.
+          var parts = emailLower.split('@')[0].split('.');
+          var namePart = parts.length > 1 ? parts[1] : parts[0]; 
+          displayName = namePart.charAt(0).toUpperCase() + namePart.slice(1);
+        }
+
+        // Apply Tone Adjustments
+        var greeting = isSenior ? 'Dear ' + displayName + ',' : 'Hi ' + displayName + ',';
+        var messageText = '';
+        
+        if (isSenior) {
+          // Formal, respectful tone for AMC/Seniors
+          messageText = isReassign
+            ? 'Please note that this task on <strong>' + body.productName + '</strong> has been transferred to your queue from ' + body.previousOwner + '.'
+            : 'Please note that the following task on <strong>' + body.productName + '</strong> has been assigned to your queue for review and action.';
+        } else {
+          // Warmer, collaborative tone for general team
+          messageText = isReassign
+            ? 'This task on <strong>' + body.productName + '</strong> has just been handed over to you from ' + body.previousOwner + '. We appreciate your help with this!'
+            : 'You have a new action item to help move <strong>' + body.productName + '</strong> forward.';
+        }
+
+        var html = '<!DOCTYPE html><html><body style="font-family:Arial,sans-serif;background:#f8f8f7;margin:0;padding:20px;">' +
+        '<div style="max-width:620px;margin:0 auto;background:#fff;border-radius:6px;overflow:hidden;border:1px solid #e5e4e0;">' +
+
+        '<div style="background:' + (urgent ? '#C0282D' : '#1a1a18') + ';padding:18px 28px;">' +
+          '<div style="color:rgba(255,255,255,.7);font-size:10px;letter-spacing:.12em;text-transform:uppercase;margin-bottom:3px;">' +
+            'Mixta Africa — NPD Hub' +
+          '</div>' +
+          '<div style="color:#fff;font-size:18px;font-weight:700;">' +
+            (isReassign ? 'A task has been reassigned to you' : 'You have been assigned a task') +
+          '</div>' +
+        '</div>' +
+
+        '<div style="padding:22px 28px 8px;">' +
+          '<p style="font-size:14px;color:#1a1a18;margin:0 0 16px;">' + greeting + '</p>' +
+          '<p style="font-size:14px;color:#4a4a46;line-height:1.7;margin:0 0 18px;">' +
+            messageText +
+          '</p>' +
+
+          '<table style="width:100%;border-collapse:collapse;border:1px solid #e5e4e0;margin-bottom:16px;">' +
+            '<thead><tr style="background:#1a1a18;">' +
+              '<th style="padding:8px 14px;text-align:left;font-size:10px;color:#fff;text-transform:uppercase;letter-spacing:.06em;width:48%;">Task</th>' +
+              '<th style="padding:8px 14px;text-align:left;font-size:10px;color:#fff;text-transform:uppercase;letter-spacing:.06em;">Deadline</th>' +
+              '<th style="padding:8px 14px;text-align:left;font-size:10px;color:#fff;text-transform:uppercase;letter-spacing:.06em;">Assigned by</th>' +
+            '</tr></thead>' +
+            '<tbody><tr>' +
+              '<td style="padding:12px 14px;font-size:13px;font-weight:600;color:#1a1a18;">' + (body.taskTitle || 'Untitled') + '</td>' +
+              '<td style="padding:12px 14px;font-size:12px;color:#4a4a46;">' + deadlineTxt +
+                (daysTxt ? '<div style="font-size:11px;color:' + (urgent ? '#C0282D' : '#6b6b67') + ';margin-top:2px;">' + daysTxt + '</div>' : '') +
+              '</td>' +
+              '<td style="padding:12px 14px;font-size:12px;color:#4a4a46;">' + (body.assignedBy || 'the NPD Hub') + '</td>' +
+            '</tr></tbody>' +
+          '</table>' +
+
+          (body.reason ? '<div style="background:#FFFBEB;border:1px solid #FDE68A;border-radius:6px;padding:11px 14px;margin-bottom:14px;font-size:12px;color:#92400E;line-height:1.6;"><strong>Note:</strong> ' + body.reason + '</div>' : '') +
+        '</div>' +
+
+        hubButton('Open my tasks', taskLink) +
+
+        '<div style="background:#f8f8f7;padding:12px 28px;border-top:1px solid #e5e4e0;display:flex;justify-content:space-between;">' +
+          '<span style="font-size:11px;color:#9a9a96;">Mixta Africa NPD Hub</span>' +
+          '<span style="font-size:11px;color:#9a9a96;">' + new Date().toLocaleDateString('en-GB',{day:'numeric',month:'short',year:'numeric'}) + '</span>' +
+        '</div></div></body></html>';
+
+        var subject = (isReassign ? '[Reassigned] ' : '[Assigned] ') +
+                      (body.taskTitle || 'New task') + ' — ' + body.productName;
+        GmailApp.sendEmail(email, subject, '', buildSenderOpts(body, html));
+        sent++;
+      } catch(e) {
+        errors.push(email + ': ' + e.message);
+      }
+    });
+
+    logEmailSent(body.productId, {
+      type: isReassign ? 'reassignment' : 'assignment',
+      trigger: 'manual', subject: (body.taskTitle || '') + ' assigned',
+      to: to, cc: [], taskTitles: [body.taskTitle], taskId: body.taskId,
+      sentBy: body.assignedBy || '',
+      body: assignmentBodyText,
+    });
+
+    return { ok: true, sent: sent, errors: errors };
+  } catch(err) {
+    Logger.log('sendAssignmentAlert error: ' + err.message);
     return { ok: false, error: err.message };
   }
 }
@@ -1697,6 +1942,15 @@ function sendOnboardingEmails(body) {
 
     logEvent('Onboarding emails sent (' + sent + ')', productName, '');
 
+    logEmailSent(productId, {
+      type: 'onboarding', trigger: 'manual',
+      subject: (body.testMode ? '[TEST] ' : '') + 'New Product Launch: ' + productName + ' — Action Required',
+      to: effectiveStakeholders.map(function(s) { return s.email; }), cc: [],
+      sentBy: createdBy || '',
+      body: 'Onboarding email sent to ' + effectiveStakeholders.length + ' stakeholder(s) for ' + productName + '.\n\n' +
+        'Launch date: ' + launchDate + '\nDrive folder: ' + folderUrl,
+    });
+
     return { ok: true, sent: sent, errors: errors };
 
   } catch(err) {
@@ -1772,13 +2026,15 @@ function checkAndSendDeadlineAlerts(body) {
               taskId: alert.pillarId || alert.taskId || '',
             });
             var html = buildAlertEmail(alertWithRecipient);
-            GmailApp.sendEmail(email, alertSubject, '', { htmlBody: html, name: SENDER_NAME });
+            var alertSenderName = alert.productOwnerName ? alert.productOwnerName + ' (NPD Hub)' : SENDER_NAME;
+            GmailApp.sendEmail(email, alertSubject, '', { htmlBody: html, name: alertSenderName });
             sent++;
             logEmailSent(alert.productId, {
               type: 'deadline_alert', trigger: body.testMode ? 'test' : 'automated',
               subject: alertSubject, to: [email], cc: [],
               taskTitles: [alert.pillarName], taskId: alert.pillarId,
               sentBy: 'NPD Hub (automated)',
+              body: buildAlertEmailText(alertWithRecipient),
             });
           } catch(e) {
             errors.push(email + ': ' + e.message);
@@ -1873,10 +2129,11 @@ function buildAlertEmail(alert) {
   '</div>' +
 
   // Action buttons
-  '<div style="padding:18px 28px;display:flex;gap:10px;">' +
+  '<div style="padding:18px 28px 10px;display:flex;gap:10px;">' +
     '<a href="' + ackUrl + '" style="display:inline-block;background:#16A34A;color:#fff;text-align:center;padding:10px 20px;border-radius:4px;font-size:12px;font-weight:700;text-decoration:none;">Acknowledge</a>' +
     '<a href="' + moreUrl + '" style="display:inline-block;background:#fff;color:#1a1a18;text-align:center;padding:10px 20px;border-radius:4px;font-size:12px;font-weight:600;text-decoration:none;border:1px solid #e5e4e0;">Request more time</a>' +
   '</div>' +
+  hubButton('Open this task in the Hub', hubLink({ productId: alert.productId, taskId: alert.taskId, view: 'myactions' })) +
 
   // Footer
   '<div style="background:#f8f8f7;padding:12px 28px;border-top:1px solid #e5e4e0;display:flex;justify-content:space-between;align-items:center;">' +
@@ -1940,6 +2197,14 @@ function sendProgressReport(body) {
     }
 
     logEvent('Progress report sent (' + sent + ' recipients)', productName, reportDate);
+
+    logEmailSent(productId, {
+      type: 'report', trigger: 'manual',
+      subject: subject, to: effectiveRecipients, cc: [],
+      sentBy: generatedBy || '',
+      body: buildProgressReportText(body),
+    });
+
     return { ok: true, sent: sent, errors: errors };
 
   } catch(err) {
@@ -2120,16 +2385,19 @@ function sendHandoverPackage(body) {
     var handoverCC = resolveRecipients([ownerEmail], body.testMode)[0];
     var handoverSubject = (body.testMode ? '[TEST] ' : '') + subject;
 
-    GmailApp.sendEmail(handoverTo, handoverSubject, '', {
-      htmlBody: htmlBody,
-      name:     SENDER_NAME,
-    });
-    GmailApp.sendEmail(handoverCC, '[CC] ' + handoverSubject, '', {
-      htmlBody: htmlBody,
-      name:     SENDER_NAME,
-    });
+    GmailApp.sendEmail(handoverTo, handoverSubject, '', buildSenderOpts(body, htmlBody));
+    GmailApp.sendEmail(handoverCC, '[CC] ' + handoverSubject, '', buildSenderOpts(body, htmlBody));
 
     logEvent('Handover package sent', productName, relieverName + ' until ' + returnDate);
+
+    logEmailSent(productId, {
+      type: 'handover', trigger: 'manual',
+      subject: subject, to: [handoverTo], cc: [handoverCC],
+      sentBy: ownerName || '',
+      body: 'Handover package sent to ' + relieverName + ' (covering until ' + returnDate + ') for ' + productName + '.' +
+        (notes ? '\n\nOwner notes: ' + notes : ''),
+    });
+
     return { ok: true, sent: 2 };
 
   } catch(err) {
@@ -2249,6 +2517,7 @@ function sendDeadlineReminder(body) {
         (customMessage ? '<div style="background:#FEF3C7;border-radius:6px;padding:14px;margin-bottom:16px;font-size:13px;color:#92400E;line-height:1.6;"><strong>Message from admin:</strong> ' + customMessage + '</div>' : '') +
         '<p style="font-size:12px;color:#9a9a96;margin:0;">This reminder was sent manually from the Mixta Africa NPD Hub.</p>' +
       '</div>' +
+      hubButton('Open my tasks', hubLink({ productId: body.productId, taskId: body.pillarId, view: 'myactions' })) +
       '<div style="background:#f8f8f7;padding:14px 28px;border-top:1px solid #e5e4e0;"><div style="font-size:11px;color:#9a9a96;">Mixta Africa NPD Hub &nbsp;·&nbsp; Deadline Reminder</div></div>' +
       '</div></body></html>';
 
@@ -2263,6 +2532,16 @@ function sendDeadlineReminder(body) {
     });
 
     logEvent('Deadline reminder sent (' + sent + ')', productName, pillarName);
+
+    logEmailSent(body.productId, {
+      type: 'reminder', trigger: 'manual',
+      subject: subject, to: recipients, cc: [],
+      taskTitles: [pillarName], taskId: body.pillarId,
+      sentBy: (body.sentByName || body.senderEmail || ''),
+      body: 'Reminder sent for "' + pillarName + '" (' + productName + '), due ' + deadline + '.' +
+        (customMessage ? '\n\nMessage: ' + customMessage : ''),
+    });
+
     return { ok: true, sent: sent, errors: errors };
 
   } catch(err) {
@@ -2277,7 +2556,7 @@ function sendDeadlineReminder(body) {
 // ─────────────────────────────────────────────────────────────
 function sendComposedEmail(body) {
   try {
-    var { subject, body: emailBody, toEmails, ccEmails, testMode, productName, folderUrl, isThreadStarter } = body;
+    var { subject, body: emailBody, toEmails, ccEmails, testMode, productName, productId, folderUrl, isThreadStarter } = body;
 
     if (!toEmails || toEmails.length === 0) {
       return { ok: false, error: 'No recipients.' };
@@ -2319,6 +2598,13 @@ function sendComposedEmail(body) {
 
     logEvent('Composed email sent (' + sent + ')', productName || subject, 'CC: ' + (cc.length || 0));
 
+    logEmailSent(productId, {
+      type: 'composed', trigger: 'manual',
+      subject: finalSubject, to: to, cc: cc,
+      sentBy: (body.sentByName || body.senderEmail || ''),
+      body: emailBody,
+    });
+
     // Capture Gmail thread ID when this is the first email for a product
     var threadId = null;
     if (isThreadStarter && sent > 0) {
@@ -2348,7 +2634,7 @@ function sendComposedEmail(body) {
 // ─────────────────────────────────────────────────────────────
 function replyToThread(body) {
   try {
-    var { threadId, emailBody, subject, toEmails, ccEmails, testMode, productName } = body;
+    var { threadId, emailBody, subject, toEmails, ccEmails, testMode, productName, productId } = body;
     if (!threadId)   return { ok: false, error: 'No thread ID provided.' };
     if (!emailBody)  return { ok: false, error: 'Email body is empty.' };
 
@@ -2365,6 +2651,14 @@ function replyToThread(body) {
 
     thread.reply('', replyOpts);
     logEvent('Thread reply sent', productName || 'unknown', 'Thread: ' + threadId);
+
+    logEmailSent(productId, {
+      type: 'composed', trigger: 'manual',
+      subject: subject || 'Thread reply', to: to, cc: cc,
+      sentBy: (body.sentByName || body.senderEmail || ''),
+      body: emailBody,
+    });
+
     return { ok: true, threadId: threadId };
 
   } catch(err) {
