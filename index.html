@@ -216,6 +216,7 @@ const handleAuthStateChange = async (user) => {
       const userData  = userSnap.exists() ? userSnap.val() : null;
 
       startDecisionsBadgeListener();
+      initGlobalSearch();
 
       if (!userData || !userData.dept) {
         showApp();
@@ -2460,6 +2461,118 @@ function startDecisionsBadgeListener() {
     }
   });
 }
+
+/* ══ GLOBAL SEARCH — header bar ═══════════════════════════════
+   Was pure decoration: an <input> with no listener at all. Searches
+   products/projects and tasks the current user can actually see
+   (same canUserSeeProduct/canViewTask gates as everywhere else — a
+   search box is not a way to leak a task someone shouldn't find). */
+let _gsDebounce = null;
+
+function initGlobalSearch() {
+  const input = document.getElementById('global-search-input');
+  if (!input || input.dataset.wired) return;
+  input.dataset.wired = '1';
+
+  input.addEventListener('input', () => {
+    clearTimeout(_gsDebounce);
+    const q = input.value.trim();
+    if (!q) { closeGlobalSearchResults(); return; }
+    _gsDebounce = setTimeout(() => runGlobalSearch(q), 200);
+  });
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') { input.value = ''; closeGlobalSearchResults(); input.blur(); }
+  });
+  input.addEventListener('focus', () => {
+    if (input.value.trim()) runGlobalSearch(input.value.trim());
+  });
+  document.addEventListener('click', (e) => {
+    if (!e.target.closest('.global-search-wrap')) closeGlobalSearchResults();
+  });
+}
+
+function ensureGlobalSearchResultsEl() {
+  let el = document.getElementById('global-search-results');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'global-search-results';
+    el.className = 'gsr-panel';
+    const wrap = document.querySelector('.global-search-wrap');
+    if (wrap) wrap.appendChild(el);
+  }
+  return el;
+}
+
+async function runGlobalSearch(q) {
+  const el = ensureGlobalSearchResultsEl();
+  el.style.display = 'block';
+  el.innerHTML = '<div class="gsr-empty">Searching…</div>';
+  try {
+    const snap = await get(ref(db, 'products'));
+    const products = snap.val() || {};
+    const userKey = sanitiseEmail(currentUser.email);
+    const ql = q.toLowerCase();
+
+    const productMatches = [];
+    const taskMatches = [];
+
+    Object.values(products).forEach(prod => {
+      if (prod.status === 'archived') return;
+      if (!canUserSeeProduct(prod, userKey)) return;
+
+      if ((prod.name || '').toLowerCase().includes(ql)) productMatches.push(prod);
+
+      getProductTasks(prod).filter(t => canViewTask(t, prod)).forEach(t => {
+        const title = t.title || t.name || '';
+        if (title.toLowerCase().includes(ql)) taskMatches.push({ task: t, prod });
+      });
+    });
+
+    renderGlobalSearchResults(q, productMatches.slice(0, 5), taskMatches.slice(0, 6));
+  } catch(e) {
+    el.innerHTML = '<div class="gsr-empty">Search failed — try again.</div>';
+  }
+}
+
+function renderGlobalSearchResults(q, productMatches, taskMatches) {
+  const el = ensureGlobalSearchResultsEl();
+  if (productMatches.length === 0 && taskMatches.length === 0) {
+    el.innerHTML = '<div class="gsr-empty">No matches for "' + q.replace(/</g,'&lt;') + '"</div>';
+    return;
+  }
+  let html = '';
+  if (productMatches.length) {
+    html += '<div class="gsr-section-label">Projects &amp; Products</div>' +
+      productMatches.map(p => {
+        const isProject = p.itemType === 'project';
+        return '<div class="gsr-row" onclick="closeGlobalSearchResults(); openProjectDashboard(\'' + p.id + '\')">' +
+          '<span class="gsr-row-icon" style="background:' + (isProject ? '#EFF6FF' : '#FEF2F2') + ';color:' + (isProject ? '#2563EB' : '#C0282D') + ';">' + (isProject ? 'PR' : 'PD') + '</span>' +
+          '<div style="flex:1;min-width:0;">' +
+            '<div class="gsr-row-title">' + (p.name || '') + '</div>' +
+            '<div class="gsr-row-sub">' + (isProject ? 'Project' : 'Product') + '</div>' +
+          '</div>' +
+        '</div>';
+      }).join('');
+  }
+  if (taskMatches.length) {
+    html += '<div class="gsr-section-label">Tasks</div>' +
+      taskMatches.map(({ task, prod }) =>
+        '<div class="gsr-row" onclick="closeGlobalSearchResults(); viewProduct(\'' + prod.id + '\',\'' + task.id + '\')">' +
+          '<span class="gsr-row-icon" style="background:#F3F4F6;color:#6B7280;">T</span>' +
+          '<div style="flex:1;min-width:0;">' +
+            '<div class="gsr-row-title">' + (task.title || task.name || 'Untitled') + '</div>' +
+            '<div class="gsr-row-sub">' + (prod.name || '') + '</div>' +
+          '</div>' +
+        '</div>'
+      ).join('');
+  }
+  el.innerHTML = html;
+}
+
+window.closeGlobalSearchResults = () => {
+  const el = document.getElementById('global-search-results');
+  if (el) el.style.display = 'none';
+};
 
 function renderDecisions(el) {
   if (currentRole !== 'admin') {
@@ -6070,7 +6183,7 @@ function buildPillarDetail(p) {
     showToast('Only the owner or an admin can delete tasks on this item.', 'error');
     return;
   }
-  
+
   // Elevated-risk safety gate.
   // Matches on ownerDept only — the previous version also did a substring
   // match on the owner NAME, which fires falsely on any person whose name
@@ -6080,11 +6193,49 @@ function buildPillarDetail(p) {
   const HIGH_RISK_DEPTS = ['AMC'];
   const isHighRisk = t && t.ownerDept && HIGH_RISK_DEPTS.includes(t.ownerDept);
 
-  if (isHighRisk) {
-    if (!confirm("APEX WARNING\n\nYou are deleting an AMC task. This action cannot be undone.\n\nAre you sure you want to proceed?")) return;
-  } else {
-    if (!confirm("Delete this task? This cannot be undone.")) return;
+  showDeleteTaskConfirm(productId, taskId, t?.title || t?.name || 'this task', isHighRisk);
+};
+
+// A real modal, not the native confirm() — a browser dialog is too easy to
+// blow past with reflexive Enter/click, which defeats the point of a guard
+// against accidental deletion. Requires a deliberate click on the red button.
+function showDeleteTaskConfirm(productId, taskId, taskTitle, isHighRisk) {
+  let modal = document.getElementById('delete-task-modal');
+  if (!modal) {
+    modal = document.createElement('div');
+    modal.id = 'delete-task-modal';
+    modal.className = 'modal-overlay';
+    modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.45);display:flex;align-items:center;justify-content:center;z-index:2100;padding:20px;';
+    document.body.appendChild(modal);
   }
+  modal.innerHTML = `
+    <div style="background:#fff;border-radius:14px;width:100%;max-width:420px;box-shadow:var(--shadow-lg);overflow:hidden;">
+      <div style="padding:24px 24px 0;text-align:center;">
+        <div style="width:48px;height:48px;border-radius:50%;background:var(--red-light);display:flex;align-items:center;justify-content:center;margin:0 auto 14px;">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="var(--red)" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg>
+        </div>
+        <div style="font-size:15px;font-weight:700;color:#1A1A1A;margin-bottom:6px;">Delete "${(taskTitle || '').replace(/"/g,'&quot;')}"?</div>
+        <div style="font-size:12.5px;color:var(--text-mid);line-height:1.6;">
+          ${isHighRisk
+            ? 'This is an <strong>AMC task</strong> — deleting it cannot be undone, and it will disappear from anyone it was shared with.'
+            : 'This cannot be undone, and it will disappear from anyone it was shared with.'}
+        </div>
+      </div>
+      <div style="display:flex;gap:8px;padding:20px 24px 24px;">
+        <button class="btn-outline" style="flex:1;" onclick="closeDeleteTaskConfirm()">Cancel</button>
+        <button class="btn-primary" style="flex:1;background:var(--red);" onclick="confirmDeleteTask('${productId}','${taskId}')">Delete task</button>
+      </div>
+    </div>`;
+  modal.style.display = 'flex';
+}
+
+window.closeDeleteTaskConfirm = () => {
+  const modal = document.getElementById('delete-task-modal');
+  if (modal) modal.style.display = 'none';
+};
+
+window.confirmDeleteTask = async (productId, taskId) => {
+  closeDeleteTaskConfirm();
   try {
     const prod = productListCache[productId];
     const isNewFormat = !!prod.tasks?.[taskId];
@@ -12779,9 +12930,18 @@ a { color: inherit; text-decoration: none; }
 .global-search-wrap {
   display: flex; align-items: center; background: #F4F4F5; border-radius: 99px;
   padding: 5px 12px; width: 100%; max-width: 320px; border: 1px solid transparent; transition: border 0.2s;
+  position: relative;
 }
 .global-search-wrap:focus-within { border-color: var(--border-mid); background: white; box-shadow: var(--shadow-sm); }
 .global-search-input { border: none; background: transparent; outline: none; width: 100%; font-size: 11px; margin-left: 8px; font-family: 'Poppins', sans-serif; color: var(--text); }
+.gsr-panel { display:none; position:absolute; top:calc(100% + 8px); left:0; width:340px; max-height:420px; overflow-y:auto; background:#fff; border:1px solid var(--border); border-radius:10px; box-shadow:var(--shadow-lg); z-index:500; }
+.gsr-section-label { font-size:10px; font-weight:700; letter-spacing:.04em; text-transform:uppercase; color:var(--text-muted); padding:10px 14px 4px; }
+.gsr-row { display:flex; align-items:center; gap:10px; padding:8px 14px; cursor:pointer; transition:background .12s; }
+.gsr-row:hover { background:#FAFAF9; }
+.gsr-row-icon { width:24px; height:24px; border-radius:6px; display:flex; align-items:center; justify-content:center; font-size:9px; font-weight:700; flex-shrink:0; }
+.gsr-row-title { font-size:12px; font-weight:600; color:#1A1A1A; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.gsr-row-sub { font-size:10px; color:var(--text-muted); }
+.gsr-empty { padding:20px 14px; font-size:12px; color:var(--text-muted); text-align:center; }
 .header-right { display: flex; align-items: center; gap: 12px; }
 .header-bell { color: var(--text-muted); cursor: pointer; transition: color 0.2s; position: relative; }
 .header-bell:hover { color: var(--text); }
