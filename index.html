@@ -1951,9 +1951,17 @@ async function loadWorkload() {
       return;
     }
 
-    // Sort depts by total desc
-    const sorted = Object.entries(depts).sort((a, b) => b[1].total - a[1].total);
-    const maxTotal = sorted[0][1].total || 1;
+    // Sort by URGENCY, not volume — a department with fewer tasks but a
+    // higher proportion overdue needs eyes on it before a bigger, healthier
+    // one. Sorting by total task count (the old behaviour) buried exactly
+    // the department this whole view exists to surface.
+    const sorted = Object.entries(depts).sort((a, b) => {
+      const ua = a[1].overdue + a[1].delayed, ub = b[1].overdue + b[1].delayed;
+      if (ub !== ua) return ub - ua;
+      if (b[1].blocked !== a[1].blocked) return b[1].blocked - a[1].blocked;
+      if (b[1].dueSoon !== a[1].dueSoon) return b[1].dueSoon - a[1].dueSoon;
+      return b[1].total - a[1].total;
+    });
 
     let html = '<div style="display:flex;flex-direction:column;gap:12px;">';
 
@@ -1963,7 +1971,6 @@ async function loadWorkload() {
       const pctDelayed  = Math.round((data.delayed  / data.total) * 100);
       const pctBlocked  = Math.round((data.blocked  / data.total) * 100);
       const pctOnTrack  = Math.max(0, 100 - pctOverdue - pctDueSoon - pctDelayed);
-      const barWidth    = Math.round((data.total / maxTotal) * 100);
       const heatColor   = data.overdue > 0 ? '#C0282D' : data.delayed > 0 ? '#C0282D' : data.dueSoon > 0 ? '#D97706' : '#16A34A';
 
       // Task rows (max 4, sorted by urgency)
@@ -1997,13 +2004,16 @@ async function loadWorkload() {
                 (data.delayed  > 0 ? '<span style="font-size:10px;color:#C0282D;">' + data.delayed + ' delayed</span>'  : '') +
                 (data.blocked  > 0 ? '<span style="font-size:10px;color:#D97706;">' + data.blocked + ' blocked</span>'  : '') +
               '</div>' +
-              // Stacked bar
-              '<div style="height:6px;border-radius:3px;background:#F0F0EE;overflow:hidden;width:' + barWidth + '%;">' +
+              // Composition bar — always full-width. This is deliberately
+              // NOT scaled by task count: the point is "what fraction of
+              // this department's load is at risk," not "how big is this
+              // department," so every bar has to be directly comparable.
+              '<div style="height:6px;border-radius:3px;background:#F0F0EE;overflow:hidden;width:100%;">' +
                 '<div style="height:6px;display:flex;">' +
-                  (pctOverdue > 0 ? '<div style="flex:' + pctOverdue + ';background:#C0282D;"></div>' : '') +
-                  (pctDelayed > 0 ? '<div style="flex:' + pctDelayed + ';background:#E05C5C;"></div>' : '') +
-                  (pctDueSoon > 0 ? '<div style="flex:' + pctDueSoon + ';background:#D97706;"></div>' : '') +
-                  (pctOnTrack > 0 ? '<div style="flex:' + pctOnTrack + ';background:#16A34A;"></div>' : '') +
+                  (pctOverdue > 0 ? '<div style="flex:' + pctOverdue + ';background:#C0282D;" title="' + data.overdue + ' overdue"></div>' : '') +
+                  (pctDelayed > 0 ? '<div style="flex:' + pctDelayed + ';background:#E05C5C;" title="' + data.delayed + ' delayed"></div>' : '') +
+                  (pctDueSoon > 0 ? '<div style="flex:' + pctDueSoon + ';background:#D97706;" title="' + data.dueSoon + ' due soon"></div>' : '') +
+                  (pctOnTrack > 0 ? '<div style="flex:' + pctOnTrack + ';background:#16A34A;" title="on track"></div>' : '') +
                 '</div>' +
               '</div>' +
             '</div>' +
@@ -5976,11 +5986,37 @@ function buildPillarDetail(p) {
 
     const isFirst = i === 0;
     const isLast = i === tasks.length - 1;
+    const canDrag = canEdit(p);
     const moveUpBtn = canEdit(p) && !isFirst ? '<button onclick="moveProductTask(\'' + p.id + '\', \'' + task.id + '\', -1)" style="background:none;border:1px solid var(--border);border-radius:6px;padding:3px 8px;font-size:10px;color:var(--text-muted);cursor:pointer;font-family:Poppins,sans-serif;margin-left:6px;" title="Move Up">↑</button>' : '';
     const moveDownBtn = canEdit(p) && !isLast ? '<button onclick="moveProductTask(\'' + p.id + '\', \'' + task.id + '\', 1)" style="background:none;border:1px solid var(--border);border-radius:6px;padding:3px 8px;font-size:10px;color:var(--text-muted);cursor:pointer;font-family:Poppins,sans-serif;margin-left:6px;" title="Move Down">↓</button>' : '';
     const deleteBtn = canEdit(p) ? '<button onclick="deleteProductTask(\'' + p.id + '\', \'' + task.id + '\')" style="background:none;border:1px solid var(--border);border-radius:6px;padding:3px 8px;font-size:10px;color:var(--red);cursor:pointer;font-family:Poppins,sans-serif;margin-left:6px;" title="Delete Task">✕</button>' : '';
 
-    return '<div class="pillar-detail-row' + (isBlocked ? ' pillar-row-blocked' : '') + '" id="pdr-' + task.id + '">' +
+    // Drag-and-drop reorder — the up/down buttons work fine one step at a
+    // time, but dragging a task straight to where it belongs is the more
+    // direct way to move it several places in one go.
+    const dragHandle = canDrag
+      ? '<div class="task-drag-handle" title="Drag to reorder"><svg width="10" height="14" viewBox="0 0 10 14" fill="currentColor"><circle cx="2" cy="2" r="1.3"/><circle cx="8" cy="2" r="1.3"/><circle cx="2" cy="7" r="1.3"/><circle cx="8" cy="7" r="1.3"/><circle cx="2" cy="12" r="1.3"/><circle cx="8" cy="12" r="1.3"/></svg></div>'
+      : '';
+    const dragAttrs = canDrag
+      ? ' draggable="true" ' +
+        'ondragstart="event.dataTransfer.setData(\'text/plain\', \'' + task.id + '\'); this.classList.add(\'task-dragging\');" ' +
+        'ondragend="this.classList.remove(\'task-dragging\');" ' +
+        'ondragover="event.preventDefault(); this.classList.add(\'task-drop-target\');" ' +
+        'ondragleave="this.classList.remove(\'task-drop-target\');" ' +
+        'ondrop="event.preventDefault(); this.classList.remove(\'task-drop-target\'); reorderProductTaskDrag(\'' + p.id + '\', event.dataTransfer.getData(\'text/plain\'), \'' + task.id + '\');"'
+      : '';
+
+    // Which status bucket this task displays under — a task's group is
+    // derived purely from its status/deadline, never from its manual
+    // order, so dragging it around never moves it between groups.
+    const groupKey = isBlocked ? 'blocked'
+      : (meta.cls === 'overdue' || meta.cls === 'delayed') ? 'overdue'
+      : meta.cls === 'due-soon' ? 'due-soon'
+      : meta.cls === 'complete' ? 'complete'
+      : 'on-track';
+
+    return { groupKey, html: '<div class="pillar-detail-row' + (isBlocked ? ' pillar-row-blocked' : '') + '" id="pdr-' + task.id + '"' + dragAttrs + '>' +
+      dragHandle +
       '<div class="pillar-detail-num">' + (i + 1) + '</div>' +
       '<div class="pillar-detail-body">' +
         '<div class="pillar-detail-name">' + (task.title || task.name || 'Untitled task') + '</div>' +
@@ -5995,8 +6031,27 @@ function buildPillarDetail(p) {
       '<div style="display:flex;align-items:center;gap:4px;">' +
         statusEl + reassignBtn + spinOutBtn + moveUpBtn + moveDownBtn + deleteBtn +
       '</div>' +
-    '</div>';
-  }).join('');
+    '</div>' };
+  });
+
+  // Group into sections — Blocked and Overdue need eyes on them first;
+  // Complete needs almost none. Order/labels/pill colours match the same
+  // language used in My Actions & To-do elsewhere in the app.
+  const GROUP_ORDER  = ['blocked', 'overdue', 'due-soon', 'on-track', 'complete'];
+  const GROUP_LABEL  = { blocked: 'Blocked', overdue: 'Overdue', 'due-soon': 'Due soon', 'on-track': 'On track', complete: 'Complete' };
+  const GROUP_PILL   = { blocked: 'pcf-pill-amber', overdue: 'pcf-pill-red', 'due-soon': 'pcf-pill-amber', 'on-track': 'pcf-pill-green', complete: 'pcf-pill-blue' };
+  const grouped = {};
+  rows.forEach(r => { (grouped[r.groupKey] = grouped[r.groupKey] || []).push(r.html); });
+
+  const rowsHtml = GROUP_ORDER
+    .filter(key => grouped[key] && grouped[key].length)
+    .map(key => (
+      '<div style="display:flex;align-items:center;gap:8px;margin:14px 0 4px;' + (key === 'blocked' ? '' : '') + '">' +
+        '<span class="pcf-pill ' + GROUP_PILL[key] + '" style="text-transform:uppercase;">' + GROUP_LABEL[key] + '</span>' +
+        '<span style="font-size:11px;color:var(--text-muted);">' + grouped[key].length + ' task' + (grouped[key].length !== 1 ? 's' : '') + '</span>' +
+      '</div>' +
+      grouped[key].join('')
+    )).join('');
 
   const editBtn = currentRole === 'admin'
     ? '<button class="btn-primary" onclick="editProduct(\'' + p.id + '\')">Edit dates</button>'
@@ -6004,7 +6059,7 @@ function buildPillarDetail(p) {
   const addTaskBtn = canEdit(p)
     ? '<button class="btn-outline" style="font-size:12px;" onclick="showAddTaskToProduct(\'' + p.id + '\')">+ Add task</button>'
     : '';
-  return '<div class="pillar-detail-list">' + rows + '</div>' +
+  return '<div class="pillar-detail-list">' + rowsHtml + '</div>' +
     '<div id="modal-reassign-panel" style="padding:0;"></div>' +
     '<div class="form-actions">' + addTaskBtn + editBtn + '<button class="btn-outline" onclick="closeProductModal()">Close</button></div>';
 }
@@ -6091,6 +6146,45 @@ window.moveProductTask = async (productId, taskId, direction) => {
     if (body) body.innerHTML = buildPillarDetail(prod);
   } catch(e) {
     showToast("Failed to move task: " + e.message, "error");
+  }
+};
+
+// Drag a task directly to where it belongs — same underlying sequential
+// .order write moveProductTask uses above, generalized to move any
+// distance in one drop instead of one step per click.
+window.reorderProductTaskDrag = async (productId, draggedTaskId, targetTaskId) => {
+  if (!draggedTaskId || !targetTaskId || draggedTaskId === targetTaskId) return;
+  const prod = productListCache[productId];
+  if (!prod || !canEdit(prod)) {
+    showToast('Only the owner or an admin can reorder tasks on this item.', 'error');
+    return;
+  }
+  try {
+    // Same visibility ring-fence as moveProductTask — never reorder against
+    // tasks this viewer can't see.
+    const tasks = getProductTasks(prod).filter(t => canViewTask(t, prod));
+    const fromIdx = tasks.findIndex(t => t.id === draggedTaskId);
+    const toIdx   = tasks.findIndex(t => t.id === targetTaskId);
+    if (fromIdx === -1 || toIdx === -1) return;
+
+    const reordered = tasks.slice();
+    const [moved] = reordered.splice(fromIdx, 1);
+    reordered.splice(toIdx, 0, moved);
+
+    const updates = {};
+    reordered.forEach((t, i) => {
+      t.order = i;
+      const path = prod.tasks?.[t.id] ? 'tasks/' + t.id + '/order' : 'pillars/' + t.id + '/order';
+      updates[path] = i;
+    });
+    for (const p in updates) {
+      await set(ref(db, 'products/' + productId + '/' + p), updates[p]);
+    }
+
+    const body = document.getElementById('product-detail-body');
+    if (body) body.innerHTML = buildPillarDetail(prod);
+  } catch(e) {
+    showToast('Failed to reorder task: ' + e.message, 'error');
   }
 };
 /* ══ TASK REASSIGNMENT ══════════════════════════════════════ */
@@ -7707,7 +7801,7 @@ function renderReports(el) {
     <div class="view-header">
       <div>
         <h1 class="view-title">Progress Reports</h1>
-        <p class="view-subtitle">Deadline alerts run automatically every day at 7am WAT</p>
+        <p class="view-subtitle">Deadline alerts run automatically every day, at the hour set below</p>
       </div>
     </div>
 
@@ -7716,9 +7810,9 @@ function renderReports(el) {
         <div class="panel-header"><span class="panel-title">Deadline Alert Engine</span></div>
         <div class="panel-body">
           <p style="font-size:13px;color:var(--text-mid);line-height:1.7;margin-bottom:16px;">
-            Runs automatically every day at 7am WAT via GitHub Actions.<br/>
+            Runs automatically every day via Google Apps Script — the same schedule set below under "Email schedule."<br/>
             Sends targeted emails to the responsible department only — not all stakeholders.<br/>
-            Triggers: <strong>3 days before deadline</strong>, <strong>on the deadline day</strong>, and <strong>every day after if overdue</strong>.
+            Triggers: <strong>daily, for every active task with a deadline</strong>, showing each recipient a running countdown to (or past) that deadline.
           </p>
           ${currentRole === 'admin' ? `
           <div class="alert-manual-section">
@@ -7744,31 +7838,31 @@ function renderReports(el) {
         <div class="panel-header"><span class="panel-title">Alert thresholds</span></div>
         <div class="panel-body">
           <div class="threshold-row">
-            <span class="leg-dot leg-amber" style="flex-shrink:0;"></span>
+            <span class="leg-dot" style="background:#2563EB;flex-shrink:0;"></span>
             <div>
-              <div style="font-size:13px;font-weight:500;">3-day warning</div>
-              <div style="font-size:12px;color:var(--text-muted);">Email sent to pillar owner dept 3 days before deadline</div>
+              <div style="font-size:13px;font-weight:500;">Daily countdown</div>
+              <div style="font-size:12px;color:var(--text-muted);">Every active task with a deadline gets a daily email showing days remaining — not just a one-off warning starting 3 days out. A task with several dependencies needs longer visibility than 3 days can give it.</div>
             </div>
           </div>
           <div class="threshold-row">
             <span class="leg-dot leg-red" style="flex-shrink:0;"></span>
             <div>
               <div style="font-size:13px;font-weight:500;">Deadline day</div>
-              <div style="font-size:12px;color:var(--text-muted);">Email sent on the day the deadline falls</div>
+              <div style="font-size:12px;color:var(--text-muted);">Countdown reaches zero — flagged as due today</div>
             </div>
           </div>
           <div class="threshold-row">
             <span class="leg-dot" style="background:#7C3AED;flex-shrink:0;"></span>
             <div>
               <div style="font-size:13px;font-weight:500;">Overdue (daily)</div>
-              <div style="font-size:12px;color:var(--text-muted);">Email sent every day the pillar remains overdue and incomplete</div>
+              <div style="font-size:12px;color:var(--text-muted);">Email sent every day the task remains overdue and incomplete</div>
             </div>
           </div>
           <div class="threshold-row">
             <span class="leg-dot leg-green" style="flex-shrink:0;"></span>
             <div>
               <div style="font-size:13px;font-weight:500;">Complete — no alert</div>
-              <div style="font-size:12px;color:var(--text-muted);">Pillars marked complete are excluded from all alerts</div>
+              <div style="font-size:12px;color:var(--text-muted);">Tasks marked complete are excluded from all alerts</div>
             </div>
           </div>
         </div>
@@ -7776,7 +7870,10 @@ function renderReports(el) {
     </div>
 
     <div class="panel">
-      <div class="panel-header"><span class="panel-title">Current deadline status — all products</span></div>
+      <div class="panel-header">
+        <span class="panel-title">Recent alerts sent</span>
+        <span style="font-size:11px;color:var(--text-muted);">Last 20, across everything you have access to</span>
+      </div>
       <div class="panel-body" id="deadline-status-list"><div class="loading-row">Loading...</div></div>
     </div>
 
@@ -7965,57 +8062,58 @@ async function loadDeadlineStatus() {
   const el = document.getElementById('deadline-status-list');
   if (!el) return;
   try {
-    const snap     = await get(ref(db, 'products'));
-    const products = snap.val() || {};
-    const today    = new Date(); today.setHours(0,0,0,0);
-    const alerts   = [];
+    const [prodSnap, logSnap] = await Promise.all([
+      get(ref(db, 'products')),
+      get(ref(db, 'emailLog')),
+    ]);
+    const products = prodSnap.val() || {};
+    const userKey  = sanitiseEmail(currentUser.email);
+    const all      = [];
 
-    Object.values(products).filter(p => p.status !== 'archived').forEach(prod => {
-      const tasks = getProductTasks(prod);
-      tasks.forEach(task => {
-        const effStatus = resolveTaskStatus(task, prod);
-        if (!task.deadline || effStatus === 'complete') return;
-        
-        const due  = new Date(task.deadline); due.setHours(0,0,0,0);
-        const diff = Math.round((due - today) / 86400000);
-        
-        if (diff <= 3) {
-          alerts.push({
-            productName: prod.name,
-            pillarName:  task.title || task.name,
-            owner:       task.owner || 'Unassigned',
-            deadline:    task.deadline,
-            diff,
-            status: diff < 0 ? 'overdue' : diff === 0 ? 'due-today' : 'warning',
-          });
-        }
+    if (logSnap.exists()) {
+      Object.entries(logSnap.val()).forEach(([pid, entries]) => {
+        const prod = products[pid];
+        if (!prod || prod.status === 'archived') return;
+        if (!canUserSeeProduct(prod, userKey)) return;
+        const isOwnerOrAdmin = currentRole === 'admin' || isSuperAdmin || prod.ownerId === userKey;
+        // Same rule as the dashboard's Recent Activity feed and the
+        // per-product Comms tab — seeing the product isn't seeing every
+        // alert logged for it; a task-scoped one needs real access to that task.
+        Object.values(entries).forEach(e => {
+          if (e.type !== 'deadline_alert') return; // this panel is specifically about the alert engine
+          if (e.taskId) {
+            const task = (prod.tasks && prod.tasks[e.taskId]) || (prod.pillars && prod.pillars[e.taskId]);
+            if (!task || !canViewTask(task, prod)) return;
+          } else if (!isOwnerOrAdmin) {
+            return;
+          }
+          all.push(Object.assign({ productName: prod.name }, e));
+        });
       });
-    });
+    }
 
-    if (alerts.length === 0) {
-      el.innerHTML = '<div class="empty-state-sm"><span class="empty-icon" style="color:var(--green);">' + ICON.check_circle + '</span><p>No imminent deadlines. All pillars are on track or have no date set.</p></div>';
+    if (all.length === 0) {
+      el.innerHTML = '<div class="empty-state-sm"><span class="empty-icon" style="color:var(--green);">' + ICON.check_circle + '</span><p>No alerts sent yet, or none you have access to.</p></div>';
       return;
     }
 
-    alerts.sort((a,b) => a.diff - b.diff);
-    el.innerHTML = alerts.map(a => {
-      const label = a.diff < 0  ? `${Math.abs(a.diff)} day${Math.abs(a.diff)>1?'s':''} overdue`
-                  : a.diff === 0 ? 'Due today'
-                  : `Due in ${a.diff} day${a.diff>1?'s':''}`;
-      const cls   = a.diff < 0 ? 'pill-red' : a.diff === 0 ? 'pill-red' : 'pill-amber';
+    all.sort((a, b) => (b.sentAt || 0) - (a.sentAt || 0));
+    el.innerHTML = all.slice(0, 20).map(a => {
+      const when = a.sentAt ? new Date(a.sentAt).toLocaleDateString('en-GB', { day:'numeric', month:'short', hour:'2-digit', minute:'2-digit' }) : '';
+      const subject = a.subject || (a.taskTitles && a.taskTitles[0]) || 'Deadline alert';
+      const recipCount = (a.to || []).length;
       return `<div class="deadline-alert-row">
         <div class="deadline-alert-info">
-          <div class="deadline-alert-pillar">${a.pillarName}</div>
-          <div class="deadline-alert-product">${a.productName} &nbsp;·&nbsp; Owner: ${a.owner}</div>
+          <div class="deadline-alert-pillar">${subject}</div>
+          <div class="deadline-alert-product">${a.productName} &nbsp;·&nbsp; ${recipCount} recipient${recipCount !== 1 ? 's' : ''}</div>
         </div>
         <div style="display:flex;align-items:center;gap:8px;">
-          <span class="pill ${cls}">${label}</span>
-          <span style="font-size:11px;color:var(--text-muted);">${formatDate(a.deadline)}</span>
+          <span style="font-size:11px;color:var(--text-muted);">${when}</span>
         </div>
       </div>`;
     }).join('');
   } catch(e) {
-    el.innerHTML = '<div class="loading-row muted">Failed to load deadline status.</div>';
+    el.innerHTML = '<div class="loading-row muted">Failed to load recent alerts.</div>';
   }
 }
 
@@ -12841,9 +12939,14 @@ textarea.input-field { resize: vertical; line-height: 1.5; }
 
 /* Pillar detail view */
 .pillar-detail-list { display: flex; flex-direction: column; gap: 0; }
-.pillar-detail-row  { display: flex; align-items: flex-start; gap: 12px; padding: 11px 0; border-bottom: 1px solid var(--border); }
+.pillar-detail-row  { display: flex; align-items: flex-start; gap: 12px; padding: 11px 0; border-bottom: 1px solid var(--border); transition: background .12s, opacity .12s; }
 .pillar-detail-row:last-child { border-bottom: none; }
 .pillar-detail-num  { width: 22px; height: 22px; border-radius: 50%; background: var(--bg); color: var(--text-muted); font-size: 11px; font-weight: 600; display: flex; align-items: center; justify-content: center; flex-shrink: 0; margin-top: 1px; }
+.task-drag-handle { display:flex; align-items:center; justify-content:center; width:14px; flex-shrink:0; color:var(--border-mid); cursor:grab; margin-top:5px; }
+.task-drag-handle:hover { color:var(--text-muted); }
+.pillar-detail-row[draggable="true"]:active { cursor:grabbing; }
+.pillar-detail-row.task-dragging { opacity:0.4; }
+.pillar-detail-row.task-drop-target { background:var(--red-tint); border-top:2px solid var(--red); }
 .pillar-detail-body { flex: 1; }
 .pillar-detail-name { font-size: 13px; font-weight: 500; color: var(--text); margin-bottom: 4px; }
 .pillar-detail-meta { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
@@ -13310,6 +13413,21 @@ textarea.input-field { resize: vertical; line-height: 1.5; }
 /* ═══ PRODUCTS & PROJECTS — CARD REDESIGN ═══════════════════ */
 .pv-filter-row { display:flex; gap:8px; margin-bottom:16px; }
 .pv-filter { background:#fff; border:1px solid var(--border); border-radius:99px; padding:7px 16px; font-size:12px; font-weight:600; color:var(--text-mid); cursor:pointer; display:flex; align-items:center; gap:6px; transition:all 0.15s; font-family:'Poppins',sans-serif; }
+/* ═══ PRODUCT/TASK DETAIL MODAL — TAB BAR ═══════════════════
+   Was completely unstyled (raw <button> chrome) — this is the
+   underline-tab pattern for "which section of this thing am I
+   looking at", distinct from .pv-filter's pill style, which is
+   for filtering a list, not navigating between content sections. */
+.pdt-tabs { display:flex; gap:20px; border-bottom:1px solid var(--border); margin-bottom:16px; overflow-x:auto; }
+.pdt-tab { background:none; border:none; padding:10px 2px; font-size:12px; font-weight:600; color:var(--text-muted); cursor:pointer; border-bottom:2px solid transparent; transition:color .15s, border-color .15s; white-space:nowrap; font-family:'Poppins',sans-serif; }
+.pdt-tab:hover { color:var(--text-mid); }
+.pdt-tab.active { color:var(--red); border-bottom-color:var(--red); }
+
+/* Product/Project toggle in "Create new" — same unstyled-class problem */
+.type-toggle-btn { display:flex; align-items:center; gap:6px; padding:9px 18px; border:1px solid var(--border); border-radius:8px; background:#fff; color:var(--text-mid); font-size:12px; font-weight:600; cursor:pointer; font-family:'Poppins',sans-serif; transition:all .15s; }
+.type-toggle-btn:hover { border-color:var(--border-mid); }
+.type-toggle-btn.type-toggle-active { background:var(--red); border-color:var(--red); color:#fff; }
+.type-toggle-btn.type-toggle-active svg { stroke:#fff; }
 .pv-filter:hover { border-color:var(--border-mid); }
 .pv-filter.active { background:var(--red); border-color:var(--red); color:#fff; }
 .pv-filter .pv-count { font-size:10px; font-weight:700; background:rgba(0,0,0,0.06); color:var(--text-muted); padding:1px 7px; border-radius:99px; }
