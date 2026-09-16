@@ -620,7 +620,19 @@ function showApp() {
   if (saNav) saNav.style.display = 'none';
 
   // Load all app config, templates, and team members
-  loadAppConfig().then(() => seedConfigToFirebase());
+  loadAppConfig().then(() => {
+    seedConfigToFirebase();
+    // Feature-gated nav items — hide the ones a Circuit Box toggle has
+    // turned off. Applied after config load since FEATURES isn't real
+    // until then; the admin-only gate above already ran and stays
+    // independent of this (a toggle-off shouldn't grant back something
+    // a role restriction hid, only hide further).
+    const navByView = { calendar: 'calendarView', tracker: 'taskTracker', ask: 'aiAsk', decisions: 'decisionEngine' };
+    Object.entries(navByView).forEach(([view, flag]) => {
+      const navEl = document.querySelector(`.nav-item[data-view="${view}"]`);
+      if (navEl && FEATURES[flag] === false) navEl.style.display = 'none';
+    });
+  });
   loadTemplatesAndConfig();
   // --- DAILY BACKGROUND PING TEST ---
   if (currentRole === 'admin') {
@@ -1109,6 +1121,12 @@ let DEPARTMENTS = {
 };
 
 // ── FEATURE FLAGS (defaults — overridden by Firebase /config/features) ──
+// These now actually gate something, on both ends. Previously every one of
+// these keys was written by Circuit Box's toggles and read by nothing —
+// not the backend (Apps Script never checked config/features at all), not
+// the frontend (nothing outside the toggle switch's own rendered state
+// checked FEATURES.* either). Fixed on both sides; see isFeatureEnabled_()
+// in the Apps Script backend for the server-side half of this.
 let FEATURES = {
   deadlineAlerts:   true,
   handoverSystem:   true,
@@ -1118,12 +1136,16 @@ let FEATURES = {
   sharing:          true,
   calendarView:     true,
   taskTracker:      true,
+  aiEmailComposer:  true,
+  sheetSync:        true,
+  gccoDashboard:    true,
+  decisionEngine:   true,
+  aiAsk:            true,
 };
 
 // ── SYSTEM CONFIG (defaults — overridden by Firebase /config/system) ──
 let SYS_CONFIG = {
   saTimeoutMins:      30,
-  alertThresholdDays: 3,
   appName:            'Mixta Africa NPD Hub',
   appSubtitle:        'New Product Development Hub',
 };
@@ -4709,6 +4731,10 @@ function buildAskContext() {
 }
 
 window.submitAsk = async () => {
+  if (FEATURES.aiAsk === false) {
+    showToast('The Ask assistant is currently disabled by an administrator.', 'error');
+    return;
+  }
   const input = document.getElementById('ask-input');
   const btn   = document.getElementById('ask-send');
   const thread = document.getElementById('ask-thread');
@@ -9400,7 +9426,7 @@ window.saConfirmAddStakeholder = async (newId) => {
 /* ── TAB: FEATURES ──────────────────────────────────────── */
 async function renderSAFeatures(el) {
   const FEATURE_META = [
-    { key: 'deadlineAlerts',  label: 'Deadline Alert Engine',   desc: 'Daily cron + manual trigger that emails pillar owners when deadlines are near or overdue' },
+    { key: 'deadlineAlerts',  label: 'Deadline Alert Engine',   desc: 'Daily cron + manual trigger that emails task owners a running countdown to (or past) their deadline. Now actually stops the cron when off, not just the button.' },
     { key: 'handoverSystem',  label: 'Handover System',         desc: 'Allow product owners to initiate leave handovers with auto-generated briefing packages' },
     { key: 'weeklyLog',       label: 'Weekly Task Log',         desc: 'Per-product weekly log of completed and open tasks, feeds into handover packages' },
     { key: 'documentUploads', label: 'Document Upload Centre',  desc: 'File upload zones per SOP pillar, synced to Google Drive subfolders' },
@@ -9408,6 +9434,11 @@ async function renderSAFeatures(el) {
     { key: 'sharing',         label: 'Product Sharing',         desc: 'Allow product owners to share access with team members at view or edit level' },
     { key: 'calendarView',    label: 'Launch Calendar',         desc: 'Month-grid view of all pillar milestone dates with colour-coded status dots' },
     { key: 'taskTracker',     label: 'Task Tracker',            desc: 'Per-product pillar status table with admin update controls and notes' },
+    { key: 'aiEmailComposer', label: 'AI Email Composer',       desc: 'AI-drafted composed emails and thread replies, sent through the Apps Script backend' },
+    { key: 'sheetSync',       label: 'Google Sheet Sync',       desc: 'Bidirectional sync between a product\'s tasks and its live Google Sheet — both the push and the 10-minute return poll' },
+    { key: 'gccoDashboard',   label: 'Read-only Portfolio Link', desc: 'The GCCO-style shareable, token-gated read-only dashboard link' },
+    { key: 'decisionEngine',  label: 'Decision Engine (AI brain)', desc: 'The scheduled reasoning cycle that reads task changes and writes suggestions to the Decisions page' },
+    { key: 'aiAsk',           label: 'Ask (AI assistant)',      desc: 'The client-side AI chat on the Ask page, calling Groq/Cerebras/SambaNova directly from the browser' },
   ];
 
   const rows = FEATURE_META.map(f => {
@@ -9714,8 +9745,10 @@ async function renderSAConfig(el) {
           <input id="cfg-satimeout" class="input-field" type="number" min="5" max="480" value="${SYS_CONFIG.saTimeoutMins || 30}" style="width:120px;"/>
         </div>
         <div class="form-row">
-          <label class="form-label">Deadline alert threshold <span class="form-hint">— days before deadline to send warning (default: 3)</span></label>
-          <input id="cfg-alertdays" class="input-field" type="number" min="1" max="14" value="${SYS_CONFIG.alertThresholdDays || 3}" style="width:120px;"/>
+          <label class="form-label">Deadline alerts <span class="form-hint">— schedule and behaviour</span></label>
+          <div style="font-size:12px;color:var(--text-mid);background:var(--bg);border-radius:8px;padding:10px 12px;line-height:1.6;">
+            Every active task with a deadline gets a daily countdown email — no lead-time threshold to set anymore. The hour it runs is configured on the <a href="#" onclick="loadView('reports');return false;" style="color:var(--red);font-weight:600;">Progress Reports</a> page under "Email schedule," not here.
+          </div>
         </div>
         <div class="form-row">
           <label class="form-label">GAS endpoint URL</label>
@@ -9754,7 +9787,6 @@ window.saveSystemConfig = async () => {
     appName:            document.getElementById('cfg-appname')?.value.trim()  || SYS_CONFIG.appName,
     appSubtitle:        document.getElementById('cfg-subtitle')?.value.trim() || SYS_CONFIG.appSubtitle,
     saTimeoutMins:      parseInt(document.getElementById('cfg-satimeout')?.value) || 30,
-    alertThresholdDays: parseInt(document.getElementById('cfg-alertdays')?.value) || 3,
     gasEndpointOverride: document.getElementById('cfg-gas')?.value.trim() || '',
   };
   try {
