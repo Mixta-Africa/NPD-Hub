@@ -1683,25 +1683,36 @@ function refreshDashboardUI() {
   _updateDashboardUI(list);
 }
 
+let _dashRefreshTimer = null;
+
 async function loadDashboardStats() {
   try {
-    // 🚨 ENTERPRISE FIX: Elevate this to a Global Real-Time State Store
+    // This listens on the WHOLE /products tree, so Firebase re-sends the
+    // entire tree — every task, comment, activity log, weekly log, across
+    // every product — on any write anywhere in it, by anyone. That part is
+    // a real architectural cost that grows with the data and needs a
+    // proper fix (a maintained summary node, queried instead of the raw
+    // tree) rather than a quick patch here.
+    //
+    // What WAS fixable here: a burst of near-simultaneous writes — a bulk
+    // edit, a sheet sync touching several fields, a few people editing at
+    // once — was triggering one full dashboard recompute PER WRITE. This
+    // debounces that into a single recompute once things settle, so a
+    // burst costs one render instead of N.
     const unsub = onValue(ref(db, 'products'), snap => {
       const data = snap.val() || {};
       window._dashRawProducts = data;
-      
-      // Force the global cache to perfectly mirror the live database instantly
-      productListCache = data; 
-      
-      // Update UI components automatically when the DB changes
-      refreshDashboardUI();
-      
-      // If the user is staring at the Products view, re-render it so it stays live
-      if (currentView === 'products' && typeof loadProductList === 'function') {
-        loadProductList(true); // Pass flag to skip redundant HTTP fetching
-      }
+      productListCache = data;
+
+      clearTimeout(_dashRefreshTimer);
+      _dashRefreshTimer = setTimeout(() => {
+        refreshDashboardUI();
+        if (currentView === 'products' && typeof loadProductList === 'function') {
+          loadProductList(true); // Pass flag to skip redundant HTTP fetching
+        }
+      }, 300);
     }, { onlyOnce: false });
-    
+
     registerListener('dashboard', unsub);
   } catch(e) { console.warn('Stats load failed:', e); }
 }
@@ -4576,7 +4587,7 @@ function renderAsk(el) {
         '<button class="btn-link-sm" onclick="clearAskHistory()">Clear</button></div>' +
       '<div id="ask-thread" style="padding:16px 18px;min-height:120px;max-height:420px;overflow-y:auto;">' +
         '<div style="font-size:12px;color:#9CA3AF;text-align:center;padding:24px 0;">' +
-          'Select one or more items above, then ask a question.' +
+          'Everything you have access to is selected by default — narrow it down above if you want, then ask a question.' +
         '</div>' +
       '</div>' +
       '<div style="border-top:1px solid var(--border);padding:12px 18px;display:flex;gap:8px;align-items:flex-end;">' +
@@ -4599,6 +4610,16 @@ async function loadAskScope() {
     const userKey = sanitiseEmail(currentUser.email);
     const visible = all.filter(p => canUserSeeProduct(p, userKey));
     window._askVisible = visible;
+
+    // Default to everything selected on first load — requiring an opt-in
+    // click before Ask does anything was a silent trap: wrong scope reads
+    // as "the button doesn't work," since nothing visible happens beyond
+    // an easy-to-miss toast. Only auto-select once; a user's own choice to
+    // narrow it down should stick for the rest of the session.
+    if (!window._askScopeInitialized) {
+      _askSelected = visible.map(p => p.id);
+      window._askScopeInitialized = true;
+    }
 
     const note = document.getElementById('ask-scope-note');
     if (note) {
