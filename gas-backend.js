@@ -126,6 +126,24 @@ function logEmailSent(productId, record) {
   }
 }
 
+/* Feature-flag gate -- the one place that actually reads what Circuit
+   Box's toggles write to config/features/{key}. Defaults to enabled when
+   a key has never been touched, so nothing breaks for a flag nobody has
+   an opinion on yet. */
+function isFeatureEnabled_(key) {
+  try {
+    var authParam = '?auth=' + FIREBASE_DB_SECRET;
+    var raw = UrlFetchApp.fetch(
+      FIREBASE_DB_URL + '/config/features/' + key + '.json' + authParam,
+      { muteHttpExceptions: true }
+    ).getContentText();
+    return raw !== 'false'; // null/undefined/true/anything-else -> enabled; only explicit false disables
+  } catch(e) {
+    Logger.log('isFeatureEnabled_ check failed for ' + key + ': ' + e.message);
+    return true; // fail open -- a Firebase hiccup should never silently kill a real send
+  }
+}
+
 function buildSenderOpts(body, htmlBody) {
   var opts = { htmlBody: htmlBody };
   var ownerName = '';
@@ -381,6 +399,10 @@ function runOwnerMigration_(dryRun) {
 function dailyDeadlineCheck() {
   if (!FIREBASE_DB_URL) {
     Logger.log('FIREBASE_DB_URL not set — open gas-backend.js and set it at the top');
+    return;
+  }
+  if (!isFeatureEnabled_('deadlineAlerts')) {
+    Logger.log('deadlineAlerts is disabled in Circuit Box -- skipping today\'s run entirely.');
     return;
   }
 
@@ -1126,6 +1148,9 @@ function ensureProjectSheet(productId, productName, authParam) {
 /* ── FORWARD: Hub → Sheet ─────────────────────────────────── */
 function syncProjectToSheet(body) {
   try {
+    if (!isFeatureEnabled_('sheetSync')) {
+      return { ok: false, error: 'Google Sheet sync is currently disabled by an administrator.' };
+    }
     var authParam = '?auth=' + FIREBASE_DB_SECRET;
     var productId = body.productId;
     if (!productId) return { ok: false, error: 'No productId' };
@@ -1203,6 +1228,10 @@ function installSheetSyncTrigger() {
 }
 
 function pollSheetsToFirebase() {
+  if (!isFeatureEnabled_('sheetSync')) {
+    Logger.log('sheetSync is disabled in Circuit Box -- skipping poll.');
+    return;
+  }
   var authParam = '?auth=' + FIREBASE_DB_SECRET;
   var reg = getSheetRegistry(authParam);
   var ids = Object.keys(reg);
@@ -1592,6 +1621,9 @@ function sendAssignmentAlert(body) {
 
 function gccoGenerateLink(body) {
   try {
+    if (!isFeatureEnabled_('gccoDashboard')) {
+      return { ok: false, error: 'The read-only portfolio dashboard is currently disabled by an administrator.' };
+    }
     var authParam = '?auth=' + FIREBASE_DB_SECRET;
     var token = Utilities.getUuid();
     UrlFetchApp.fetch(FIREBASE_DB_URL + '/config/gccoToken.json' + authParam, {
@@ -2008,6 +2040,9 @@ function buildOnboardingEmail(productName, launchDate, folderUrl, createdBy, pil
 // ─────────────────────────────────────────────────────────────
 function checkAndSendDeadlineAlerts(body) {
   try {
+    if (!isFeatureEnabled_('deadlineAlerts')) {
+      return { ok: false, error: 'Deadline alerts are currently disabled by an administrator.' };
+    }
     const alerts = body.alerts || [];
     if (alerts.length === 0) return { ok: true, sent: 0, message: 'No alerts to send.' };
 
@@ -2149,6 +2184,9 @@ function buildAlertEmail(alert) {
 // ─────────────────────────────────────────────────────────────
 function sendProgressReport(body) {
   try {
+    if (!isFeatureEnabled_('progressReports')) {
+      return { ok: false, error: 'Progress reports are currently disabled by an administrator.' };
+    }
     const {
       productName, productId, launchDate, reportDate, generatedBy,
       pctComplete, complete, inProgress, notStarted, overdue,
@@ -2334,6 +2372,9 @@ function logToAuditSheet(body) {
 // ─────────────────────────────────────────────────────────────
 function uploadDocument(body) {
   try {
+    if (!isFeatureEnabled_('documentUploads')) {
+      return { ok: false, error: 'Document uploads are currently disabled by an administrator.' };
+    }
     const { productName, folderId, folderName, fileName, fileType, fileBase64, driveUrl } = body;
 
     // Decode base64
@@ -2370,6 +2411,9 @@ function uploadDocument(body) {
 // ─────────────────────────────────────────────────────────────
 function sendHandoverPackage(body) {
   try {
+    if (!isFeatureEnabled_('handoverSystem')) {
+      return { ok: false, error: 'The handover system is currently disabled by an administrator.' };
+    }
     const {
       productName, productId, launchDate, ownerName, ownerEmail,
       relieverName, relieverEmail, returnDate, notes,
@@ -2556,6 +2600,9 @@ function sendDeadlineReminder(body) {
 // ─────────────────────────────────────────────────────────────
 function sendComposedEmail(body) {
   try {
+    if (!isFeatureEnabled_('aiEmailComposer')) {
+      return { ok: false, error: 'The email composer is currently disabled by an administrator.' };
+    }
     var { subject, body: emailBody, toEmails, ccEmails, testMode, productName, productId, folderUrl, isThreadStarter } = body;
 
     if (!toEmails || toEmails.length === 0) {
@@ -2634,6 +2681,9 @@ function sendComposedEmail(body) {
 // ─────────────────────────────────────────────────────────────
 function replyToThread(body) {
   try {
+    if (!isFeatureEnabled_('aiEmailComposer')) {
+      return { ok: false, error: 'The email composer is currently disabled by an administrator.' };
+    }
     var { threadId, emailBody, subject, toEmails, ccEmails, testMode, productName, productId } = body;
     if (!threadId)   return { ok: false, error: 'No thread ID provided.' };
     if (!emailBody)  return { ok: false, error: 'Email body is empty.' };
