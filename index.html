@@ -2198,25 +2198,81 @@ function renderMyActions(el) {
 
 window.myActionsState = { sort: 'due' };
 
-/* ── STANDALONE PERSONAL TASKS ── */
+/* ── STANDALONE PERSONAL TASKS — now week-scoped ──
+   Lives entirely under standaloneTasks/{userKey}, which Firebase rules
+   already lock to that exact user (".read"/".write" both require
+   auth.token.email to match $userKey) — so the weekly log nested inside
+   it inherits that same guarantee automatically. Nothing new to open up
+   in the rules, nothing new that could leak. */
 function standaloneRef() {
   return 'standaloneTasks/' + sanitiseEmail(currentUser.email);
 }
+
+// ISO 8601 week key, e.g. "2026-W38" — the unit a task's "duration"
+// resolves to for grouping, review, and the performance log.
+function isoWeekKey(date) {
+  const d = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
+  const dayNum = d.getUTCDay() || 7;
+  d.setUTCDate(d.getUTCDate() + 4 - dayNum);
+  const yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
+  const weekNo = Math.ceil((((d - yearStart) / 86400000) + 1) / 7);
+  return d.getUTCFullYear() + '-W' + String(weekNo).padStart(2, '0');
+}
+function currentWeekKey() { return isoWeekKey(new Date()); }
+function weekKeyLabel(weekKey) {
+  // "2026-W38" -> "Week of 14 Sep" — the Monday of that ISO week.
+  const [y, w] = weekKey.split('-W').map(Number);
+  const jan4 = new Date(Date.UTC(y, 0, 4));
+  const monday = new Date(jan4);
+  monday.setUTCDate(jan4.getUTCDate() - ((jan4.getUTCDay() || 7) - 1) + (w - 1) * 7);
+  return 'Week of ' + monday.toLocaleDateString('en-GB', { day:'numeric', month:'short', timeZone:'UTC' });
+}
+
+window.setStandaloneDuration = (preset) => {
+  const dateEl = document.getElementById('st-deadline');
+  if (!dateEl) return;
+  const d = new Date();
+  if (preset === 'today') { /* today as-is */ }
+  else if (preset === '3days') d.setDate(d.getDate() + 3);
+  else if (preset === 'week') {
+    // End of THIS ISO week (Sunday)
+    const day = d.getDay() || 7;
+    d.setDate(d.getDate() + (7 - day));
+  } else if (preset === 'nextweek') {
+    const day = d.getDay() || 7;
+    d.setDate(d.getDate() + (14 - day));
+  }
+  dateEl.value = d.toISOString().slice(0, 10);
+};
 
 async function loadStandaloneTasks() {
   const el = document.getElementById('standalone-list');
   if (!el) return;
   try {
     const snap = await get(ref(db, standaloneRef()));
-    if (!snap.exists()) {
+    const all = snap.exists() ? Object.values(snap.val()).filter(t => t.id && !t.id.startsWith('_')) : [];
+    const cwk = currentWeekKey();
+
+    // Sweep anything from a past week straight into the weekly review
+    // instead of ever showing it here as if it were still actionable —
+    // that's what makes a closed week actually uneditable, rather than
+    // just visually different.
+    const pastIncomplete = all.filter(t => t.weekKey && t.weekKey !== cwk && t.status !== 'complete' && !t.reviewed && !t.rolledOver);
+    if (pastIncomplete.length > 0) {
+      showWeeklyReviewModal(pastIncomplete);
+      return; // review must be resolved before the list below means anything
+    }
+
+    const tasks = all.filter(t => !t.weekKey || t.weekKey === cwk);
+    if (tasks.length === 0) {
       el.innerHTML = '<div style="font-size:12px;color:#9CA3AF;padding:6px 0;">Nothing here yet. Add your first personal task above.</div>';
+      loadWeeklyPerformance();
       return;
     }
-    const tasks = Object.values(snap.val())
-      .sort((a, b) => {
-        if ((a.status === 'complete') !== (b.status === 'complete')) return a.status === 'complete' ? 1 : -1;
-        return (a.deadline || '9999').localeCompare(b.deadline || '9999');
-      });
+    tasks.sort((a, b) => {
+      if ((a.status === 'complete') !== (b.status === 'complete')) return a.status === 'complete' ? 1 : -1;
+      return (a.deadline || '9999').localeCompare(b.deadline || '9999');
+    });
     const today = new Date(); today.setHours(0,0,0,0);
     el.innerHTML = tasks.map(t => {
       const done = t.status === 'complete';
@@ -2228,16 +2284,18 @@ async function loadStandaloneTasks() {
         const lbl  = diff < 0 ? Math.abs(diff) + 'd overdue' : diff === 0 ? 'Today' : formatDate(t.deadline);
         chip = '<span class="pill ' + cls + '" style="font-size:10px;">' + lbl + '</span>';
       }
+      const rolledTag = t.rolledOverFrom ? '<span class="pcf-pill pcf-pill-blue" style="font-size:9px;" title="Rolled over from a previous week">ROLLED OVER</span>' : '';
       return '<div style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid #F3F3F2;">' +
         '<input type="checkbox" ' + (done ? 'checked' : '') + ' onchange="toggleStandaloneTask(\'' + t.id + '\',this.checked)" ' +
           'style="width:15px;height:15px;cursor:pointer;flex-shrink:0;accent-color:#16A34A;"/>' +
         '<div style="flex:1;min-width:0;font-size:12px;color:' + (done ? '#9CA3AF' : 'var(--text)') + ';' +
           (done ? 'text-decoration:line-through;' : 'font-weight:500;') + '">' + (t.title || 'Untitled') + '</div>' +
-        chip +
+        rolledTag + chip +
         '<button onclick="deleteStandaloneTask(\'' + t.id + '\')" title="Delete" ' +
           'style="background:none;border:none;cursor:pointer;color:#9CA3AF;font-size:14px;line-height:1;padding:2px 4px;">&times;</button>' +
       '</div>';
     }).join('');
+    loadWeeklyPerformance();
   } catch(e) {
     el.innerHTML = '<div style="font-size:12px;color:#9CA3AF;">Could not load your personal tasks.</div>';
   }
@@ -2249,12 +2307,14 @@ window.addStandaloneTask = async () => {
   const title   = (titleEl?.value || '').trim();
   if (!title) { showToast('Enter a task first', 'error'); return; }
   const id = 'st_' + Date.now();
+  const deadline = dateEl?.value || '';
   await set(ref(db, standaloneRef() + '/' + id), {
     id, title,
-    deadline:   dateEl?.value || '',
+    deadline,
     status:     'on-track',
     ownerEmail: currentUser.email,
     createdAt:  Date.now(),
+    weekKey:    isoWeekKey(deadline ? new Date(deadline) : new Date()),
   });
   if (titleEl) titleEl.value = '';
   if (dateEl)  dateEl.value  = '';
@@ -2270,6 +2330,131 @@ window.deleteStandaloneTask = async (id) => {
   await set(ref(db, standaloneRef() + '/' + id), null);
   loadStandaloneTasks();
 };
+
+/* ══ WEEKLY REVIEW — the "uneditable once the week ends" mechanism ══
+   A past week's incomplete tasks never just sit there editable — they
+   get swept straight into this review the next time the page loads.
+   Every task must be given a decision (roll over or leave as missed)
+   before the list below is shown, which is what actually enforces
+   "uneditable": once a week ends, the only way to touch its tasks
+   again is through this screen, once, and then it's closed for good. */
+let _weeklyReviewState = {};
+
+function showWeeklyReviewModal(pastIncomplete) {
+  ensureProductModal();
+  _weeklyReviewState = {};
+  pastIncomplete.forEach(t => { _weeklyReviewState[t.id] = null; });
+
+  const byWeek = {};
+  pastIncomplete.forEach(t => { (byWeek[t.weekKey] = byWeek[t.weekKey] || []).push(t); });
+
+  document.getElementById('modal-title-text').textContent = 'Weekly review';
+  document.getElementById('modal-body-content').innerHTML =
+    '<p style="font-size:13px;color:var(--text-mid);margin-bottom:16px;line-height:1.6;">' +
+      'A previous week ended with tasks still open. Decide what happens to each one — this is what closes that week out and locks it into your performance log.' +
+    '</p>' +
+    Object.entries(byWeek).map(([wk, items]) => (
+      '<div style="margin-bottom:14px;">' +
+        '<div style="font-size:11px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.04em;margin-bottom:8px;">' + weekKeyLabel(wk) + '</div>' +
+        items.map(t => (
+          '<div id="wr-item-' + t.id + '" style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--border);">' +
+            '<div style="flex:1;min-width:0;font-size:12px;color:var(--text);">' + (t.title || 'Untitled') + '</div>' +
+            '<button class="btn-outline" style="font-size:10px;padding:5px 10px;" id="wr-roll-' + t.id + '" onclick="setWeeklyReviewChoice(\'' + t.id + '\',\'rollover\')">Roll over</button>' +
+            '<button class="btn-outline" style="font-size:10px;padding:5px 10px;" id="wr-miss-' + t.id + '" onclick="setWeeklyReviewChoice(\'' + t.id + '\',\'missed\')">Leave as missed</button>' +
+          '</div>'
+        )).join('') +
+      '</div>'
+    )).join('') +
+    '<div class="form-actions" style="margin-top:8px;"><button class="btn-primary" id="wr-finish-btn" disabled onclick="finishWeeklyReview()">Finish review</button></div>';
+  document.getElementById('create-product-modal').style.display = 'flex';
+  window._weeklyReviewTasks = pastIncomplete;
+}
+
+window.setWeeklyReviewChoice = (taskId, choice) => {
+  _weeklyReviewState[taskId] = choice;
+  const rollBtn = document.getElementById('wr-roll-' + taskId);
+  const missBtn = document.getElementById('wr-miss-' + taskId);
+  if (rollBtn) { rollBtn.style.background = choice === 'rollover' ? 'var(--green)' : ''; rollBtn.style.color = choice === 'rollover' ? '#fff' : ''; rollBtn.style.borderColor = choice === 'rollover' ? 'var(--green)' : ''; }
+  if (missBtn) { missBtn.style.background = choice === 'missed' ? 'var(--text-muted)' : ''; missBtn.style.color = choice === 'missed' ? '#fff' : ''; missBtn.style.borderColor = choice === 'missed' ? 'var(--text-muted)' : ''; }
+  const allDecided = Object.values(_weeklyReviewState).every(v => v !== null);
+  const finishBtn = document.getElementById('wr-finish-btn');
+  if (finishBtn) finishBtn.disabled = !allDecided;
+};
+
+window.finishWeeklyReview = async () => {
+  const tasks = window._weeklyReviewTasks || [];
+  const cwk = currentWeekKey();
+
+  // Group by the week each task actually belonged to, so a stats entry
+  // gets written per week even if several unreviewed weeks piled up.
+  const byWeek = {};
+  tasks.forEach(t => { (byWeek[t.weekKey] = byWeek[t.weekKey] || []).push(t); });
+
+  for (const [wk, items] of Object.entries(byWeek)) {
+    let rolledOver = 0, missed = 0;
+    for (const t of items) {
+      const choice = _weeklyReviewState[t.id];
+      if (choice === 'rollover') {
+        rolledOver++;
+        const newId = 'st_' + Date.now() + '_' + Math.floor(Math.random() * 1000);
+        await set(ref(db, standaloneRef() + '/' + newId), {
+          id: newId, title: t.title, deadline: '', status: 'on-track',
+          ownerEmail: currentUser.email, createdAt: Date.now(),
+          weekKey: cwk, rolledOverFrom: t.id,
+        });
+        await set(ref(db, standaloneRef() + '/' + t.id + '/rolledOver'), true);
+      } else {
+        missed++;
+      }
+      await set(ref(db, standaloneRef() + '/' + t.id + '/reviewed'), true);
+    }
+
+    // Pull the FULL set of that week's tasks (not just the incomplete
+    // ones passed in here) so the completion rate reflects everything,
+    // not just what needed a decision.
+    const snap = await get(ref(db, standaloneRef()));
+    const weekTasks = snap.exists() ? Object.values(snap.val()).filter(x => x.id && !x.id.startsWith('_') && x.weekKey === wk) : [];
+    const completed = weekTasks.filter(x => x.status === 'complete').length;
+    const total = weekTasks.length;
+
+    await set(ref(db, standaloneRef() + '/_weekLogs/' + wk), {
+      weekKey: wk, closedAt: Date.now(),
+      total, completed, rolledOver, missed,
+      completionRate: total > 0 ? Math.round((completed / total) * 100) : 0,
+    });
+  }
+
+  closeProductModal();
+  showToast('Weekly review complete.', 'success');
+  loadStandaloneTasks();
+};
+
+/* ══ PERFORMANCE LOG — read-only, strictly this user's own history ══ */
+async function loadWeeklyPerformance() {
+  const el = document.getElementById('weekly-performance-list');
+  if (!el) return;
+  try {
+    const snap = await get(ref(db, standaloneRef() + '/_weekLogs'));
+    if (!snap.exists()) {
+      document.getElementById('weekly-performance-panel').style.display = 'none';
+      return;
+    }
+    const weeks = Object.values(snap.val()).sort((a, b) => b.weekKey.localeCompare(a.weekKey)).slice(0, 8);
+    document.getElementById('weekly-performance-panel').style.display = 'block';
+    el.innerHTML = weeks.map(w => {
+      const rateColor = w.completionRate >= 75 ? 'var(--green)' : w.completionRate >= 40 ? '#D97706' : 'var(--red)';
+      return '<div style="display:flex;align-items:center;gap:14px;padding:10px 0;border-bottom:1px solid var(--border);">' +
+        '<div style="flex:1;min-width:0;">' +
+          '<div style="font-size:12px;font-weight:600;color:var(--text);">' + weekKeyLabel(w.weekKey) + '</div>' +
+          '<div style="font-size:11px;color:var(--text-muted);margin-top:1px;">' + w.completed + ' of ' + w.total + ' done' + (w.rolledOver ? ' · ' + w.rolledOver + ' rolled over' : '') + (w.missed ? ' · ' + w.missed + ' missed' : '') + '</div>' +
+        '</div>' +
+        '<div style="font-size:16px;font-weight:700;color:' + rateColor + ';">' + w.completionRate + '%</div>' +
+      '</div>';
+    }).join('');
+  } catch(e) {
+    console.warn('loadWeeklyPerformance failed:', e);
+  }
+}
 
 async function loadMyActions() {
   const listEl = document.getElementById('ma-list');
@@ -4509,7 +4694,7 @@ function buildPdDeptBlock(dept, list, today, p) {
       const diff = Math.round((d - today) / 86400000);
       due = diff < 0 ? Math.abs(diff) + 'd overdue' : diff === 0 ? 'Today' : formatDate(t.deadline);
     }
-    return '<div style="display:flex;align-items:center;gap:10px;padding:8px 18px;border-top:1px solid #F3F3F2;">' +
+    return '<div class="pd-task-row" onclick="showTaskDetailPanel(\'' + p.id + '\',\'' + t.id + '\')" style="display:flex;align-items:center;gap:10px;padding:8px 18px;border-top:1px solid #F3F3F2;cursor:pointer;transition:background .12s;">' +
       taskVisMarker(t) +
       '<div style="flex:1;min-width:0;font-size:12px;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + (t.title || 'Untitled') + '</div>' +
       '<span style="font-size:11px;color:' + m.color + ';white-space:nowrap;">' + due + '</span>' +
@@ -5793,6 +5978,83 @@ window.addTaskToProduct = async (productId) => {
    it can't be saved without a reason, and that reason is what makes
    this useful for diagnosing failure points later, not just knowing
    a date moved. */
+/* ══ TASK DETAIL — the full assessment view ═══════════════════
+   Everything known about one task in one place: who owns it, when it
+   was created, its full changelog (not just the last few entries the
+   Quick Update history caps at), what it's waiting on and what's
+   waiting on it, and a straight line into editing it. This is the
+   "click a task, see everything about it" view. */
+window.showTaskDetailPanel = (productId, taskId) => {
+  ensureProductModal();
+  const prod = productListCache[productId];
+  const task = prod && getProductTasks(prod).find(t => t.id === taskId);
+  if (!prod || !task) { showToast('Task not found.', 'error'); return; }
+
+  const effStatus = resolveTaskStatus(task, prod);
+  const smeta = STATUS_META[effStatus] || STATUS_META['on-track'];
+  const allTasks = getProductTasks(prod);
+
+  const waitingOn = (task.predecessors || []).map(pid => allTasks.find(t => t.id === pid)).filter(Boolean);
+  const blocks = allTasks.filter(t => (t.predecessors || []).includes(taskId));
+
+  const owners = taskOwnerList(task);
+  const ownerText = owners.length ? owners.map(o => ownerLabel(o)).join(', ') : 'Unassigned';
+
+  const createdWhen = task.createdAt ? new Date(task.createdAt).toLocaleDateString('en-GB', { day:'numeric', month:'short', year:'numeric', hour:'2-digit', minute:'2-digit' }) : 'Not recorded';
+  const createdByName = task.createdBy ? task.createdBy.split('@')[0] : 'Not recorded';
+
+  const historyEntries = task.updates ? Object.values(task.updates).sort((a, b) => b.createdAt - a.createdAt) : [];
+  const TAG = {
+    delay: { label: 'DELAY', color: 'var(--red)' },
+    deadline_change: { label: 'DATE CHANGE', color: '#D97706' },
+    dependency_change: { label: 'DEPENDENCY', color: '#2563EB' },
+    approval: { label: 'APPROVED', color: 'var(--green)' },
+    rejection: { label: 'REJECTED', color: 'var(--text-muted)' },
+  };
+  const historyHtml = historyEntries.length === 0
+    ? '<div style="font-size:12px;color:var(--text-muted);padding:8px 0;">No changes logged yet.</div>'
+    : historyEntries.map(e => {
+        const when = new Date(e.createdAt).toLocaleDateString('en-GB', { day:'numeric', month:'short', year:'numeric', hour:'2-digit', minute:'2-digit' });
+        const tag = TAG[e.changeType];
+        const tagHtml = tag ? '<span style="font-size:8px;font-weight:700;letter-spacing:.04em;color:' + tag.color + ';border:1px solid ' + tag.color + ';border-radius:3px;padding:0 4px;margin-right:6px;flex-shrink:0;">' + tag.label + '</span>' : '';
+        return '<div style="padding:8px 0;border-bottom:1px solid var(--border);font-size:12px;">' +
+          '<div style="display:flex;align-items:flex-start;gap:0;"><div>' + tagHtml + '</div><div style="flex:1;"><strong style="color:var(--text);">' + (e.userName || 'Someone') + '</strong> <span style="color:var(--text-muted);">· ' + when + '</span><div style="color:var(--text-mid);margin-top:2px;">' + e.text + '</div></div></div>' +
+        '</div>';
+      }).join('');
+
+  const pendingReqHtml = task.pendingRequest
+    ? '<div style="background:#FFFBEB;border:1px solid #FDE68A;border-radius:8px;padding:10px 12px;margin-bottom:14px;font-size:12px;color:#92400E;">' +
+        '<strong>Awaiting approval:</strong> ' + (task.pendingRequest.requestedByName || '') + ' ' +
+        (task.pendingRequest.type === 'extend' ? 'requested a new deadline of ' + formatDate(task.pendingRequest.proposedDeadline) : 'marked this done') +
+        '. "' + (task.pendingRequest.comment || '') + '"' +
+      '</div>'
+    : '';
+
+  document.getElementById('modal-title-text').textContent = task.title || task.name || 'Task detail';
+  document.getElementById('modal-body-content').innerHTML =
+    '<div style="display:flex;align-items:center;gap:8px;margin-bottom:16px;flex-wrap:wrap;">' +
+      '<span class="pcf-pill" style="background:' + smeta.color + '18;color:' + smeta.color + ';text-transform:uppercase;">' + smeta.label + '</span>' +
+      (getTaskVisibility(task) !== 'public' ? '<span class="pcf-pill pcf-pill-grey">' + getTaskVisibility(task).toUpperCase() + '</span>' : '') +
+      '<button class="btn-outline" style="margin-left:auto;font-size:11px;padding:5px 12px;" onclick="showEditTask(\'' + productId + '\',\'' + taskId + '\')">Edit task</button>' +
+    '</div>' +
+    pendingReqHtml +
+    '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px;">' +
+      '<div class="settings-row" style="border:none;padding:0;flex-direction:column;align-items:flex-start;gap:2px;"><div class="settings-label">Owner</div><div class="settings-value" style="font-size:12px;">' + ownerText + '</div></div>' +
+      '<div class="settings-row" style="border:none;padding:0;flex-direction:column;align-items:flex-start;gap:2px;"><div class="settings-label">Department</div><div class="settings-value" style="font-size:12px;">' + (task.ownerDept || '—') + '</div></div>' +
+      '<div class="settings-row" style="border:none;padding:0;flex-direction:column;align-items:flex-start;gap:2px;"><div class="settings-label">Deadline</div><div class="settings-value" style="font-size:12px;">' + (task.deadline ? formatDate(task.deadline) : 'No date set') + '</div></div>' +
+      '<div class="settings-row" style="border:none;padding:0;flex-direction:column;align-items:flex-start;gap:2px;"><div class="settings-label">Created</div><div class="settings-value" style="font-size:12px;">' + createdWhen + (task.createdBy ? ' by ' + createdByName : '') + '</div></div>' +
+    '</div>' +
+    (task.notes ? '<div style="margin-bottom:16px;"><div class="settings-label" style="margin-bottom:4px;">Notes</div><div style="font-size:12px;color:var(--text-mid);background:var(--bg);border-radius:8px;padding:10px 12px;">' + task.notes.replace(/</g,'&lt;') + '</div></div>' : '') +
+    (waitingOn.length || blocks.length ? '<div style="display:flex;gap:16px;margin-bottom:16px;flex-wrap:wrap;">' +
+      (waitingOn.length ? '<div style="flex:1;min-width:160px;"><div class="settings-label" style="margin-bottom:4px;">Waiting on</div>' + waitingOn.map(t => '<div style="font-size:12px;color:var(--text-mid);padding:2px 0;">→ ' + (t.title || t.name) + '</div>').join('') + '</div>' : '') +
+      (blocks.length ? '<div style="flex:1;min-width:160px;"><div class="settings-label" style="margin-bottom:4px;">Blocking</div>' + blocks.map(t => '<div style="font-size:12px;color:var(--text-mid);padding:2px 0;">→ ' + (t.title || t.name) + '</div>').join('') + '</div>' : '') +
+    '</div>' : '') +
+    '<div class="settings-label" style="margin-bottom:6px;">Full history</div>' +
+    '<div style="max-height:220px;overflow-y:auto;">' + historyHtml + '</div>' +
+    '<div class="form-actions" style="margin-top:16px;"><button class="btn-outline" onclick="closeProductModal()">Close</button></div>';
+  document.getElementById('create-product-modal').style.display = 'flex';
+};
+
 window.showEditTask = (productId, taskId) => {
   ensureProductModal();
   const prod = productListCache[productId];
@@ -13373,9 +13635,9 @@ onAuthStateChanged(auth, handleAuthStateChange);
   --text-mid:   #4B5563;
   --text-muted: #6B7280;
   
-  --sidebar-bg:    #18181B; 
-  --sidebar-text:  #A1A1AA;
-  --sidebar-hover: rgba(255,255,255,0.06);
+  --sidebar-bg:    #3D0A0D; 
+  --sidebar-text:  #D9B8B8;
+  --sidebar-hover: rgba(255,255,255,0.08);
   --sidebar-w:     210px; /* Squeezed from 260px */
   
   --header-h:   56px; /* Squeezed from 72px */
@@ -13421,8 +13683,12 @@ a { color: inherit; text-decoration: none; }
 .nav-item.active .nav-icon { opacity: 1; }
 
 .sidebar-bottom-graphic {
-  padding: 16px 16px 20px; flex-shrink: 0;
-  background: linear-gradient(180deg, rgba(24,24,27,0) 0%, rgba(0,0,0,0.7) 100%), url('https://mixtafrica.com/wp-content/uploads/2023/06/lakowe-lakes-2.jpg') bottom/cover;
+  padding: 16px 16px 20px; flex-shrink: 0; min-height: 120px;
+  display: flex; align-items: flex-end;
+  background:
+    linear-gradient(180deg, rgba(61,10,13,0) 0%, rgba(61,10,13,0.55) 55%, rgba(61,10,13,0.85) 100%),
+    url('data:image/svg+xml;base64,PHN2ZyB4bWxucz0naHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmcnIHZpZXdCb3g9JzAgMCA0MDAgMTMwJyBwcmVzZXJ2ZUFzcGVjdFJhdGlvPSd4TWlkWU1heCBzbGljZSc+CjxyZWN0IHg9IjAiIHk9IjcwIiB3aWR0aD0iMzQiIGhlaWdodD0iNjAiIGZpbGw9InJnYmEoMjU1LDI1NSwyNTUsMC4wNSkiLz4KPHJlY3QgeD0iMzgiIHk9IjQ1IiB3aWR0aD0iMjYiIGhlaWdodD0iODUiIGZpbGw9InJnYmEoMjU1LDI1NSwyNTUsMC4wNykiLz4KPHJlY3QgeD0iNjgiIHk9IjYwIiB3aWR0aD0iMzAiIGhlaWdodD0iNzAiIGZpbGw9InJnYmEoMjU1LDI1NSwyNTUsMC4wNSkiLz4KPHJlY3QgeD0iMTAyIiB5PSIzMCIgd2lkdGg9IjIyIiBoZWlnaHQ9IjEwMCIgZmlsbD0icmdiYSgyNTUsMjU1LDI1NSwwLjA4KSIvPgo8cmVjdCB4PSIxMjgiIHk9IjU1IiB3aWR0aD0iMzQiIGhlaWdodD0iNzUiIGZpbGw9InJnYmEoMjU1LDI1NSwyNTUsMC4wNSkiLz4KPHJlY3QgeD0iMTY2IiB5PSIyMCIgd2lkdGg9IjI0IiBoZWlnaHQ9IjExMCIgZmlsbD0icmdiYSgyNTUsMjU1LDI1NSwwLjA5KSIvPgo8cmVjdCB4PSIxOTQiIHk9IjY1IiB3aWR0aD0iMjgiIGhlaWdodD0iNjUiIGZpbGw9InJnYmEoMjU1LDI1NSwyNTUsMC4wNSkiLz4KPHJlY3QgeD0iMjI2IiB5PSI0MCIgd2lkdGg9IjIwIiBoZWlnaHQ9IjkwIiBmaWxsPSJyZ2JhKDI1NSwyNTUsMjU1LDAuMDcpIi8+CjxyZWN0IHg9IjI1MCIgeT0iNTgiIHdpZHRoPSIzMiIgaGVpZ2h0PSI3MiIgZmlsbD0icmdiYSgyNTUsMjU1LDI1NSwwLjA1KSIvPgo8cmVjdCB4PSIyODYiIHk9IjE1IiB3aWR0aD0iMjYiIGhlaWdodD0iMTE1IiBmaWxsPSJyZ2JhKDI1NSwyNTUsMjU1LDAuMDkpIi8+CjxyZWN0IHg9IjMxNiIgeT0iNTAiIHdpZHRoPSIyMiIgaGVpZ2h0PSI4MCIgZmlsbD0icmdiYSgyNTUsMjU1LDI1NSwwLjA2KSIvPgo8cmVjdCB4PSIzNDIiIHk9IjY4IiB3aWR0aD0iMzAiIGhlaWdodD0iNjIiIGZpbGw9InJnYmEoMjU1LDI1NSwyNTUsMC4wNSkiLz4KPHJlY3QgeD0iMzc2IiB5PSI0MiIgd2lkdGg9IjI0IiBoZWlnaHQ9Ijg4IiBmaWxsPSJyZ2JhKDI1NSwyNTUsMjU1LDAuMDcpIi8+CjxyZWN0IHg9IjEwNiIgeT0iMzgiIHdpZHRoPSI0IiBoZWlnaHQ9IjYiIGZpbGw9InJnYmEoMjU1LDI1NSwyNTUsMC4xNSkiLz4KPHJlY3QgeD0iMTA2IiB5PSI1MCIgd2lkdGg9IjQiIGhlaWdodD0iNiIgZmlsbD0icmdiYSgyNTUsMjU1LDI1NSwwLjE1KSIvPgo8cmVjdCB4PSIxMTQiIHk9IjM4IiB3aWR0aD0iNCIgaGVpZ2h0PSI2IiBmaWxsPSJyZ2JhKDI1NSwyNTUsMjU1LDAuMTUpIi8+CjxyZWN0IHg9IjE3MCIgeT0iMzAiIHdpZHRoPSI0IiBoZWlnaHQ9IjYiIGZpbGw9InJnYmEoMjU1LDI1NSwyNTUsMC4xNSkiLz4KPHJlY3QgeD0iMTcwIiB5PSI0NSIgd2lkdGg9IjQiIGhlaWdodD0iNiIgZmlsbD0icmdiYSgyNTUsMjU1LDI1NSwwLjE1KSIvPgo8cmVjdCB4PSIxNzgiIHk9IjMwIiB3aWR0aD0iNCIgaGVpZ2h0PSI2IiBmaWxsPSJyZ2JhKDI1NSwyNTUsMjU1LDAuMTUpIi8+CjxyZWN0IHg9IjI5MCIgeT0iMjUiIHdpZHRoPSI0IiBoZWlnaHQ9IjYiIGZpbGw9InJnYmEoMjU1LDI1NSwyNTUsMC4xNSkiLz4KPHJlY3QgeD0iMjkwIiB5PSI0MCIgd2lkdGg9IjQiIGhlaWdodD0iNiIgZmlsbD0icmdiYSgyNTUsMjU1LDI1NSwwLjE1KSIvPgo8cmVjdCB4PSIyOTgiIHk9IjI1IiB3aWR0aD0iNCIgaGVpZ2h0PSI2IiBmaWxsPSJyZ2JhKDI1NSwyNTUsMjU1LDAuMTUpIi8+Cjwvc3ZnPgo=') bottom/cover no-repeat,
+    var(--sidebar-bg);
   border-top: 1px solid rgba(255,255,255,0.05);
 }
 .sidebar-bottom-text { font-size: 11px; font-weight: 600; color: white; line-height: 1.3; text-shadow: 0 2px 4px rgba(0,0,0,0.7); }
@@ -13553,6 +13819,9 @@ a { color: inherit; text-decoration: none; }
 .btn-danger-sm:hover { background: var(--red-light); }
 .btn-danger-xs { padding: 5px 10px; background: none; color: var(--red); border: 1px solid var(--red-mid); border-radius: 6px; font-size: 10px; font-weight: 500; flex-shrink: 0; }
 .btn-danger-xs:hover { background: var(--red-light); }
+.btn-link-sm { background: none; border: none; padding: 4px 2px; font-size: 12px; font-weight: 500; color: var(--text-mid); cursor: pointer; font-family: 'Poppins', sans-serif; display: inline-flex; align-items: center; gap: 4px; transition: color .15s; }
+.btn-link-sm:hover { color: var(--red); }
+.pd-task-row:hover { background: #FAFAF9; }
 .btn-outline { padding: 9px 18px; background: none; border: 1px solid var(--border-mid); border-radius: var(--radius); font-size: 12px; font-weight: 500; color: var(--text); transition: background 0.15s; }
 .btn-outline:hover { background: var(--bg); }
 
