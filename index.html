@@ -1468,12 +1468,15 @@ function getTaskEffectiveStatus(task, prod) {
   if (s === 'delayed')  return 'delayed';
   if (s === 'in-progress') return 'in-progress';
 
-  // FAST BLOCKED CHECK: Predecessors are already validated by the Reducer
+  // FAST BLOCKED CHECK: direct O(1) lookups into the raw task/pillar
+  // dictionaries — NOT getProductTasks(prod), which rebuilds and re-sorts
+  // the whole product's task list on every single call. This function
+  // runs up to 3x per task across every view that counts task statuses,
+  // so that rebuild was turning an O(N) stat count into O(N²) per product.
   if (prod && task.predecessors && task.predecessors.length > 0) {
-    const allTasks = getProductTasks(prod); 
     const isBlocked = task.predecessors.some(pid => {
-      const pred = allTasks.find(t => t.id === pid);
-      return pred && pred.status !== 'complete'; // Clean and bulletproof
+      const pred = (prod.tasks && prod.tasks[pid]) || (prod.pillars && prod.pillars[pid]);
+      return pred && (pred.status || pred.taskStatus || 'on-track') !== 'complete';
     });
     if (isBlocked) return 'blocked';
   }
@@ -5341,18 +5344,19 @@ function buildOwnerField(p) {
     : '';
 }
 
-window.showAddTaskToProduct = (productId) => {
+window.showAddTaskToProduct = (productId, insertAfterTaskId) => {
   ensureProductModal();
   const prod = productListCache[productId];
   if (!prod) return;
+  window._atInsertAfter = insertAfterTaskId || null;
   const defaultDept = window._stickyDept || currentUserDept || getDepts()[0] || '';
   
   const tasks = getProductTasks(prod);
   const predOptions = tasks.map(t => '<option value="' + t.id + '">' + (t.title || t.name || 'Untitled') + '</option>').join('');
 
-  document.getElementById('modal-title-text').textContent = 'Add task — ' + prod.name;
+  document.getElementById('modal-title-text').textContent = insertAfterTaskId ? 'Insert task — ' + prod.name : 'Add task — ' + prod.name;
   document.getElementById('modal-body-content').innerHTML =
-    '<p style="font-size:13px;color:var(--text-mid);margin-bottom:16px;line-height:1.7;">Add a new task to this product.</p>' +
+    '<p style="font-size:13px;color:var(--text-mid);margin-bottom:16px;line-height:1.7;">' + (insertAfterTaskId ? 'This will be inserted right below the task you clicked "+" on.' : 'Add a new task to this product.') + '</p>' +
     '<div class="form-row"><label class="form-label">Task name <span class="req">*</span></label>' +
       '<input type="text" id="at-title" class="input-field" placeholder="e.g. Regulatory approval"/></div>' +
     '<div class="form-row">' +
@@ -5385,7 +5389,7 @@ window.showAddTaskToProduct = (productId) => {
     '</div>' +
     '<div class="form-actions">' +
       '<button class="btn-outline" onclick="closeProductModal()">Cancel</button>' +
-      '<button class="btn-primary" onclick="addTaskToProduct(\'' + productId + '\')">Add task</button>' +
+      '<button class="btn-primary" onclick="addTaskToProduct(\'' + productId + '\')">' + (insertAfterTaskId ? 'Insert task' : 'Add task') + '</button>' +
     '</div>';
   document.getElementById('create-product-modal').style.display = 'flex';
   window._atOwners = [];
@@ -5475,17 +5479,39 @@ window.addTaskToProduct = async (productId) => {
   const prod   = productListCache[productId];
   const tasks  = getProductTasks(prod);
   const taskId = generateTaskId();
+  const insertAfter = window._atInsertAfter;
+  const insertIdx = insertAfter ? tasks.findIndex(t => t.id === insertAfter) : -1;
+  const order = insertIdx >= 0 ? insertIdx + 1 : tasks.length;
+
   const task   = {
     id: taskId, title,
     owner: primaryOwner, ownerDept: primaryDept, ownerEmail: primaryEmail, owners,
     deadline, status: 'on-track', predecessors, locked: false, // <-- 3. Injected predecessors array here
-    pillarId: null, order: tasks.length, kanbanCol: 'todo',
+    pillarId: null, order, kanbanCol: 'todo',
     createdAt: Date.now(), createdBy: currentUser.email,
   };
 
   await set(ref(db, 'products/' + productId + '/tasks/' + taskId), task);
   if (!productListCache[productId].tasks) productListCache[productId].tasks = {};
   productListCache[productId].tasks[taskId] = task;
+
+  // Inserting mid-list, not appending — push everything from that point on
+  // up by one so order stays a clean, gapless sequence rather than ties.
+  if (insertIdx >= 0) {
+    const orderUpdates = {};
+    tasks.forEach((t, i) => {
+      const newOrder = i <= insertIdx ? i : i + 1;
+      if (t.order !== newOrder) {
+        const tPath = productListCache[productId].tasks?.[t.id] ? 'tasks/' + t.id + '/order' : 'pillars/' + t.id + '/order';
+        orderUpdates[tPath] = newOrder;
+        t.order = newOrder;
+      }
+    });
+    for (const op in orderUpdates) {
+      await set(ref(db, 'products/' + productId + '/' + op), orderUpdates[op]);
+    }
+  }
+  window._atInsertAfter = null;
   window._atOwners = [];
 
   closeProductModal();
@@ -5515,6 +5541,164 @@ window.addTaskToProduct = async (productId) => {
 
   showToast('Task added.' + (notify.length ? ' ' + notify.length + ' person notified.' : ''), 'success');
   if (currentView === 'tracker') renderTrackerTable(productListCache[productId], null);
+};
+
+/* ══ EDIT TASK — with a real, permanent changelog ═════════════
+   Reuses the same task.updates node the Quick Update note history
+   already writes to (one track record per task, not two parallel
+   ones). A deadline pushed BACK is treated as a delay specifically —
+   it can't be saved without a reason, and that reason is what makes
+   this useful for diagnosing failure points later, not just knowing
+   a date moved. */
+window.showEditTask = (productId, taskId) => {
+  ensureProductModal();
+  const prod = productListCache[productId];
+  if (!prod || !canEdit(prod)) {
+    showToast('Only the owner or an admin can edit tasks.', 'error');
+    return;
+  }
+  const task = getProductTasks(prod).find(t => t.id === taskId);
+  if (!task) return;
+
+  const otherTasks = getProductTasks(prod).filter(t => t.id !== taskId);
+  const preds = task.predecessors || [];
+  const predOptions = otherTasks.map(t =>
+    '<option value="' + t.id + '"' + (preds.includes(t.id) ? ' selected' : '') + '>' + (t.title || t.name || 'Untitled') + '</option>'
+  ).join('');
+
+  document.getElementById('modal-title-text').textContent = 'Edit task';
+  document.getElementById('modal-body-content').innerHTML =
+    '<div class="form-row"><label class="form-label">Task name <span class="req">*</span></label>' +
+      '<input type="text" id="et-title" class="input-field" value="' + (task.title || task.name || '').replace(/"/g,'&quot;') + '"/></div>' +
+    '<div class="form-row"><label class="form-label">Depends on <span class="form-hint">— hold Ctrl/Cmd for multiple</span></label>' +
+      '<select id="et-preds" class="select-field" multiple style="height:60px;font-size:12px;">' + predOptions + '</select>' +
+    '</div>' +
+    '<div class="form-row"><label class="form-label">Deadline</label>' +
+      '<input type="date" id="et-deadline" class="input-field" value="' + (task.deadline || '') + '"/></div>' +
+    '<div class="form-row"><label class="form-label">Notes</label>' +
+      '<textarea id="et-notes" class="input-field" rows="2">' + (task.notes || '').replace(/</g,'&lt;') + '</textarea></div>' +
+    '<div class="form-actions">' +
+      '<button class="btn-outline" onclick="closeProductModal()">Cancel</button>' +
+      '<button class="btn-primary" onclick="saveTaskEdits(\'' + productId + '\',\'' + taskId + '\')">Save changes</button>' +
+    '</div>';
+  document.getElementById('create-product-modal').style.display = 'flex';
+};
+
+window.saveTaskEdits = async (productId, taskId) => {
+  const prod = productListCache[productId];
+  const task = getProductTasks(prod).find(t => t.id === taskId);
+  if (!prod || !task) return;
+
+  const newTitle = document.getElementById('et-title')?.value.trim();
+  const newDeadline = document.getElementById('et-deadline')?.value || '';
+  const newNotes = document.getElementById('et-notes')?.value.trim() || '';
+  const predSelect = document.getElementById('et-preds');
+  const newPreds = predSelect ? Array.from(predSelect.selectedOptions).map(o => o.value).filter(v => v) : [];
+
+  if (!newTitle) { showToast('Task name required.', 'error'); return; }
+
+  const oldDeadline = task.deadline || '';
+  const oldPreds = (task.predecessors || []).slice();
+  const isPushedBack = oldDeadline && newDeadline && newDeadline > oldDeadline;
+  const fields = { newTitle, newDeadline, newNotes, newPreds, oldDeadline, oldPreds };
+
+  if (isPushedBack) {
+    showDelayReasonModal(productId, taskId, fields);
+    return;
+  }
+  await applyTaskEdits(productId, taskId, Object.assign({ delayReason: '' }, fields));
+};
+
+function showDelayReasonModal(productId, taskId, fields) {
+  window._pendingTaskEdit = fields;
+  document.getElementById('modal-title-text').textContent = 'Reason for delay';
+  document.getElementById('modal-body-content').innerHTML =
+    '<p style="font-size:13px;color:var(--text-mid);margin-bottom:14px;line-height:1.6;">' +
+      'This pushes the deadline back from <strong>' + (fields.oldDeadline ? formatDate(fields.oldDeadline) : 'no date') + '</strong> to <strong>' + formatDate(fields.newDeadline) + '</strong>. ' +
+      'This gets logged permanently on the task, so the cause is on record for later.</p>' +
+    '<div class="form-row"><label class="form-label">What caused this delay? <span class="req">*</span></label>' +
+      '<textarea id="delay-reason-input" class="input-field" rows="3" placeholder="e.g. Awaiting legal sign-off on the survey report"></textarea></div>' +
+    '<div class="form-actions">' +
+      '<button class="btn-outline" onclick="closeProductModal()">Cancel</button>' +
+      '<button class="btn-primary" style="background:var(--red);" onclick="confirmDelayedTaskEdit(\'' + productId + '\',\'' + taskId + '\')">Log delay &amp; save</button>' +
+    '</div>';
+}
+
+window.confirmDelayedTaskEdit = async (productId, taskId) => {
+  const reason = document.getElementById('delay-reason-input')?.value.trim();
+  if (!reason) { showToast('A reason is required to log this delay.', 'error'); return; }
+  const fields = window._pendingTaskEdit;
+  window._pendingTaskEdit = null;
+  if (!fields) return;
+  await applyTaskEdits(productId, taskId, Object.assign({ delayReason: reason }, fields));
+};
+
+async function applyTaskEdits(productId, taskId, f) {
+  const prod = productListCache[productId];
+  const task = getProductTasks(prod).find(t => t.id === taskId);
+  if (!prod || !task) return;
+
+  const path = prod.tasks?.[taskId] ? 'tasks/' + taskId : 'pillars/' + taskId;
+  const base = 'products/' + productId + '/' + path;
+
+  await set(ref(db, base + '/title'), f.newTitle);
+  await set(ref(db, base + '/deadline'), f.newDeadline);
+  await set(ref(db, base + '/notes'), f.newNotes);
+  await set(ref(db, base + '/predecessors'), f.newPreds);
+  task.title = f.newTitle;
+  task.deadline = f.newDeadline;
+  task.notes = f.newNotes;
+  task.predecessors = f.newPreds;
+
+  // One changelog entry per genuine structural change — same node the
+  // Quick Update note history writes to, tagged by changeType so a delay
+  // is distinguishable from a routine edit at a glance.
+  const who = currentPreferredName || currentUser.displayName || currentUser.email.split('@')[0];
+  const entries = [];
+
+  if (f.oldDeadline !== f.newDeadline) {
+    if (f.delayReason) {
+      entries.push({
+        changeType: 'delay',
+        text: 'Deadline pushed from ' + (f.oldDeadline ? formatDate(f.oldDeadline) : 'no date') + ' to ' + formatDate(f.newDeadline) + '. Reason: ' + f.delayReason,
+      });
+    } else {
+      entries.push({
+        changeType: 'deadline_change',
+        text: 'Deadline changed from ' + (f.oldDeadline ? formatDate(f.oldDeadline) : 'no date') + ' to ' + (f.newDeadline ? formatDate(f.newDeadline) : 'no date') + '.',
+      });
+    }
+  }
+
+  const oldPredsSorted = f.oldPreds.slice().sort().join(',');
+  const newPredsSorted = f.newPreds.slice().sort().join(',');
+  if (oldPredsSorted !== newPredsSorted) {
+    const nameOf = (id) => { const t = getProductTasks(prod).find(x => x.id === id); return t ? (t.title || t.name || id) : id; };
+    entries.push({
+      changeType: 'dependency_change',
+      text: 'Dependencies changed from [' + (f.oldPreds.map(nameOf).join(', ') || 'none') + '] to [' + (f.newPreds.map(nameOf).join(', ') || 'none') + '].',
+    });
+  }
+
+  for (const entry of entries) {
+    const updateId = 'upd_' + Date.now() + '_' + Math.floor(Math.random() * 1000);
+    const record = { id: updateId, text: entry.text, changeType: entry.changeType, userEmail: currentUser.email, userName: who, createdAt: Date.now() };
+    await set(ref(db, base + '/updates/' + updateId), record);
+    if (!task.updates) task.updates = {};
+    task.updates[updateId] = record;
+  }
+
+  if (entries.length) {
+    await logActivity(productId, entries.some(e => e.changeType === 'delay') ? 'task_delayed' : 'task_edited',
+      (entries.some(e => e.changeType === 'delay') ? 'Delay logged: ' : 'Task edited: ') + f.newTitle,
+      entries.map(e => e.text).join(' '));
+  }
+
+  closeProductModal();
+  showToast('Task updated.', 'success');
+  const body = document.getElementById('product-detail-body');
+  if (body) body.innerHTML = buildPillarDetail(prod);
+  pushSheetIfLinked(productId);
 };
 
 window.convertItemType = async (productId, currentType) => {
@@ -6150,6 +6334,8 @@ function buildPillarDetail(p) {
     const moveUpBtn = canEdit(p) && !isFirst ? '<button onclick="moveProductTask(\'' + p.id + '\', \'' + task.id + '\', -1)" style="background:none;border:1px solid var(--border);border-radius:6px;padding:3px 8px;font-size:10px;color:var(--text-muted);cursor:pointer;font-family:Poppins,sans-serif;margin-left:6px;" title="Move Up">↑</button>' : '';
     const moveDownBtn = canEdit(p) && !isLast ? '<button onclick="moveProductTask(\'' + p.id + '\', \'' + task.id + '\', 1)" style="background:none;border:1px solid var(--border);border-radius:6px;padding:3px 8px;font-size:10px;color:var(--text-muted);cursor:pointer;font-family:Poppins,sans-serif;margin-left:6px;" title="Move Down">↓</button>' : '';
     const deleteBtn = canEdit(p) ? '<button onclick="deleteProductTask(\'' + p.id + '\', \'' + task.id + '\')" style="background:none;border:1px solid var(--border);border-radius:6px;padding:3px 8px;font-size:10px;color:var(--red);cursor:pointer;font-family:Poppins,sans-serif;margin-left:6px;" title="Delete Task">✕</button>' : '';
+    const editBtn = canEdit(p) ? '<button onclick="showEditTask(\'' + p.id + '\', \'' + task.id + '\')" style="background:none;border:1px solid var(--border);border-radius:6px;padding:3px 8px;font-size:10px;color:var(--text-mid);cursor:pointer;font-family:Poppins,sans-serif;margin-left:6px;" title="Edit task">Edit</button>' : '';
+    const insertBelowBtn = canEdit(p) ? '<button onclick="showAddTaskToProduct(\'' + p.id + '\', \'' + task.id + '\')" style="background:none;border:1px solid var(--border);border-radius:6px;width:22px;height:22px;display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:700;color:var(--text-mid);cursor:pointer;margin-left:6px;" title="Insert new task right below this one">+</button>' : '';
 
     // Drag-and-drop reorder — the up/down buttons work fine one step at a
     // time, but dragging a task straight to where it belongs is the more
@@ -6189,7 +6375,7 @@ function buildPillarDetail(p) {
         blockedHint + spinLink +
       '</div>' +
       '<div style="display:flex;align-items:center;gap:4px;">' +
-        statusEl + reassignBtn + spinOutBtn + moveUpBtn + moveDownBtn + deleteBtn +
+        statusEl + editBtn + reassignBtn + spinOutBtn + insertBelowBtn + moveUpBtn + moveDownBtn + deleteBtn +
       '</div>' +
     '</div>' };
   });
@@ -11317,10 +11503,17 @@ window.quickSaveNote = async (productId, taskId, notes) => {
 function buildQuickUpdateHistory(t) {
   const entries = t?.updates ? Object.values(t.updates).sort((a, b) => b.createdAt - a.createdAt).slice(0, 5) : [];
   if (entries.length === 0) return '';
+  const TAG = {
+    delay:              { label: 'DELAY',      color: 'var(--red)' },
+    deadline_change:    { label: 'DATE CHANGE', color: '#D97706' },
+    dependency_change:  { label: 'DEPENDENCY',  color: '#2563EB' },
+  };
   return '<div style="margin-top:6px;padding-top:6px;border-top:1px dashed var(--border);display:flex;flex-direction:column;gap:4px;">' +
     entries.map(e => {
       const when = new Date(e.createdAt).toLocaleDateString('en-GB', { day:'numeric', month:'short', hour:'2-digit', minute:'2-digit' });
-      return '<div style="font-size:10px;color:var(--text-muted);"><strong style="color:var(--text-mid);">' + (e.userName || 'Someone') + '</strong> · ' + when + ' — ' + String(e.text).slice(0, 140) + '</div>';
+      const tag = TAG[e.changeType];
+      const tagHtml = tag ? '<span style="font-size:8px;font-weight:700;letter-spacing:.04em;color:' + tag.color + ';border:1px solid ' + tag.color + ';border-radius:3px;padding:0 4px;margin-right:5px;">' + tag.label + '</span>' : '';
+      return '<div style="font-size:10px;color:var(--text-muted);">' + tagHtml + '<strong style="color:var(--text-mid);">' + (e.userName || 'Someone') + '</strong> · ' + when + ' — ' + String(e.text).slice(0, 140) + '</div>';
     }).join('') +
     '</div>';
 }
