@@ -216,6 +216,7 @@ const handleAuthStateChange = async (user) => {
       const userData  = userSnap.exists() ? userSnap.val() : null;
 
       startDecisionsBadgeListener();
+      startGlobalProductsListener();
       initGlobalSearch();
 
       if (!userData || !userData.dept) {
@@ -1697,8 +1698,8 @@ window.setAdminViewMode = (mode) => {
 };
 
 function refreshDashboardUI() {
-  if (!window._dashRawProducts) return;
-  const products = window._dashRawProducts;
+  if (!productListCache || Object.keys(productListCache).length === 0) return;
+  const products = productListCache;
   const userKey  = sanitiseEmail(currentUser.email);
   
   // Delegates to the single access function — see canUserSeeProduct.
@@ -1709,36 +1710,64 @@ function refreshDashboardUI() {
 }
 
 let _dashRefreshTimer = null;
+let _productsCacheReady = false;
+let _productsListenerUnsub = null;
+
+/* ══ ONE PERSISTENT PRODUCTS LISTENER FOR THE WHOLE SESSION ═══
+   Previously: 21 separate places each did their own get(ref(db,'products'))
+   -- a full fresh download of the entire tree (every task, comment,
+   activity log, weekly log, across every product) on every single pane
+   open. The dashboard DID keep a live copy in productListCache, but
+   loadView()'s teardownAllListeners() killed that listener the instant
+   you navigated away, so every other view had no choice but to re-fetch
+   fresh to guarantee correctness.
+
+   Fix: start this listener ONCE at login, deliberately outside the
+   registerListener()/teardownAllListeners() system, so it survives every
+   navigation for the rest of the session. productListCache is now always
+   current everywhere, and getProductsFresh() below is what the 21 call
+   sites use instead of fetching for themselves. */
+function startGlobalProductsListener() {
+  if (_productsListenerUnsub) return; // already running -- never double up
+  _productsListenerUnsub = onValue(ref(db, 'products'), snap => {
+    productListCache = snap.val() || {};
+    _productsCacheReady = true;
+
+    // Debounced, not immediate -- a burst of near-simultaneous writes
+    // (bulk edit, sheet sync, several people editing at once) collapses
+    // into one re-render instead of one per write.
+    clearTimeout(_dashRefreshTimer);
+    _dashRefreshTimer = setTimeout(() => {
+      if (currentView === 'dashboard' && typeof refreshDashboardUI === 'function') refreshDashboardUI();
+      if (currentView === 'products' && typeof loadProductList === 'function') loadProductList(true);
+    }, 300);
+  }, { onlyOnce: false });
+}
+
+// The universal replacement for every `get(ref(db,'products'))` call site.
+// Returns the live cache instantly once the listener's first snapshot has
+// landed; only touches the network itself on the rare first call before
+// that snapshot arrives (or if the listener failed to start for some
+// reason -- fails safe rather than fails silent).
+async function getProductsFresh() {
+  if (_productsCacheReady) return productListCache;
+  const snap = await get(ref(db, 'products'));
+  productListCache = snap.val() || {};
+  _productsCacheReady = true;
+  return productListCache;
+}
 
 async function loadDashboardStats() {
   try {
-    // This listens on the WHOLE /products tree, so Firebase re-sends the
-    // entire tree — every task, comment, activity log, weekly log, across
-    // every product — on any write anywhere in it, by anyone. That part is
-    // a real architectural cost that grows with the data and needs a
-    // proper fix (a maintained summary node, queried instead of the raw
-    // tree) rather than a quick patch here.
-    //
-    // What WAS fixable here: a burst of near-simultaneous writes — a bulk
-    // edit, a sheet sync touching several fields, a few people editing at
-    // once — was triggering one full dashboard recompute PER WRITE. This
-    // debounces that into a single recompute once things settle, so a
-    // burst costs one render instead of N.
-    const unsub = onValue(ref(db, 'products'), snap => {
-      const data = snap.val() || {};
-      window._dashRawProducts = data;
-      productListCache = data;
-
-      clearTimeout(_dashRefreshTimer);
-      _dashRefreshTimer = setTimeout(() => {
-        refreshDashboardUI();
-        if (currentView === 'products' && typeof loadProductList === 'function') {
-          loadProductList(true); // Pass flag to skip redundant HTTP fetching
-        }
-      }, 300);
-    }, { onlyOnce: false });
-
-    registerListener('dashboard', unsub);
+    // The listener that used to live here is now global and session-long
+    // (startGlobalProductsListener, started once at login) so it survives
+    // navigation instead of being torn down every time you leave this
+    // view. This function's only job now is to paint the dashboard with
+    // whatever's already in the shared cache the instant it mounts —
+    // refreshDashboardUI reads productListCache directly, which the
+    // global listener keeps current on every subsequent tick too.
+    await getProductsFresh();
+    refreshDashboardUI();
   } catch(e) { console.warn('Stats load failed:', e); }
 }
 
@@ -1927,8 +1956,7 @@ async function loadWorkload() {
   const el = document.getElementById('workload-body');
   if (!el) return;
   try {
-    const snap     = await get(ref(db, 'products'));
-    const products = Object.values(snap.val() || {}).filter(p => p.status !== 'archived');
+    const products = Object.values(await getProductsFresh()).filter(p => p.status !== 'archived');
     const today    = new Date(); today.setHours(0,0,0,0);
     const horizon  = new Date(today); horizon.setDate(horizon.getDate() + 14);
 
@@ -2089,6 +2117,13 @@ function renderMyActions(el) {
         '<p class="view-subtitle">Stay on top of what\'s important. Here\'s what needs your attention.</p>' +
       '</div>' +
     '</div>' +
+    '<div class="panel" id="pending-approvals-panel" style="margin-bottom:16px;display:none;">' +
+      '<div class="panel-header">' +
+        '<span class="panel-title">Awaiting your approval</span>' +
+        '<span style="font-size:11px;color:var(--text-muted);">Someone marked a task done or asked for more time</span>' +
+      '</div>' +
+      '<div class="panel-body" id="pending-approvals-list"></div>' +
+    '</div>' +
     '<div class="panel" style="margin-bottom:16px;">' +
       '<div class="panel-header">' +
         '<span class="panel-title">Personal to-do</span>' +
@@ -2158,6 +2193,7 @@ function renderMyActions(el) {
     '</div>';
   loadStandaloneTasks();
   loadMyActions();
+  loadPendingApprovals();
 }
 
 window.myActionsState = { sort: 'due' };
@@ -2239,8 +2275,7 @@ async function loadMyActions() {
   const listEl = document.getElementById('ma-list');
   if (!listEl) return;
   try {
-    const snap = await get(ref(db, 'products'));
-    const products = snap.val() || {};
+    const products = await getProductsFresh();
     const userKey  = sanitiseEmail(currentUser.email);
     const meEmail  = (currentUser.email || '').toLowerCase().trim();
     const meDept   = (currentUserDept || '').toLowerCase().trim();
@@ -2345,6 +2380,127 @@ window.toggleMyActionComplete = async (productId, taskId, checked) => {
   loadMyActions();
 };
 
+/* ══ DONE / EXTEND TIME — with a required comment, gated behind approval ══
+   Neither button changes anything directly. Both write a pendingRequest
+   and email the approver (the task's creator, else the product owner);
+   the actual status/deadline change only happens once that request is
+   approved — from the SPA below, or from the approver's own email, since
+   both paths go through the exact same backend functions. */
+window.showTaskRequestModal = (productId, taskId, type) => {
+  ensureProductModal();
+  const prod = productListCache[productId];
+  const task = prod && getProductTasks(prod).find(t => t.id === taskId);
+  if (!prod || !task) return;
+  if (task.pendingRequest) { showToast('This task already has a request awaiting approval.', 'error'); return; }
+
+  const isExtend = type === 'extend';
+  document.getElementById('modal-title-text').textContent = isExtend ? 'Request more time' : 'Mark as done';
+  document.getElementById('modal-body-content').innerHTML =
+    '<p style="font-size:13px;color:var(--text-mid);margin-bottom:14px;">' + (task.title || task.name || '') + ' &middot; ' + (prod.name || '') + '</p>' +
+    (isExtend ? '<div class="form-row"><label class="form-label">New deadline <span class="req">*</span></label><input type="date" id="tr-newdate" class="input-field"/></div>' : '') +
+    '<div class="form-row"><label class="form-label">Comment <span class="req">*</span> — ' + (isExtend ? "what's causing the delay?" : 'a quick note on what was done') + '</label>' +
+      '<textarea id="tr-comment" class="input-field" rows="3" placeholder="' + (isExtend ? 'e.g. Awaiting legal sign-off on the survey report' : 'e.g. Submitted to legal for review this morning') + '"></textarea></div>' +
+    '<p style="font-size:11px;color:var(--text-muted);margin-bottom:14px;">This won\'t change the task yet — it sends a request for approval first.</p>' +
+    '<div class="form-actions">' +
+      '<button class="btn-outline" onclick="closeProductModal()">Cancel</button>' +
+      '<button class="btn-primary" onclick="submitTaskRequestFromDashboard(\'' + productId + '\',\'' + taskId + '\',\'' + type + '\')">' + (isExtend ? 'Send request' : 'Submit for approval') + '</button>' +
+    '</div>';
+  document.getElementById('create-product-modal').style.display = 'flex';
+};
+
+window.submitTaskRequestFromDashboard = async (productId, taskId, type) => {
+  const comment = document.getElementById('tr-comment')?.value.trim();
+  const newDate = type === 'extend' ? (document.getElementById('tr-newdate')?.value || '') : '';
+  if (!comment) { showToast('A comment is required.', 'error'); return; }
+  if (type === 'extend' && !newDate) { showToast('Please choose a new deadline.', 'error'); return; }
+
+  try {
+    const res = await callGAS('submitTaskRequest', { productId, taskId, type, email: currentUser.email, comment, newDate });
+    if (res && res.ok) {
+      closeProductModal();
+      showToast(res.message || 'Request submitted.', 'success');
+      const prod = productListCache[productId];
+      const task = prod && getProductTasks(prod).find(t => t.id === taskId);
+      if (task) task.pendingRequest = { type, requestedBy: currentUser.email, requestedByName: currentPreferredName || currentUser.email.split('@')[0], comment, proposedDeadline: newDate || null, createdAt: Date.now() };
+      loadMyActions();
+    } else {
+      showToast(res?.error || res?.message || 'Could not submit request.', 'error');
+    }
+  } catch(e) {
+    showToast('Could not submit request: ' + e.message, 'error');
+  }
+};
+
+/* ══ APPROVALS INBOX — "awaiting your approval" panel on My Actions ══
+   Scans every product this user can see for tasks with a pendingRequest
+   where they're the resolved approver, or they're an admin (a backstop —
+   "sends a request to me the admin" even when a specific approver was
+   also resolved). */
+async function loadPendingApprovals() {
+  const panel = document.getElementById('pending-approvals-panel');
+  const listEl = document.getElementById('pending-approvals-list');
+  if (!panel || !listEl) return;
+  try {
+    const products = await getProductsFresh();
+    const userKey = sanitiseEmail(currentUser.email);
+    const myEmail = (currentUser.email || '').toLowerCase();
+    const pending = [];
+
+    Object.values(products).forEach(prod => {
+      if (prod.status === 'archived') return;
+      if (!canUserSeeProduct(prod, userKey)) return;
+      getProductTasks(prod).forEach(task => {
+        const req = task.pendingRequest;
+        if (!req) return;
+        const isApprover = (req.approverEmail || '').toLowerCase() === myEmail;
+        if (isApprover || currentRole === 'admin') pending.push({ prod, task, req });
+      });
+    });
+
+    if (pending.length === 0) { panel.style.display = 'none'; return; }
+    panel.style.display = 'block';
+    pending.sort((a, b) => (b.req.createdAt || 0) - (a.req.createdAt || 0));
+
+    listEl.innerHTML = pending.map(({ prod, task, req }) => {
+      const when = req.createdAt ? new Date(req.createdAt).toLocaleDateString('en-GB', { day:'numeric', month:'short', hour:'2-digit', minute:'2-digit' }) : '';
+      const actionLabel = req.type === 'extend' ? 'wants to push the deadline to <strong>' + formatDate(req.proposedDeadline) + '</strong>' : 'says this is done';
+      return '<div style="padding:12px 0;border-bottom:1px solid var(--border);">' +
+        '<div style="font-size:13px;color:#1A1A1A;">' +
+          '<strong>' + (req.requestedByName || (req.requestedBy || '').split('@')[0]) + '</strong> ' + actionLabel +
+          ' on <strong>' + (task.title || task.name || 'Untitled') + '</strong>' +
+        '</div>' +
+        '<div style="font-size:11px;color:var(--text-muted);margin:2px 0 8px;">' + prod.name + ' · ' + when + '</div>' +
+        '<div style="background:var(--bg);border-radius:6px;padding:8px 10px;font-size:12px;color:var(--text-mid);margin-bottom:10px;">' + (req.comment || '') + '</div>' +
+        '<div style="display:flex;gap:8px;">' +
+          '<button class="btn-primary" style="font-size:11px;padding:6px 14px;background:var(--green);" onclick="resolveTaskRequestFromDashboard(\'' + prod.id + '\',\'' + task.id + '\',\'approve\')">Approve</button>' +
+          '<button class="btn-outline" style="font-size:11px;padding:6px 14px;" onclick="resolveTaskRequestFromDashboard(\'' + prod.id + '\',\'' + task.id + '\',\'reject\')">Reject</button>' +
+        '</div>' +
+      '</div>';
+    }).join('');
+  } catch(e) {
+    panel.style.display = 'none';
+    console.warn('loadPendingApprovals failed:', e);
+  }
+}
+
+window.resolveTaskRequestFromDashboard = async (productId, taskId, decision) => {
+  try {
+    const res = await callGAS('resolveTaskRequest', { productId, taskId, decision });
+    if (res && res.ok) {
+      showToast(res.message || (decision === 'approve' ? 'Approved.' : 'Rejected.'), 'success');
+      const prod = productListCache[productId];
+      const task = prod && getProductTasks(prod).find(t => t.id === taskId);
+      if (task) task.pendingRequest = null;
+      loadPendingApprovals();
+      if (currentView === 'myactions') loadMyActions();
+    } else {
+      showToast(res?.error || res?.message || 'Could not process this decision.', 'error');
+    }
+  } catch(e) {
+    showToast('Could not process this decision: ' + e.message, 'error');
+  }
+};
+
 function renderMyActionsList() {
   const all = window._myActionsData || [];
 
@@ -2436,9 +2592,18 @@ function renderMyActionsList() {
     const icon = maIconFor(r.task.id || r.task.title || 'x');
     const prioCls = r.priority === 'High' ? 'pcf-pill-red' : r.priority === 'Medium' ? 'pcf-pill-amber' : 'pcf-pill-grey';
     const ownerName = r.task.owner || ownerLabel((r.task.owners||[])[0] || {}) || 'Unassigned';
+    const pendingReq = r.task.pendingRequest;
+    const actionCell = pendingReq
+      ? '<span class="pcf-pill pcf-pill-amber" style="flex-shrink:0;" title="' + String(pendingReq.comment || '').replace(/"/g,'&quot;') + '">Awaiting approval</span>'
+      : r.eff === 'complete'
+        ? '<span class="pcf-pill pcf-pill-blue" style="flex-shrink:0;">Complete</span>'
+        : '<div style="display:flex;gap:4px;flex-shrink:0;" onclick="event.stopPropagation();">' +
+            '<button class="btn-outline" style="font-size:10px;padding:4px 9px;" onclick="showTaskRequestModal(\'' + r.prod.id + '\',\'' + r.task.id + '\',\'done\')">Done</button>' +
+            '<button class="btn-outline" style="font-size:10px;padding:4px 9px;" onclick="showTaskRequestModal(\'' + r.prod.id + '\',\'' + r.task.id + '\',\'extend\')">Extend</button>' +
+          '</div>';
     return `
       <div class="ma-row" onclick="viewProduct('${r.prod.id}','${r.task.id}')">
-        <input type="checkbox" onclick="event.stopPropagation(); toggleMyActionComplete('${r.prod.id}','${r.task.id}', this.checked)" ${r.eff === 'complete' ? 'checked' : ''}/>
+        ${actionCell}
         <div class="ma-icon-sq" style="background:${icon.bg};color:${icon.fg};">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
         </div>
@@ -2544,8 +2709,7 @@ async function runGlobalSearch(q) {
   el.style.display = 'block';
   el.innerHTML = '<div class="gsr-empty">Searching…</div>';
   try {
-    const snap = await get(ref(db, 'products'));
-    const products = snap.val() || {};
+    const products = await getProductsFresh();
     const userKey = sanitiseEmail(currentUser.email);
     const ql = q.toLowerCase();
 
@@ -2842,8 +3006,7 @@ async function loadProductList(skipFetch = false) {
   try {
     // Rely on the Global State Store unless forced to fetch
     if (!skipFetch || Object.keys(productListCache).length === 0) {
-      const snap = await get(ref(db, 'products'));
-      productListCache = snap.val() || {};
+      await getProductsFresh();
     }
     
     const products = productListCache;
@@ -3948,7 +4111,7 @@ async function loadDrilldown(filter) {
   const body = document.getElementById('drill-body');
   if (!body) return;
   try {
-    const snap    = await get(ref(db, 'products'));
+    const products = await getProductsFresh();
     const userKey = sanitiseEmail(currentUser.email);
     const today   = new Date(); 
     today.setHours(0,0,0,0);
@@ -3959,7 +4122,7 @@ async function loadDrilldown(filter) {
     weekEnd.setDate(today.getDate() + daysUntilSunday);
     weekEnd.setHours(23, 59, 59, 999);
 
-    const visible = Object.values(snap.val() || {})
+    const visible = Object.values(products)
       .filter(p => p.status !== 'archived' && canUserSeeProduct(p, userKey));
 
     // At-risk operates on whole items, not tasks
@@ -4630,8 +4793,7 @@ async function loadAskScope() {
   const el = document.getElementById('ask-scope');
   if (!el) return;
   try {
-    const snap = await get(ref(db, 'products'));
-    const all  = Object.values(snap.val() || {}).filter(p => p.status !== 'archived');
+    const all  = Object.values(await getProductsFresh()).filter(p => p.status !== 'archived');
     const userKey = sanitiseEmail(currentUser.email);
     const visible = all.filter(p => canUserSeeProduct(p, userKey));
     window._askVisible = visible;
@@ -4885,8 +5047,7 @@ async function bulkSetVisibility(target) {
   btnIds.forEach(id => { const b = document.getElementById(id); if (b) { b.disabled = true; b.textContent = 'Working...'; } });
 
   try {
-    const snap    = await get(ref(db, 'products'));
-    const products = snap.val() || {};
+    const products = await getProductsFresh();
     const myEmail = (currentUser.email || '').toLowerCase();
     const myDept  = (currentUserDept || '').toLowerCase();
     let changed = 0;
@@ -6807,10 +6968,7 @@ function loadDashboardEmailLog() {
       }
       
       // Ensure product cache is ready so we can map product names
-      if (Object.keys(productListCache).length === 0) {
-        const prodSnap = await get(ref(db, 'products'));
-        productListCache = prodSnap.val() || {};
-      }
+      await getProductsFresh();
       
       const products = productListCache;
       const userKey  = sanitiseEmail(currentUser.email);
@@ -7357,8 +7515,7 @@ window.calDayClick = (day) => {
 };
 
 async function loadCalendarData() {
-  const snap = await get(ref(db, 'products'));
-  calProductsCache = snap.val() || {};
+  calProductsCache = await getProductsFresh();
   const active = Object.values(calProductsCache).filter(p => p.status !== 'archived');
   const sel = document.getElementById('cal-product-filter');
   if (sel) active.forEach(p => { const o=document.createElement('option'); o.value=p.id; o.textContent=p.name; sel.appendChild(o); });
@@ -7535,8 +7692,7 @@ window.setTrackerView = (mode) => {
 };
 
 async function loadTrackerProducts() {
-  const snap = await get(ref(db, 'products'));
-  trackerProductsCache = snap.val() || {};
+  trackerProductsCache = await getProductsFresh();
   const active = Object.values(trackerProductsCache).filter(p => p.status !== 'archived');
   const sel = document.getElementById('tracker-product-sel');
   if (!sel) return;
@@ -8011,8 +8167,7 @@ window.confirmAddDocFolder = async () => {
 };
 
 async function loadDocsProducts() {
-  const snap = await get(ref(db, 'products'));
-  docsProductsCache = snap.val() || {};
+  docsProductsCache = await getProductsFresh();
   const active = Object.values(docsProductsCache).filter(p => p.status !== 'archived');
   const sel = document.getElementById('docs-product-sel');
   if (!sel) return;
@@ -8432,8 +8587,7 @@ window.denyAccessRequest = async (reqId) => {
 };
 
 async function loadAlertProductList() {
-  const snap    = await get(ref(db, 'products'));
-  const products = snap.val() || {};
+  const products = await getProductsFresh();
   const sel     = document.getElementById('alert-product-sel');
   if (!sel) return;
   Object.values(products).filter(p => p.status !== 'archived').forEach(p => {
@@ -8447,11 +8601,10 @@ async function loadDeadlineStatus() {
   const el = document.getElementById('deadline-status-list');
   if (!el) return;
   try {
-    const [prodSnap, logSnap] = await Promise.all([
-      get(ref(db, 'products')),
+    const [products, logSnap] = await Promise.all([
+      getProductsFresh(),
       get(ref(db, 'emailLog')),
     ]);
-    const products = prodSnap.val() || {};
     const userKey  = sanitiseEmail(currentUser.email);
     const all      = [];
 
@@ -8504,8 +8657,7 @@ async function loadDeadlineStatus() {
 
 /* ══ PHASE 6: PROGRESS REPORTS ══════════════════════════════ */
 async function loadReportProductList() {
-  const snap = await get(ref(db, 'products'));
-  const prods = snap.val() || {};
+  const prods = await getProductsFresh();
   const sel   = document.getElementById('report-product-sel');
   if (!sel) return;
   sel.innerHTML = '';
@@ -8663,8 +8815,7 @@ window.triggerDeadlineCheck = async () => {
   try {
     const productId = document.getElementById('alert-product-sel')?.value || 'all';
     // Build alert payload from Firebase
-    const snap      = await get(ref(db, 'products'));
-    const products  = snap.val() || {};
+    const products  = await getProductsFresh();
     const today     = new Date(); today.setHours(0,0,0,0);
     const alerts    = [];
 
@@ -10076,8 +10227,7 @@ async function renderSAHealth(el) {
 
   // Product count
   try {
-    const prodSnap = await get(ref(db, 'products'));
-    const prods    = prodSnap.val() || {};
+    const prods    = await getProductsFresh();
     results.products = Object.keys(prods).length;
     results.active   = Object.values(prods).filter(p => p.status !== 'archived').length;
   } catch(e) { results.products = '?'; results.active = '?'; }
@@ -10173,15 +10323,14 @@ window.clearErrorLog = async () => {
 
 /* ── TAB 3: USER MANAGEMENT ──────────────────────────────── */
 async function renderSAUsers(el) {
-  const [allowSnap, userSnap, prodSnap, reqSnap] = await Promise.all([
+  const [allowSnap, userSnap, products, reqSnap] = await Promise.all([
     get(ref(db, 'allowlist')),
     get(ref(db, 'users')),
-    get(ref(db, 'products')),
+    getProductsFresh(),
     get(ref(db, 'accessRequests')),
   ]);
   const allowlist = allowSnap.val() || {};
   const users     = userSnap.val()  || {};
-  const products  = prodSnap.val()  || {};
   const allRequests = reqSnap.exists() ? Object.values(reqSnap.val()).filter(r => r.status === 'pending') : [];
 
   const reqSection = allRequests.length > 0
@@ -10280,8 +10429,7 @@ window.saResetUser = async (userKey) => {
   if (!confirm('Reset this user? This clears their active handovers and shared access.')) return;
   try {
     // Clear their active handovers (as reliever)
-    const snap = await get(ref(db, 'products'));
-    const prods = snap.val() || {};
+    const prods = await getProductsFresh();
     const updates = {};
     Object.entries(prods).forEach(([id, p]) => {
       if (p.handover?.relieverId === userKey) updates[`products/${id}/handover/active`] = false;
@@ -10295,8 +10443,7 @@ window.saResetUser = async (userKey) => {
 
 /* ── TAB 4: PRODUCT AUDIT ────────────────────────────────── */
 async function renderSAProducts(el) {
-  const snap  = await get(ref(db, 'products'));
-  const prods = Object.values(snap.val() || {});
+  const prods = Object.values(await getProductsFresh());
   const today = new Date(); today.setHours(0,0,0,0);
 
   const stuckHandovers = prods.filter(p =>
@@ -11016,8 +11163,7 @@ window.deleteTemplate = async (id) => {
 async function renderSAAllTasks(el) {
   el.innerHTML = '<div class="loading-row" style="padding:24px;">Loading organization tasks...</div>';
   try {
-    const snap = await get(ref(db, 'products'));
-    const products = snap.val() || {};
+    const products = await getProductsFresh();
     
     // Group by the person who OWNS THE PROJECT
     const byOwner = {};
@@ -12549,13 +12695,12 @@ window.runWatchdogScan = async () => {
   if (res) res.innerHTML = '<div class="loading-row">Analyzing architecture...</div>';
 
   try {
-    const [prodSnap, stkSnap, deptSnap] = await Promise.all([
-      get(ref(db, 'products')),
+    const [masterData, stkSnap, deptSnap] = await Promise.all([
+      getProductsFresh(),
       get(ref(db, 'config/stakeholders')),
       get(ref(db, 'config/departments'))
     ]);
     
-    const masterData = prodSnap.val() || {};
     const liveStakeholders = Array.isArray(stkSnap.val()) ? stkSnap.val() : Object.values(stkSnap.val() || {});
     const liveDepts = Object.keys(deptSnap.val() || {});
     
