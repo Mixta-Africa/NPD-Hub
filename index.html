@@ -8372,7 +8372,7 @@ function renderReports(el) {
 
   if (currentRole === 'admin') setTimeout(loadReportProductList, 50);
   loadDeadlineStatus();
-  if (currentRole === 'admin') { loadAlertProductList(); loadEmailSchedule(); loadAccessRequests(); }
+  if (currentRole === 'admin') { loadAlertProductList(); loadEmailSchedule(); }
 }
 
 async function loadAccessRequests() {
@@ -8395,11 +8395,12 @@ async function loadAccessRequests() {
       return;
     }
     el.innerHTML = requests.map(r =>
-      '<div style="display:flex;align-items:flex-start;gap:12px;padding:12px 0;border-bottom:1px solid var(--border);">' +
-        '<div style="flex:1;">' +
-          '<div style="font-size:12px;font-weight:600;color:var(--text);">' + (r.name || 'Unknown') + '</div>' +
+      '<div class="allowlist-row">' +
+        '<div class="allowlist-avatar">' + (r.name || r.email || '?')[0].toUpperCase() + '</div>' +
+        '<div class="allowlist-info">' +
+          '<div class="allowlist-name">' + (r.name || 'Unknown') + '</div>' +
           '<div style="font-size:11px;color:var(--text-muted);">' + r.email + '</div>' +
-          '<div style="font-size:11px;color:var(--text);margin-top:3px;">' + (r.reason || '') + '</div>' +
+          (r.reason ? '<div style="font-size:11px;color:var(--text-mid);margin-top:3px;">' + r.reason + '</div>' : '') +
           '<div style="font-size:10px;color:var(--text-muted);margin-top:2px;">' + new Date(r.requestedAt).toLocaleDateString('en-GB', {day:'numeric',month:'short',year:'numeric'}) + '</div>' +
         '</div>' +
         '<div style="display:flex;gap:6px;flex-shrink:0;">' +
@@ -8780,6 +8781,42 @@ function renderSettings(el) {
     </div>
 
     ${currentRole === 'admin' ? `
+    <div class="panel" style="margin-bottom:16px;" id="access-requests-panel">
+      <div class="panel-header">
+        <span class="panel-title">Access requests</span>
+        <span id="req-count-badge" style="font-size:10px;font-weight:700;background:#FEF2F2;color:#C0282D;padding:2px 8px;border-radius:10px;display:none;">0 pending</span>
+      </div>
+      <div id="access-requests-list" class="panel-body">
+        <div style="font-size:12px;color:var(--text-muted);">Loading...</div>
+      </div>
+    </div>
+
+    <div class="panel" style="margin-bottom:16px;">
+      <div class="panel-header"><span class="panel-title">Allowlist management</span></div>
+      <div class="panel-body">
+        <p class="settings-hint">Add or remove users who can access the NPD Hub. Admin users can create products and manage all settings. Viewers can see product status and documents.</p>
+        <div class="allowlist-form">
+          <input type="email" id="new-email" placeholder="colleague@mixtafrica.com" class="input-field"/>
+          <select id="new-role" class="select-field">
+            <option value="admin">Admin</option>
+            <option value="readonly" selected>Viewer</option>
+          </select>
+          <button class="btn-primary-sm" onclick="addToAllowlist()">Add user</button>
+        </div>
+        <div id="allowlist-list" class="allowlist-list">
+          <div class="loading-row">Loading allowlist...</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="panel" style="margin-bottom:16px;">
+      <div class="panel-header"><span class="panel-title">Company Directory</span></div>
+      <div class="panel-body">
+        <p class="settings-hint">Team members appear here automatically after their first login. They can be assigned as product owners when creating products.</p>
+        <div id="team-members-list"><div class="loading-row">Loading...</div></div>
+      </div>
+    </div>
+
     <div class="panel" style="margin-bottom:16px;">
       <div class="panel-header"><span class="panel-title">Decision engine — working hours</span></div>
       <div class="panel-body">
@@ -8806,47 +8843,9 @@ function renderSettings(el) {
             </label>`).join('')}
         </div>
       </div>
-    </div>` : ''}
-
-    ${currentRole === 'admin' ? `
-    <div class="panel" style="margin-bottom:16px;" id="access-requests-panel">
-      <div class="panel-header">
-        <span class="panel-title">Access requests</span>
-        <span id="req-count-badge" style="font-size:10px;font-weight:700;background:#FEF2F2;color:#C0282D;padding:2px 8px;border-radius:10px;display:none;">0 pending</span>
-      </div>
-      <div id="access-requests-list" class="panel-body">
-        <div style="font-size:12px;color:var(--text-muted);">Loading...</div>
-      </div>
-    </div>
-    ` : ''}
-
-    ${currentRole === 'admin' ? `
-    <div class="panel" style="margin-bottom:16px;">
-      <div class="panel-header"><span class="panel-title">Company Directory</span></div>
-      <div class="panel-body">
-        <p class="settings-hint">Team members appear here automatically after their first login. They can be assigned as product owners when creating products.</p>
-        <div id="team-members-list"><div class="loading-row">Loading...</div></div>
-      </div>
-    </div>
-    <div class="panel">
-      <div class="panel-header"><span class="panel-title">Allowlist management</span></div>
-      <div class="panel-body">
-        <p class="settings-hint">Add or remove users who can access the NPD Hub. Admin users can create products and manage all settings. Viewers can see product status and documents.</p>
-        <div class="allowlist-form">
-          <input type="email" id="new-email" placeholder="colleague@mixtafrica.com" class="input-field"/>
-          <select id="new-role" class="select-field">
-            <option value="admin">Admin</option>
-            <option value="readonly" selected>Viewer</option>
-          </select>
-          <button class="btn-primary-sm" onclick="addToAllowlist()">Add user</button>
-        </div>
-        <div id="allowlist-list" class="allowlist-list">
-          <div class="loading-row">Loading allowlist...</div>
-        </div>
-      </div>
     </div>` : ''}`;
 
-  if (currentRole === 'admin') { loadAllowlist(); setTimeout(renderTeamSection, 100); loadOrgContext(); }
+  if (currentRole === 'admin') { loadAllowlist(); setTimeout(renderTeamSection, 100); loadOrgContext(); loadAccessRequests(); }
 }
 
 async function loadOrgContext() {
@@ -13834,6 +13833,29 @@ textarea.input-field { resize: vertical; line-height: 1.5; }
 .type-toggle-btn:hover { border-color:var(--border-mid); }
 .type-toggle-btn.type-toggle-active { background:var(--red); border-color:var(--red); color:#fff; }
 .type-toggle-btn.type-toggle-active svg { stroke:#fff; }
+
+/* ═══ SETTINGS PAGE — "Your account" rows, role badges, allowlist/directory
+   lists ═══ These classes were referenced in markup but never had CSS at
+   all — same unstyled-class problem as several other spots this session. */
+.settings-row { display:flex; justify-content:space-between; align-items:center; padding:10px 0; border-bottom:1px solid var(--border); }
+.settings-row:last-of-type { border-bottom:none; }
+.settings-label { font-size:12px; color:var(--text-muted); font-weight:500; }
+.settings-value { font-size:13px; color:var(--text); font-weight:600; }
+.settings-hint { font-size:12px; color:var(--text-mid); line-height:1.6; margin-bottom:2px; }
+
+.role-badge { display:inline-block; font-size:10px; font-weight:700; padding:3px 10px; border-radius:99px; letter-spacing:.02em; white-space:nowrap; }
+.role-admin { background:#FEF2F2; color:#C0282D; }
+.role-viewer { background:#EFF6FF; color:#2563EB; }
+
+.allowlist-form { display:flex; gap:8px; margin-bottom:16px; flex-wrap:wrap; }
+.allowlist-form .input-field { flex:1; min-width:220px; }
+.allowlist-list { display:flex; flex-direction:column; }
+.allowlist-row { display:flex; align-items:center; gap:12px; padding:11px 0; border-bottom:1px solid var(--border); }
+.allowlist-row:last-child { border-bottom:none; }
+.allowlist-avatar { width:32px; height:32px; border-radius:50%; background:var(--bg); color:var(--text-mid); font-size:13px; font-weight:700; display:flex; align-items:center; justify-content:center; flex-shrink:0; }
+.allowlist-info { flex:1; min-width:0; }
+.allowlist-name { font-size:13px; font-weight:600; color:var(--text); }
+.allowlist-role-row { margin-top:3px; display:flex; align-items:center; }
 .pv-filter:hover { border-color:var(--border-mid); }
 .pv-filter.active { background:var(--red); border-color:var(--red); color:#fff; }
 .pv-filter .pv-count { font-size:10px; font-weight:700; background:rgba(0,0,0,0.06); color:var(--text-muted); padding:1px 7px; border-radius:99px; }
