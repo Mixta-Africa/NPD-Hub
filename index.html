@@ -230,13 +230,27 @@ const handleAuthStateChange = async (user) => {
           });
           currentUserDept = detectedDept;
           setTimeout(() => showWelcomeModal(detectedDept), 600);
+          // Was firing before loadAppConfig() (kicked off inside showApp(),
+          // fire-and-forget) had actually resolved — a brand-new user's
+          // very first dashboard render could start before config the
+          // render depends on was in place. Awaiting it here removes that
+          // race for exactly the case it was reported in.
+          await loadAppConfig();
           loadView('dashboard');
         } else {
+          // showDeptSelectionScreen renders from the DEPARTMENTS global,
+          // which starts as a hardcoded 8-entry default and only reflects
+          // what's actually configured in Circuit Box once loadAppConfig()
+          // has run. Nothing had called it yet on this branch, so a
+          // department added later (e.g. Risk and Audit) was invisible to
+          // exactly the screen where a new person needs to pick it.
+          await loadAppConfig();
           showDeptSelectionScreen(user, key);
         }
       } else {
         currentUserDept = userData.dept || '';
         showApp();
+        await loadAppConfig();
         routeFromDeepLink();
       }
     } catch(err) {
@@ -2130,7 +2144,7 @@ function renderMyActions(el) {
         '<span style="font-size:11px;color:var(--text-muted);">Private to you · included in your daily digest</span>' +
       '</div>' +
       '<div class="panel-body">' +
-        '<div style="display:flex;gap:8px;align-items:flex-end;margin-bottom:12px;flex-wrap:wrap;">' +
+        '<div style="display:flex;gap:8px;align-items:flex-end;margin-bottom:8px;flex-wrap:wrap;">' +
           '<div style="flex:2;min-width:200px;">' +
             '<label class="form-label" style="font-size:10px;">Task</label>' +
             '<input id="st-title" class="input-field" style="width:100%;" placeholder="e.g. Draft Q4 pricing memo" ' +
@@ -2142,8 +2156,22 @@ function renderMyActions(el) {
           '</div>' +
           '<button class="btn-primary" style="font-size:12px;padding:8px 16px;" onclick="addStandaloneTask()">+ Add</button>' +
         '</div>' +
+        '<div style="display:flex;gap:6px;margin-bottom:14px;flex-wrap:wrap;">' +
+          '<span style="font-size:10px;color:var(--text-muted);align-self:center;margin-right:2px;">Duration:</span>' +
+          '<button class="btn-outline" style="font-size:10px;padding:4px 10px;" onclick="setStandaloneDuration(\'today\')">Today</button>' +
+          '<button class="btn-outline" style="font-size:10px;padding:4px 10px;" onclick="setStandaloneDuration(\'3days\')">3 days</button>' +
+          '<button class="btn-outline" style="font-size:10px;padding:4px 10px;" onclick="setStandaloneDuration(\'week\')">This week</button>' +
+          '<button class="btn-outline" style="font-size:10px;padding:4px 10px;" onclick="setStandaloneDuration(\'nextweek\')">Next week</button>' +
+        '</div>' +
         '<div id="standalone-list"><div class="loading-row" style="padding:8px 0;font-size:12px;">Loading...</div></div>' +
       '</div>' +
+    '</div>' +
+    '<div class="panel" id="weekly-performance-panel" style="margin-bottom:16px;display:none;">' +
+      '<div class="panel-header">' +
+        '<span class="panel-title">Your weekly performance</span>' +
+        '<span style="font-size:11px;color:var(--text-muted);">Strictly private — visible only to you</span>' +
+      '</div>' +
+      '<div class="panel-body" id="weekly-performance-list"></div>' +
     '</div>' +
     '<div style="display:grid;grid-template-columns:2.3fr 1fr;gap:16px;align-items:start;">' +
       '<div>' +
@@ -3385,15 +3413,12 @@ function renderProductCard(p) {
       </div>
 
      <div class="pcf-actions">
-        <button class="btn-secondary-sm" onclick="openProjectDashboard('${p.id}')">Dashboard</button>
+        <button class="btn-primary-sm" onclick="openProjectDashboard('${p.id}')">${ICON.bolt} Dashboard</button>
         <button class="btn-secondary-sm" onclick="viewProduct('${p.id}')">Tasks</button>
-        ${canEdit(p) && p.status !== 'archived' ? `<button class="btn-primary-sm" onclick="showQuickUpdate('${p.id}')">${ICON.bolt} Update</button>` : ''}
         ${canEdit(p) && !p.onboardedAt ? `<button class="btn-secondary-sm" style="color:var(--amber);border-color:var(--amber);" onclick="reOnboardProduct('${p.id}')">${ICON.warn} Onboard</button>` : ''}
-        ${editBtn}
         ${canEdit(p) ? `<button class="btn-secondary-sm" onclick="convertItemType('${p.id}','${p.itemType||'product'}')" style="font-size:10px;" title="Switch between Product and Project"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:middle;margin-right:3px;"><path d="M17 1l4 4-4 4"/><path d="M3 11V9a4 4 0 014-4h14"/><path d="M7 23l-4-4 4-4"/><path d="M21 13v2a4 4 0 01-4 4H3"/></svg>${(p.itemType||'product')==='project'?'To Product':'To Project'}</button>` : ''}
         ${canEdit(p) ? `<button class="btn-secondary-sm" onclick="showShareModal('${p.id}')">Share</button>` : ''}
         ${getProductAccess(p) === 'owner' || currentRole === 'admin' ? `<button class="btn-secondary-sm" onclick="showHandoverModal('${p.id}')">Handover</button>` : ''}
-        <button class="btn-secondary-sm" onclick="exportProjectTracker('${p.id}')">Export</button>
         <button class="btn-secondary-sm" onclick="showProductActivity('${p.id}')">Activity</button>
         ${canEdit(p) ? (p.status === 'archived' 
           ? `<button class="btn-secondary-sm" style="color:var(--green);border-color:var(--green);" onclick="unarchiveProduct('${p.id}')">Restore</button>`
@@ -6036,6 +6061,7 @@ window.showTaskDetailPanel = (productId, taskId) => {
       '<span class="pcf-pill" style="background:' + smeta.color + '18;color:' + smeta.color + ';text-transform:uppercase;">' + smeta.label + '</span>' +
       (getTaskVisibility(task) !== 'public' ? '<span class="pcf-pill pcf-pill-grey">' + getTaskVisibility(task).toUpperCase() + '</span>' : '') +
       '<button class="btn-outline" style="margin-left:auto;font-size:11px;padding:5px 12px;" onclick="showEditTask(\'' + productId + '\',\'' + taskId + '\')">Edit task</button>' +
+      (canEdit(prod) ? '<button class="btn-outline" style="font-size:11px;padding:5px 12px;color:#7C2D12;border-color:#7C2D12;" onclick="showEscalateToAMCModal(\'' + productId + '\',\'' + taskId + '\')" title="Manual and discretionary — never sent automatically">Escalate to AMC</button>' : '') +
     '</div>' +
     pendingReqHtml +
     '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px;">' +
@@ -6053,6 +6079,47 @@ window.showTaskDetailPanel = (productId, taskId) => {
     '<div style="max-height:220px;overflow-y:auto;">' + historyHtml + '</div>' +
     '<div class="form-actions" style="margin-top:16px;"><button class="btn-outline" onclick="closeProductModal()">Close</button></div>';
   document.getElementById('create-product-modal').style.display = 'flex';
+};
+
+// Manual, discretionary AMC escalation — never fires on its own, unlike
+// the 5-day automatic team-lead escalation the backend handles for you.
+window.showEscalateToAMCModal = (productId, taskId) => {
+  ensureProductModal();
+  const prod = productListCache[productId];
+  const task = prod && getProductTasks(prod).find(t => t.id === taskId);
+  if (!prod || !task) return;
+
+  document.getElementById('modal-title-text').textContent = 'Escalate to AMC';
+  document.getElementById('modal-body-content').innerHTML =
+    '<p style="font-size:13px;color:var(--text-mid);margin-bottom:14px;line-height:1.6;">' +
+      'This sends an email to everyone listed under the AMC department in Circuit Box. It is entirely at your discretion — nothing about this happens automatically.' +
+    '</p>' +
+    '<div class="form-row"><label class="form-label">Note <span class="form-hint">— optional context for AMC</span></label>' +
+      '<textarea id="amc-esc-note" class="input-field" rows="3" placeholder="e.g. This has been overdue for two weeks with no clear path to resolution"></textarea></div>' +
+    '<div class="form-actions">' +
+      '<button class="btn-outline" onclick="closeProductModal()">Cancel</button>' +
+      '<button class="btn-primary" style="background:#7C2D12;" onclick="submitEscalateToAMC(\'' + productId + '\',\'' + taskId + '\')">Send to AMC</button>' +
+    '</div>';
+  document.getElementById('create-product-modal').style.display = 'flex';
+};
+
+window.submitEscalateToAMC = async (productId, taskId) => {
+  const note = document.getElementById('amc-esc-note')?.value.trim() || '';
+  try {
+    const res = await callGAS('escalateToAMC', {
+      productId, taskId, note,
+      escalatedBy: currentUser.email,
+      escalatedByName: currentPreferredName || currentUser.displayName || currentUser.email.split('@')[0],
+    });
+    if (res && res.ok) {
+      closeProductModal();
+      showToast('Escalated to ' + res.sent + ' AMC member' + (res.sent !== 1 ? 's' : '') + '.', 'success');
+    } else {
+      showToast(res?.error || 'Could not escalate.', 'error');
+    }
+  } catch(e) {
+    showToast('Could not escalate: ' + e.message, 'error');
+  }
 };
 
 window.showEditTask = (productId, taskId) => {
@@ -6691,7 +6758,7 @@ function buildProductDetail(p, tab) {
       '<button class="pdt-tab active" onclick="switchProductTab(\'' + p.id + '\',\'tasks\',this)">Tasks</button>' +
       '<button class="pdt-tab" onclick="switchProductTab(\'' + p.id + '\',\'assignees\',this)">Assignees</button>' +
       '<button class="pdt-tab" onclick="switchProductTab(\'' + p.id + '\',\'description\',this)">Description</button>' +
-      '<button class="pdt-tab" onclick="switchProductTab(\'' + p.id + '\',\'comments\',this)">Comments</button>' +
+      (canEdit(p) ? '<button class="pdt-tab" onclick="switchProductTab(\'' + p.id + '\',\'comments\',this)">Comments</button>' : '') +
       '<button class="pdt-tab" onclick="switchProductTab(\'' + p.id + '\',\'comms\',this)">Sent emails</button>' +
     '</div>' +
     '</div>';
@@ -7619,8 +7686,17 @@ async function loadAssigneeHistory(productId) {
 async function loadProductComments(productId) {
   const el = document.getElementById('comments-list');
   if (!el) return;
+  const prod = productListCache[productId];
+  // Defense in depth — the tab button itself is already hidden from
+  // anyone who isn't the owner/admin/shared-editor, but this is the real
+  // gate: comments can name a specific person's situation (the exact leak
+  // that was reported), so seeing the product at all is never enough.
+  if (!prod || !canEdit(prod)) {
+    el.innerHTML = '<div style="text-align:center;padding:24px 0;font-size:12px;color:#9CA3AF;">Comments are only visible to the owner and admins.</div>';
+    return;
+  }
   try {
-    const snap = await get(ref(db, 'products/' + productId + '/comments'));
+    const snap = await get(ref(db, 'productComments/' + productId));
     if (!snap.exists()) {
       el.innerHTML = '<div style="text-align:center;padding:24px 0;font-size:12px;color:#9CA3AF;">No comments yet. Be the first to add context.</div>';
       return;
@@ -7652,6 +7728,8 @@ async function loadProductComments(productId) {
 }
 
 window.postProductComment = async (productId) => {
+  const prod = productListCache[productId];
+  if (!prod || !canEdit(prod)) { showToast('Only the owner or an admin can post here.', 'error'); return; }
   const input = document.getElementById('comment-input');
   if (!input) return;
   const text = (input.value || '').trim();
@@ -7666,7 +7744,7 @@ window.postProductComment = async (productId) => {
     createdAt: Date.now(),
   };
   try {
-    await set(ref(db, 'products/' + productId + '/comments/' + commentId), comment);
+    await set(ref(db, 'productComments/' + productId + '/' + commentId), comment);
     input.value = '';
     loadProductComments(productId);
   } catch(e) {
@@ -11364,7 +11442,7 @@ async function renderSADepartments(el) {
           <span style="display:inline-block;width:12px;height:12px;border-radius:50%;background:${d.colour||'#6B7280'};flex-shrink:0;"></span>
           ${d.name}
         </div>
-        <div class="cb-pillar-owner">${(d.emails||[]).length} email${(d.emails||[]).length!==1?'s':''} · key: ${id}</div>
+        <div class="cb-pillar-owner">${(d.emails||[]).length} email${(d.emails||[]).length!==1?'s':''} · key: ${id}${d.lead ? ' · lead: ' + d.lead : ''}</div>
       </div>
       <div class="cb-pillar-actions">
         <button class="btn-secondary-sm" onclick="editDepartment('${id}')">Edit</button>
@@ -11400,6 +11478,8 @@ window.editDepartment = (id) => {
           <input id="de-name" class="input-field" value="${d.name}"/></div>
         <div class="form-row"><label class="form-label">Colour</label>
           <input id="de-colour" type="color" value="${d.colour||'#6B7280'}" style="width:60px;height:36px;padding:2px;border:1px solid var(--border-mid);border-radius:6px;cursor:pointer;"/></div>
+        <div class="form-row"><label class="form-label">Team lead email <span class="form-hint">— who overdue tasks escalate to after 5 days</span></label>
+          <input id="de-lead" class="input-field" type="email" value="${d.lead||''}" placeholder="lead@mixtafrica.com"/></div>
         <div class="form-row"><label class="form-label">Emails <span class="form-hint">— one per line</span></label>
           <textarea id="de-emails" class="input-field" rows="4"></textarea></div>
         <div class="form-actions">
@@ -11422,7 +11502,8 @@ window.saveDepartment = async (id) => {
   const emailsRaw = document.getElementById('de-emails')?.value || '';
   const emails = emailsRaw.split(/\r?\n/).map(e => e.trim()).filter(Boolean);
   if (!name) { showToast('Name required.', 'error'); return; }
-  DEPARTMENTS[id] = { ...DEPARTMENTS[id], name, colour, emails };
+  const lead = document.getElementById('de-lead')?.value.trim() || '';
+  DEPARTMENTS[id] = { ...DEPARTMENTS[id], name, colour, lead, emails };
   try {
     await set(ref(db, 'config/departments/' + id), DEPARTMENTS[id]);
     showToast('Department saved.', 'success');
