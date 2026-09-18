@@ -1737,6 +1737,19 @@ function renderDashboard(el) {
         </div>
       </div>
 
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:16px;">
+        <span style="font-size:11px;color:var(--text-muted);">Jump to:</span>
+        <select id="dash-status-filter" class="select-field" style="max-width:200px;font-size:12px;" onchange="if(this.value) openDrill(this.value); this.value='';">
+          <option value="">Filter by status…</option>
+          <option value="blocked">Blocked</option>
+          <option value="overdue">Overdue &amp; delayed</option>
+          <option value="due-soon">Due soon</option>
+          <option value="ontrack">On track</option>
+          <option value="deprioritized">Stepped down</option>
+          <option value="complete">Complete</option>
+        </select>
+      </div>
+
       <div class="dashboard-row-2col">
         <div class="panel">
           <div class="panel-header">
@@ -4434,6 +4447,10 @@ const DRILL_META = {
   week:     { title: 'Due this week',      sub: 'Tasks with a deadline in the next 7 days',                   color: '#D97706' },
   atrisk:   { title: 'At risk',            sub: 'Items launching within 21 days with 2+ delayed or overdue tasks', color: '#D97706' },
   active:   { title: 'Active items',       sub: 'Every product and project you can see',                      color: '#C0282D' },
+  blocked:  { title: 'Blocked',            sub: 'Waiting on an incomplete predecessor task',                  color: '#D97706' },
+  'due-soon': { title: 'Due soon',         sub: 'Within 3 days of deadline, not yet overdue',                 color: '#D97706' },
+  complete: { title: 'Complete',           sub: 'Everything marked done',                                     color: '#2563EB' },
+  deprioritized: { title: 'Stepped down',  sub: 'Tasks explicitly deprioritized rather than dropped',          color: '#6B7280' },
 };
 
 window.dashNavToTracker = (filter) => { loadView('drill:' + filter); };
@@ -4501,6 +4518,10 @@ async function loadDrilldown(filter) {
           const d = new Date(t.deadline); d.setHours(0,0,0,0);
           return d >= today && d <= weekEnd;
         }
+        if (filter === 'blocked') return eff === 'blocked';
+        if (filter === 'due-soon') return eff === 'due-soon';
+        if (filter === 'complete') return eff === 'complete';
+        if (filter === 'deprioritized') return eff === 'deprioritized';
         return false;
       });
       if (matched.length) groups.push({ p, tasks: matched });
@@ -9023,6 +9044,20 @@ function renderReports(el) {
       </div>
     </div>
 
+    <div class="panel" style="margin-bottom:16px;">
+      <div class="panel-header">
+        <span class="panel-title">Weekly report</span>
+        <span style="font-size:11px;color:var(--text-muted);">For your Monday update</span>
+      </div>
+      <div class="panel-body">
+        <p style="font-size:13px;color:var(--text-mid);line-height:1.7;margin-bottom:14px;">
+          A rounded-up view of last week (Monday–Sunday) across every project you can see: what got completed, what slipped, what's still overdue coming into this week.
+        </p>
+        <button class="btn-primary" onclick="generateWeeklyReport()">Generate last week's report</button>
+        <div id="weekly-report-output" style="margin-top:16px;"></div>
+      </div>
+    </div>
+
     <div class="panel">
       <div class="panel-header">
         <span class="panel-title">Recent alerts sent</span>
@@ -9211,6 +9246,76 @@ async function loadAlertProductList() {
     sel.appendChild(opt);
   });
 }
+
+/* ══ WEEKLY REPORT — for the Monday update ═══════════════════
+   Reuses the same per-task changelog (task.updates) that Edit-task,
+   the approval workflow, and escalations all already write to — the
+   report is a window onto that one existing history, not a second
+   thing to maintain. Reuses isoWeekKey/weekKeyLabel from the personal
+   tracker further up the file for the same "which week is this" logic. */
+window.generateWeeklyReport = async () => {
+  const out = document.getElementById('weekly-report-output');
+  if (out) out.innerHTML = '<div class="loading-row">Compiling...</div>';
+  try {
+    const products = await getProductsFresh();
+    const userKey = sanitiseEmail(currentUser.email);
+
+    // Last week = the ISO week before the current one (Mon–Sun)
+    const now = new Date();
+    const dow = now.getDay() || 7;
+    const lastWeekEnd = new Date(now);
+    lastWeekEnd.setDate(now.getDate() - dow);
+    lastWeekEnd.setHours(23, 59, 59, 999);
+    const lastWeekStart = new Date(lastWeekEnd);
+    lastWeekStart.setDate(lastWeekEnd.getDate() - 6);
+    lastWeekStart.setHours(0, 0, 0, 0);
+
+    const visible = Object.values(products).filter(p => p.status !== 'archived' && canUserSeeProduct(p, userKey));
+
+    let completedCount = 0, delayedCount = 0, dependencyCount = 0;
+    const byProject = [];
+
+    visible.forEach(p => {
+      const tasks = getProductTasks(p).filter(t => canViewTask(t, p));
+      const events = [];
+      tasks.forEach(t => {
+        Object.values(t.updates || {}).forEach(u => {
+          if (u.createdAt >= lastWeekStart.getTime() && u.createdAt <= lastWeekEnd.getTime()) {
+            events.push({ task: t, entry: u });
+            if (u.changeType === 'approval') completedCount++;
+            if (u.changeType === 'delay') delayedCount++;
+            if (u.changeType === 'dependency_change') dependencyCount++;
+          }
+        });
+      });
+      const stillOverdue = tasks.filter(t => resolveTaskStatus(t, p) === 'overdue');
+      if (events.length > 0 || stillOverdue.length > 0) {
+        events.sort((a, b) => a.entry.createdAt - b.entry.createdAt);
+        byProject.push({ prod: p, events, stillOverdue });
+      }
+    });
+
+    if (byProject.length === 0) {
+      out.innerHTML = '<div style="font-size:12px;color:var(--text-muted);padding:12px 0;">No logged changes or overdue items found for last week.</div>';
+      return;
+    }
+
+    out.innerHTML =
+      '<div style="font-size:12px;color:var(--text-mid);margin-bottom:14px;font-weight:600;">' +
+        weekKeyLabel(isoWeekKey(lastWeekStart)) + ' — ' + completedCount + ' completed, ' + delayedCount + ' delayed, ' + dependencyCount + ' dependency change' + (dependencyCount !== 1 ? 's' : '') +
+      '</div>' +
+      byProject.map(({ prod, events, stillOverdue }) => (
+        '<div style="margin-bottom:16px;padding-bottom:14px;border-bottom:1px solid var(--border);">' +
+          '<div style="font-size:13px;font-weight:700;color:var(--text);margin-bottom:6px;">' + prod.name + '</div>' +
+          events.map(({ task, entry }) => '<div style="font-size:12px;color:var(--text-mid);padding:2px 0;">• <strong>' + (task.title || task.name || 'Untitled') + '</strong> — ' + entry.text + '</div>').join('') +
+          (stillOverdue.length ? '<div style="font-size:12px;color:var(--red);margin-top:6px;">Still overdue: ' + stillOverdue.map(t => t.title || t.name).join(', ') + '</div>' : '') +
+        '</div>'
+      )).join('') +
+      '<button class="btn-outline" onclick="window.print()">Print / Save as PDF</button>';
+  } catch(e) {
+    if (out) out.innerHTML = '<div style="font-size:12px;color:var(--red);">Could not generate report: ' + e.message + '</div>';
+  }
+};
 
 async function loadDeadlineStatus() {
   const el = document.getElementById('deadline-status-list');
@@ -13348,6 +13453,25 @@ async function renderSAWatchdog(el) {
     <div id="watchdog-results"></div>`;
 }
 
+// Order-independent deep equality — JSON.stringify() string comparison
+// (what this used to be) treats {a:1,b:2} and {b:2,a:1} as different, and
+// this codebase mutates cached task/product objects in place constantly
+// (every edit does `task.title = x; task.deadline = y;` directly on the
+// cached object), which reorders keys without changing any real data.
+// That made the old check fire false positives on completely healthy
+// state, which is exactly what "diagnostic ability is faulty" describes.
+function watchdogDeepEqual(a, b, skipKeys) {
+  skipKeys = skipKeys || ['updatedAt'];
+  if (a === b) return true;
+  if (typeof a !== typeof b || a === null || b === null) return a === b;
+  if (typeof a !== 'object') return a === b;
+  if (Array.isArray(a) !== Array.isArray(b)) return false;
+  const keysA = Object.keys(a).filter(k => !skipKeys.includes(k));
+  const keysB = Object.keys(b).filter(k => !skipKeys.includes(k));
+  if (keysA.length !== keysB.length) return false;
+  return keysA.every(k => Object.prototype.hasOwnProperty.call(b, k) && watchdogDeepEqual(a[k], b[k], skipKeys));
+}
+
 window.runWatchdogScan = async () => {
   const btn = document.getElementById('watchdog-btn');
   const res = document.getElementById('watchdog-results');
@@ -13375,9 +13499,7 @@ window.runWatchdogScan = async () => {
 
       // --- CHECK 1: DEEP CACHE DRIFT ---
       if (localProd) {
-        const cleanLocal  = JSON.stringify(localProd).replace(/"updatedAt":\d+,?/g, '');
-        const cleanMaster = JSON.stringify(masterProd).replace(/"updatedAt":\d+,?/g, '');
-        if (cleanLocal !== cleanMaster) {
+        if (!watchdogDeepEqual(localProd, masterProd)) {
           anomalies.push({ level: 'critical', type: 'cache-drift', prod: masterProd.name, issue: `Browser memory heap differs from database. UI is displaying stale/mutated state.`, fixable: true, fixAction: `watchdogSyncCache('${productId}')`, fixLabel: 'Force Pull Data' });
         }
       }
