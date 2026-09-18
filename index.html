@@ -218,6 +218,7 @@ const handleAuthStateChange = async (user) => {
       startDecisionsBadgeListener();
       startGlobalProductsListener();
       initGlobalSearch();
+      initUndoShortcut();
 
       if (!userData || !userData.dept) {
         showApp();
@@ -2272,7 +2273,8 @@ async function loadWorkload() {
 }
 
 /* ── MY ACTIONS VIEW ── */
-function renderMyActions(el) {
+async function renderMyActions(el) {
+  if (!(await checkViewLock('myactions'))) return; // lock screen already rendered by checkViewLock
   el.innerHTML =
     '<div class="view-header">' +
       '<div>' +
@@ -3031,6 +3033,33 @@ function startDecisionsBadgeListener() {
    (same canUserSeeProduct/canViewTask gates as everywhere else — a
    search box is not a way to leak a task someone shouldn't find). */
 let _gsDebounce = null;
+
+/* ══ CTRL+Z — UNDO THE LAST STATUS CHANGE ═════════════════════
+   Scoped deliberately to status changes only (Complete/On track/
+   Delayed/Stepped down etc.), since that's the specific action asked
+   for — not a general app-wide undo for every possible edit. Ignores
+   the shortcut entirely while typing in a text field, so it never
+   fights with a real text-editing undo the browser already handles. */
+function initUndoShortcut() {
+  if (window._undoShortcutWired) return;
+  window._undoShortcutWired = true;
+  document.addEventListener('keydown', (e) => {
+    const isUndo = (e.ctrlKey || e.metaKey) && !e.shiftKey && e.key.toLowerCase() === 'z';
+    if (!isUndo) return;
+    const tag = (document.activeElement?.tagName || '').toLowerCase();
+    if (tag === 'input' || tag === 'textarea' || document.activeElement?.isContentEditable) return;
+    e.preventDefault();
+    undoLastStatusChange();
+  });
+}
+
+async function undoLastStatusChange() {
+  const stack = window._statusUndoStack || [];
+  const last = stack.pop();
+  if (!last) { showToast('Nothing to undo.', 'info'); return; }
+  await updatePillarStatus(last.productId, last.taskId, last.oldStatus, true);
+  showToast('Undone: "' + last.taskTitle + '" back to ' + (STATUS_META[last.oldStatus]?.label || last.oldStatus) + '.', 'success');
+}
 
 function initGlobalSearch() {
   const input = document.getElementById('global-search-input');
@@ -4719,8 +4748,8 @@ async function loadProjectDashboard(productId) {
         });
       });
 
-      const statCard = (label, val, color, tint, iconSvg, filterHint) =>
-        '<div class="stat-card dash-stat-card ' + tint + '"' + (filterHint ? ' style="cursor:pointer;" onclick="scrollToDept()"' : '') + '>' +
+      const statCard = (label, val, color, tint, iconSvg, metric) =>
+        '<div class="stat-card dash-stat-card ' + tint + '"' + (metric ? ' style="cursor:pointer;" onclick="showStatBreakdown(\'' + p.id + '\',\'' + metric + '\')"' : '') + '>' +
           '<div class="stat-header">' +
             '<div class="stat-icon-wrap">' + iconSvg + '</div>' +
           '</div>' +
@@ -4761,10 +4790,10 @@ async function loadProjectDashboard(productId) {
         forecastHtml + 
 
         '<div class="stats-row">' +
-          statCard('Progress',  pct + '%',      pct >= 75 ? 'var(--green)' : pct >= 40 ? 'var(--amber)' : 'var(--red)', pct >= 75 ? 'stat-tint-green' : pct >= 40 ? 'stat-tint-amber' : 'stat-tint-red', icoTrend) +
-          statCard('Complete',  done,           'var(--green)', 'stat-tint-green', icoCheck) +
-          statCard('On track',  onTrack,        'var(--green)', 'stat-tint-green', icoCheck) +
-          statCard('Needs action', delayed + blocked, needsClr, (delayed + blocked) > 0 ? 'stat-tint-red' : 'stat-tint-green', icoWarn, true) +
+          statCard('Progress',  pct + '%',      pct >= 75 ? 'var(--green)' : pct >= 40 ? 'var(--amber)' : 'var(--red)', pct >= 75 ? 'stat-tint-green' : pct >= 40 ? 'stat-tint-amber' : 'stat-tint-red', icoTrend, 'progress') +
+          statCard('Complete',  done,           'var(--green)', 'stat-tint-green', icoCheck, 'complete') +
+          statCard('On track',  onTrack,        'var(--green)', 'stat-tint-green', icoCheck, 'ontrack') +
+          statCard('Needs action', delayed + blocked, needsClr, (delayed + blocked) > 0 ? 'stat-tint-red' : 'stat-tint-green', icoWarn, 'needsaction') +
         '</div>' +
         
        // --- INJECT DEPENDENCY MAP (collapsed by default — not everyone
@@ -4914,16 +4943,40 @@ window.exportProjectTracker = async (productId) => {
   }
 
   const hiddenCount = getProductTasks(p).length - visible.length;
+  const now = Date.now();
   const rows = visible.map(t => {
     const owners = (t.owners && t.owners.length) ? t.owners
       : (t.owner ? [{ dept: t.ownerDept || '', email: t.ownerEmail || '', nameCache: t.owner }] : []);
+    const status = resolveTaskStatus(t);
+
+    // The story: most recent changelog entry, and — for completed tasks
+    // specifically — how long ago that happened. A task completed 6
+    // weeks ago and one completed yesterday look identical in a flat
+    // "Complete" column; this is what actually separates them.
+    const history = t.updates ? Object.values(t.updates).sort((a, b) => b.createdAt - a.createdAt) : [];
+    const lastEntry = history[0];
+    let completedAgo = '';
+    let phase = 'Active';
+    if (status === 'complete') {
+      const completionEntry = history.find(h => h.changeType === 'approval') || lastEntry;
+      const completedAt = completionEntry ? completionEntry.createdAt : (t.createdAt || now);
+      const daysAgo = Math.floor((now - completedAt) / 86400000);
+      completedAgo = daysAgo <= 0 ? 'Today' : daysAgo === 1 ? '1 day ago' : daysAgo < 14 ? daysAgo + ' days ago' : Math.round(daysAgo / 7) + ' weeks ago';
+      phase = daysAgo <= 14 ? 'Completed recently' : 'Completed long ago';
+    } else if (status === 'deprioritized') {
+      phase = 'Stepped down';
+    }
+
     return {
       title:    t.title || 'Untitled',
       owner:    owners.length ? owners.map(o => ownerLabel(o)).join(', ') : 'Unassigned',
       dept:     owners.map(o => o.dept).filter(Boolean).join(', '),
       deadline: t.deadline ? formatDate(t.deadline) : '',
-      status:   resolveTaskStatus(t),
+      status:   status,
       notes:    t.notes || '',
+      phase:    phase,
+      completedAgo: completedAgo,
+      lastActivity: lastEntry ? lastEntry.text : '',
     };
   });
 
@@ -6170,6 +6223,59 @@ window.addTaskToProduct = async (productId) => {
    Quick Update history caps at), what it's waiting on and what's
    waiting on it, and a straight line into editing it. This is the
    "click a task, see everything about it" view. */
+/* ══ STAT TILE → DEPARTMENT BREAKDOWN ═════════════════════════
+   Each of the four tiles at the top of a project's dashboard opens
+   this instead of just being a number — a real per-department chart
+   for that specific metric, not a generic "scroll to the list below". */
+window.showStatBreakdown = (productId, metric) => {
+  ensureProductModal();
+  const prod = productListCache[productId];
+  if (!prod) return;
+  const tasks = getProductTasks(prod).filter(t => canViewTask(t, prod));
+
+  const METRIC_META = {
+    progress:    { title: 'Progress by department',            match: t => resolveTaskStatus(t, prod) === 'complete' },
+    complete:    { title: 'Completed tasks by department',      match: t => resolveTaskStatus(t, prod) === 'complete' },
+    ontrack:     { title: 'On-track tasks by department',       match: t => ['on-track', 'due-soon'].includes(resolveTaskStatus(t, prod)) },
+    needsaction: { title: 'Tasks needing action, by department', match: t => ['overdue', 'delayed', 'blocked'].includes(resolveTaskStatus(t, prod)) },
+  };
+  const meta = METRIC_META[metric] || METRIC_META.complete;
+
+  const byDept = {};
+  tasks.forEach(t => {
+    const owners = (t.owners && t.owners.length) ? t.owners : [{ dept: t.ownerDept || '' }];
+    const seen = [];
+    owners.forEach(o => {
+      const key = o.dept || 'Unassigned';
+      if (seen.includes(key)) return;
+      seen.push(key);
+      if (!byDept[key]) byDept[key] = { total: 0, matched: 0 };
+      byDept[key].total++;
+      if (meta.match(t)) byDept[key].matched++;
+    });
+  });
+
+  const rows = Object.entries(byDept)
+    .filter(([, d]) => d.matched > 0)
+    .sort((a, b) => b[1].matched - a[1].matched);
+  const maxMatched = Math.max(1, ...rows.map(([, d]) => d.matched));
+
+  document.getElementById('modal-title-text').textContent = meta.title;
+  document.getElementById('modal-body-content').innerHTML =
+    (rows.length === 0
+      ? '<div style="font-size:12px;color:var(--text-muted);padding:20px 0;text-align:center;">No tasks match this for any department.</div>'
+      : rows.map(([dept, d]) => {
+          const barPct = Math.round((d.matched / maxMatched) * 100);
+          return '<div style="margin-bottom:14px;">' +
+            '<div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:4px;"><strong style="color:var(--text);">' + dept + '</strong><span style="color:var(--text-muted);">' + d.matched + ' of ' + d.total + ' tasks</span></div>' +
+            '<div style="height:8px;background:var(--bg);border-radius:4px;overflow:hidden;"><div style="height:8px;width:' + barPct + '%;background:var(--red);border-radius:4px;"></div></div>' +
+          '</div>';
+        }).join('')
+    ) +
+    '<div class="form-actions" style="margin-top:8px;"><button class="btn-outline" onclick="closeProductModal()">Close</button></div>';
+  document.getElementById('create-product-modal').style.display = 'flex';
+};
+
 window.showTaskDetailPanel = (productId, taskId) => {
   ensureProductModal();
   const prod = productListCache[productId];
@@ -8515,10 +8621,17 @@ function renderTrackerTable(prod, filter) {
   }
 }
 
-window.updatePillarStatus = async (productId, taskId, newStatus) => {
+window.updatePillarStatus = async (productId, taskId, newStatus, _isUndo) => {
   try {
     const prod  = trackerProductsCache[productId] || productListCache[productId];
     const tasks = getProductTasks(prod);
+
+    // Captured before anything changes, so Ctrl+Z has something to
+    // restore to. Skipped when THIS call is itself an undo — otherwise
+    // every undo would push its own reversal onto the stack and Ctrl+Z
+    // would just toggle back and forth instead of walking back in time.
+    const taskBeforeChange = tasks.find(t => t.id === taskId);
+    const oldStatus = taskBeforeChange ? (taskBeforeChange.status || taskBeforeChange.taskStatus || 'on-track') : null;
 
     // Enforce blocking: can't complete if a predecessor is incomplete
     if (newStatus === 'complete') {
@@ -8594,6 +8707,12 @@ window.updatePillarStatus = async (productId, taskId, newStatus) => {
     
     // Check if product should now be locked
     await checkAndLockProduct(productId);
+
+    if (!_isUndo && oldStatus && oldStatus !== newStatus) {
+      window._statusUndoStack = window._statusUndoStack || [];
+      window._statusUndoStack.push({ productId, taskId, oldStatus, newStatus, taskTitle: taskBeforeChange?.title || taskBeforeChange?.name || 'Task' });
+      if (window._statusUndoStack.length > 20) window._statusUndoStack.shift();
+    }
 
     // ── PROPAGATE: sync the status change into every cache so all views stay in lockstep ──
     propagateStatusChange(productId, taskId, newStatus);
@@ -9651,6 +9770,16 @@ function renderSettings(el) {
       </div>
     </div>
 
+    <div class="panel" style="margin-bottom:16px;">
+      <div class="panel-header"><span class="panel-title">Privacy lock</span></div>
+      <div class="panel-body">
+        <p style="font-size:12px;color:var(--text-mid);line-height:1.7;margin-bottom:14px;">
+          Your personal to-do and actions are already private at the database level — no one else can read them, department or not. This adds a second layer for a different risk: someone using your computer while you're still signed in. When on, opening My Actions &amp; To-do asks for a PIN first, once per browser session.
+        </p>
+        <div id="privacy-lock-status"><div class="loading-row" style="padding:4px 0;">Loading...</div></div>
+      </div>
+    </div>
+
     ${currentRole === 'admin' ? `
     <div class="panel" style="margin-bottom:16px;" id="access-requests-panel">
       <div class="panel-header">
@@ -9716,8 +9845,132 @@ function renderSettings(el) {
       </div>
     </div>` : ''}`;
 
+  loadPrivacyLockStatus();
   if (currentRole === 'admin') { loadAllowlist(); setTimeout(renderTeamSection, 100); loadOrgContext(); loadAccessRequests(); }
 }
+
+/* ══ PRIVACY LOCK — a screen lock on top of already-private data ══
+   Stored nested under standaloneTasks/{userKey}, which Firebase rules
+   already restrict to that exact user's own auth token — same trick
+   used for the weekly performance log, so this needs no new rules and
+   inherits the identical guarantee. Unlocking is per BROWSER SESSION
+   (an in-memory flag, never persisted), so a fresh sign-in or a new
+   tab always asks again — that's the actual threat this defends
+   against: someone else at your already-signed-in computer, not a
+   remote attacker who'd be stopped by the database rules regardless. */
+function privacyLockRef() { return standaloneRef() + '/_privacyLock'; }
+
+async function loadPrivacyLockStatus() {
+  const el = document.getElementById('privacy-lock-status');
+  if (!el) return;
+  try {
+    const snap = await get(ref(db, privacyLockRef()));
+    const lock = snap.exists() ? snap.val() : null;
+    if (lock && lock.hash) {
+      el.innerHTML =
+        '<div style="display:flex;align-items:center;justify-content:space-between;">' +
+          '<span style="font-size:13px;color:var(--green);font-weight:600;">&#10003; Lock is on</span>' +
+          '<div style="display:flex;gap:8px;">' +
+            '<button class="btn-outline" style="font-size:11px;padding:6px 12px;" onclick="showSetPrivacyPin(true)">Change PIN</button>' +
+            '<button class="btn-danger-sm" onclick="removePrivacyLockPin()">Turn off</button>' +
+          '</div>' +
+        '</div>';
+    } else {
+      el.innerHTML =
+        '<div style="display:flex;align-items:center;justify-content:space-between;">' +
+          '<span style="font-size:13px;color:var(--text-muted);">Not set</span>' +
+          '<button class="btn-primary" style="font-size:11px;padding:6px 14px;" onclick="showSetPrivacyPin(false)">Set a PIN</button>' +
+        '</div>';
+    }
+  } catch(e) {
+    el.innerHTML = '<div style="font-size:12px;color:var(--text-muted);">Could not load lock status.</div>';
+  }
+}
+
+window.showSetPrivacyPin = (isChange) => {
+  ensureProductModal();
+  document.getElementById('modal-title-text').textContent = isChange ? 'Change your PIN' : 'Set a PIN';
+  document.getElementById('modal-body-content').innerHTML =
+    '<div class="form-row"><label class="form-label">4–6 digit PIN</label>' +
+      '<input type="password" inputmode="numeric" id="pl-pin1" class="input-field" maxlength="6" placeholder="••••"/></div>' +
+    '<div class="form-row"><label class="form-label">Confirm PIN</label>' +
+      '<input type="password" inputmode="numeric" id="pl-pin2" class="input-field" maxlength="6" placeholder="••••"/></div>' +
+    '<div class="form-actions">' +
+      '<button class="btn-outline" onclick="closeProductModal()">Cancel</button>' +
+      '<button class="btn-primary" onclick="saveSetPrivacyPin()">Save</button>' +
+    '</div>';
+  document.getElementById('create-product-modal').style.display = 'flex';
+};
+
+window.saveSetPrivacyPin = async () => {
+  const pin1 = document.getElementById('pl-pin1')?.value || '';
+  const pin2 = document.getElementById('pl-pin2')?.value || '';
+  if (!/^\d{4,6}$/.test(pin1)) { showToast('PIN must be 4–6 digits.', 'error'); return; }
+  if (pin1 !== pin2) { showToast('PINs do not match.', 'error'); return; }
+  const hash = await sha256(pin1);
+  await set(ref(db, privacyLockRef()), { hash, updatedAt: Date.now() });
+  window._privacyUnlockedViews = window._privacyUnlockedViews || {};
+  window._privacyUnlockedViews['myactions'] = true; // no need to immediately re-lock the page you just set this from
+  closeProductModal();
+  showToast('PIN set. My Actions & To-do is now locked for anyone else on this browser.', 'success');
+  loadPrivacyLockStatus();
+};
+
+window.removePrivacyLockPin = async () => {
+  if (!confirm('Turn off the privacy lock? My Actions & To-do will open without a PIN.')) return;
+  await set(ref(db, privacyLockRef()), null);
+  showToast('Privacy lock turned off.', 'success');
+  loadPrivacyLockStatus();
+};
+
+// Called at the top of any view that opts in (currently My Actions &
+// To-do). Returns true if the view should render normally; false means
+// it showed the PIN prompt instead and the caller should stop.
+async function checkViewLock(viewName) {
+  window._privacyUnlockedViews = window._privacyUnlockedViews || {};
+  if (window._privacyUnlockedViews[viewName]) return true;
+  try {
+    const snap = await get(ref(db, privacyLockRef()));
+    const lock = snap.exists() ? snap.val() : null;
+    if (!lock || !lock.hash) { window._privacyUnlockedViews[viewName] = true; return true; }
+    showPrivacyUnlockScreen(viewName, lock.hash);
+    return false;
+  } catch(e) {
+    return true; // fail open — a Firebase hiccup should never permanently lock someone out of their own tasks
+  }
+}
+
+function showPrivacyUnlockScreen(viewName, expectedHash) {
+  const target = document.getElementById('main-content');
+  if (!target) return;
+  target.innerHTML =
+    '<div style="max-width:340px;margin:80px auto;text-align:center;">' +
+      '<div style="width:52px;height:52px;border-radius:50%;background:var(--bg);display:flex;align-items:center;justify-content:center;margin:0 auto 16px;">' +
+        '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="var(--text-mid)" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg>' +
+      '</div>' +
+      '<div style="font-size:15px;font-weight:700;color:var(--text);margin-bottom:6px;">This is locked</div>' +
+      '<div style="font-size:12px;color:var(--text-muted);margin-bottom:18px;">Enter your PIN to continue.</div>' +
+      '<input type="password" inputmode="numeric" id="pl-unlock-input" class="input-field" maxlength="6" style="text-align:center;letter-spacing:.3em;font-size:18px;width:160px;margin:0 auto 12px;display:block;" ' +
+        'onkeydown="if(event.key===\'Enter\') submitPrivacyUnlock(\'' + viewName + '\',\'' + expectedHash + '\')" autofocus/>' +
+      '<div id="pl-unlock-error" style="display:none;color:var(--red);font-size:11px;margin-bottom:12px;">Incorrect PIN.</div>' +
+      '<button class="btn-primary" onclick="submitPrivacyUnlock(\'' + viewName + '\',\'' + expectedHash + '\')">Unlock</button>' +
+    '</div>';
+  document.getElementById('pl-unlock-input')?.focus();
+}
+
+window.submitPrivacyUnlock = async (viewName, expectedHash) => {
+  const input = document.getElementById('pl-unlock-input');
+  const hash = await sha256(input?.value || '');
+  if (hash === expectedHash) {
+    window._privacyUnlockedViews = window._privacyUnlockedViews || {};
+    window._privacyUnlockedViews[viewName] = true;
+    loadView(viewName);
+  } else {
+    const err = document.getElementById('pl-unlock-error');
+    if (err) err.style.display = 'block';
+    if (input) { input.value = ''; input.focus(); }
+  }
+};
 
 async function loadOrgContext() {
   try {
