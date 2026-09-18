@@ -305,6 +305,26 @@ async function sha256(message) {
 window.showSAChallenge = () => {
   if (!currentUser) { showToast('Sign in with your Mixta account first.', 'error'); return; }
 
+  // The password used to be a build-time-only secret with no way to
+  // change or reset it short of redeploying the whole app. It's now
+  // checked against config/superAdminAuth/hash first (changeable from
+  // inside Circuit Box, resettable by email below), falling back to the
+  // original hardcoded hash only if that's never been set.
+  get(ref(db, 'config/superAdminAuth/hash')).then(snap => {
+    window._saHashOverride = snap.exists() ? snap.val() : null;
+  }).catch(() => { window._saHashOverride = null; });
+
+  window.toggleSAPasswordVisibility = () => {
+    const input = document.getElementById('sa-password-input');
+    const btn = document.getElementById('sa-pw-toggle');
+    if (!input) return;
+    const showing = input.type === 'text';
+    input.type = showing ? 'password' : 'text';
+    if (btn) btn.innerHTML = showing
+      ? '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>'
+      : '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17.94 17.94A10.94 10.94 0 0112 20c-7 0-11-8-11-8a19.86 19.86 0 015.06-6.06M9.9 4.24A10.5 10.5 0 0112 4c7 0 11 8 11 8a19.8 19.8 0 01-3.22 4.44M14.12 14.12a3 3 0 11-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>';
+  };
+
   // Use a dedicated SA modal — does not depend on the product modal being in the DOM
   let modal = document.getElementById('sa-modal');
   if (!modal) {
@@ -323,11 +343,20 @@ window.showSAChallenge = () => {
             Enter the super admin password to access the circuit box.<br/>
             Session expires after 30 minutes.
           </p>
-          <input type="password" id="sa-password-input" class="input-field"
-            placeholder="Password"
-            onkeydown="if(event.key==='Enter') verifySAPassword()"
-            style="width:100%;text-align:center;letter-spacing:.15em;font-size:16px;margin-bottom:8px;"/>
+          <div style="position:relative;margin-bottom:8px;">
+            <input type="password" id="sa-password-input" class="input-field"
+              placeholder="Password"
+              onkeydown="if(event.key==='Enter') verifySAPassword()"
+              style="width:100%;text-align:center;letter-spacing:.15em;font-size:16px;padding-right:38px;"/>
+            <button type="button" onclick="toggleSAPasswordVisibility()" id="sa-pw-toggle"
+              style="position:absolute;right:8px;top:50%;transform:translateY(-50%);background:none;border:none;cursor:pointer;color:var(--text-muted);padding:4px;display:flex;">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+            </button>
+          </div>
           <div id="sa-error" style="display:none;color:#C0282D;font-size:12px;text-align:center;margin-bottom:12px;"></div>
+          <div style="text-align:center;margin-bottom:12px;">
+            <a href="#" onclick="requestSAPasswordReset();return false;" style="font-size:11px;color:var(--text-muted);text-decoration:underline;">Forgot password?</a>
+          </div>
           <div style="display:flex;gap:10px;justify-content:flex-end;">
             <button class="btn-outline" onclick="closeSAModal()">Cancel</button>
             <button class="btn-primary" onclick="verifySAPassword()">Enter</button>
@@ -369,7 +398,7 @@ window.verifySAPassword = async () => {
 
   const hash = await sha256(input);
 
-  if (hash === SA_PASSWORD_HASH) {
+  if (hash === (window._saHashOverride || SA_PASSWORD_HASH)) {
     isSuperAdmin   = true;
     saSessionStart = Date.now();
 
@@ -414,6 +443,104 @@ window.verifySAPassword = async () => {
     const pwInput = document.getElementById('sa-password-input');
     if (pwInput) { pwInput.value = ''; pwInput.focus(); }
   }
+};
+
+window.changeSAPasswordFromConfig = async () => {
+  const pw1 = document.getElementById('cfg-sa-newpw')?.value || '';
+  const pw2 = document.getElementById('cfg-sa-confirmpw')?.value || '';
+  if (pw1.length < 6) { showToast('Password must be at least 6 characters.', 'error'); return; }
+  if (pw1 !== pw2) { showToast('Passwords do not match.', 'error'); return; }
+  const newHash = await sha256(pw1);
+  await set(ref(db, 'config/superAdminAuth/hash'), newHash);
+  window._saHashOverride = newHash;
+  document.getElementById('cfg-sa-newpw').value = '';
+  document.getElementById('cfg-sa-confirmpw').value = '';
+  showToast('Circuit Box password updated.', 'success');
+};
+
+window.requestSAPasswordReset = async () => {
+  if (currentRole !== 'admin') {
+    showToast('Only an admin can request a Circuit Box password reset.', 'error');
+    return;
+  }
+  if (!confirm('Send a password reset link to ' + currentUser.email + '?')) return;
+  try {
+    const res = await callGAS('sendSAPasswordReset', {
+      email: currentUser.email,
+      name: currentPreferredName || currentUser.displayName || currentUser.email.split('@')[0],
+    });
+    if (res && res.ok) {
+      showToast('Reset link sent to ' + currentUser.email + '. Check your inbox.', 'success');
+    } else {
+      showToast(res?.error || 'Could not send reset link.', 'error');
+    }
+  } catch(e) {
+    showToast('Could not send reset link: ' + e.message, 'error');
+  }
+};
+
+// The page the reset EMAIL link lands on — verifies the token against
+// Firebase (issued and expiry-checked server-side) before letting anyone
+// set a new password. This is the ONLY other place besides Circuit
+// Box's own "Change password" that can write config/superAdminAuth/hash.
+window.showSAPasswordResetForm = async (token) => {
+  if (!currentUser) {
+    showToast('Sign in first, then reopen the reset link from your email.', 'error');
+    return;
+  }
+  let tokenData = null;
+  try {
+    const snap = await get(ref(db, 'config/superAdminAuth/resetToken'));
+    tokenData = snap.exists() ? snap.val() : null;
+  } catch(e) {}
+
+  if (!tokenData || tokenData.token !== token || tokenData.expiresAt < Date.now()) {
+    showToast('This reset link is invalid or has expired. Request a new one.', 'error');
+    return;
+  }
+  if (tokenData.email !== currentUser.email) {
+    showToast('This reset link was issued to a different account.', 'error');
+    return;
+  }
+
+  let modal = document.getElementById('sa-modal');
+  if (!modal) {
+    modal = document.createElement('div');
+    modal.id = 'sa-modal';
+    modal.className = 'modal-overlay';
+    modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.45);display:flex;align-items:center;justify-content:center;z-index:2000;padding:20px;';
+    document.body.appendChild(modal);
+  }
+  modal.innerHTML = `
+    <div style="background:#fff;border-radius:12px;width:100%;max-width:400px;overflow:hidden;box-shadow:0 8px 40px rgba(0,0,0,0.2);">
+      <div style="background:#C0282D;padding:20px 24px;">
+        <div style="color:white;font-size:11px;letter-spacing:.1em;text-transform:uppercase;margin-bottom:2px;">Mixta Africa NPD Hub</div>
+        <div style="color:white;font-size:18px;font-weight:700;">Set a new Circuit Box password</div>
+      </div>
+      <div style="padding:24px;">
+        <input type="password" id="sa-reset-new" class="input-field" placeholder="New password" style="width:100%;margin-bottom:10px;"/>
+        <input type="password" id="sa-reset-confirm" class="input-field" placeholder="Confirm new password" style="width:100%;margin-bottom:14px;"/>
+        <div style="display:flex;gap:10px;justify-content:flex-end;">
+          <button class="btn-outline" onclick="closeSAModal()">Cancel</button>
+          <button class="btn-primary" onclick="submitSAPasswordReset('${token}')">Set password</button>
+        </div>
+      </div>
+    </div>`;
+  modal.style.display = 'flex';
+};
+
+window.submitSAPasswordReset = async (token) => {
+  const pw1 = document.getElementById('sa-reset-new')?.value || '';
+  const pw2 = document.getElementById('sa-reset-confirm')?.value || '';
+  if (pw1.length < 6) { showToast('Password must be at least 6 characters.', 'error'); return; }
+  if (pw1 !== pw2) { showToast('Passwords do not match.', 'error'); return; }
+
+  const newHash = await sha256(pw1);
+  await set(ref(db, 'config/superAdminAuth/hash'), newHash);
+  await set(ref(db, 'config/superAdminAuth/resetToken'), null); // one-time use
+  window._saHashOverride = newHash;
+  closeSAModal();
+  showToast('Circuit Box password updated. Use it next time you sign in.', 'success');
 };
 
 window.exitSASession = () => {
@@ -742,6 +869,12 @@ function routeFromDeepLink() {
   let target = 'dashboard';
   try {
     const q = new URLSearchParams(window.location.search);
+    const saResetToken = q.get('saReset');
+    if (saResetToken) {
+      window.history.replaceState({}, '', window.location.pathname);
+      showSAPasswordResetForm(saResetToken);
+      return;
+    }
     const productId = q.get('p');
     const taskId    = q.get('t');
     const view      = q.get('view');
@@ -1483,6 +1616,7 @@ function getTaskEffectiveStatus(task, prod) {
   if (s === 'complete') return 'complete';
   if (s === 'delayed')  return 'delayed';
   if (s === 'in-progress') return 'in-progress';
+  if (s === 'deprioritized') return 'deprioritized';
 
   // FAST BLOCKED CHECK: direct O(1) lookups into the raw task/pillar
   // dictionaries — NOT getProductTasks(prod), which rebuilds and re-sorts
@@ -1520,6 +1654,7 @@ const STATUS_META = {
   'blocked':     { label: 'Blocked',     color: '#D97706',      cls: 'st-blocked'   },
   'on-track':    { label: 'On track',    color: 'var(--green)', cls: 'st-on-track'  },
   'in-progress': { label: 'In Progress', color: '#2563EB',      cls: 'st-in-progress'},
+  'deprioritized': { label: 'Stepped down', color: '#6B7280',   cls: 'st-deprioritized' },
 };
 function statusMeta(task, prod) { return STATUS_META[resolveTaskStatus(task, prod)] || STATUS_META['on-track']; }
 
@@ -5968,9 +6103,8 @@ window.addTaskToProduct = async (productId) => {
   window._atInsertAfter = null;
   window._atOwners = [];
 
-  closeProductModal();
   await logActivity(productId, 'task_added', 'New task added: ' + title,
-    'Owners: ' + (owners.map(o => ownerLabel(o)).join(', ') || 'Unassigned'));
+    'Owners: ' + (owners.map(o => ownerLabel(o)).join(', ') || 'Unassigned'), taskId);
   // Keep the live sheet current if this item already has one
   pushSheetIfLinked(productId);
 
@@ -5995,6 +6129,11 @@ window.addTaskToProduct = async (productId) => {
 
   showToast('Task added.' + (notify.length ? ' ' + notify.length + ' person notified.' : ''), 'success');
   if (currentView === 'tracker') renderTrackerTable(productListCache[productId], null);
+  // Land back on the Tasks tab with the new task highlighted, rather than
+  // wherever this was opened from — adding several tasks in a row used to
+  // mean closing the modal, going back to the product list, reopening it,
+  // and scrolling back down every single time.
+  viewProduct(productId, taskId);
 };
 
 /* ══ EDIT TASK — with a real, permanent changelog ═════════════
@@ -6940,6 +7079,7 @@ function buildPillarDetail(p) {
       : (meta.cls === 'overdue' || meta.cls === 'delayed') ? 'overdue'
       : meta.cls === 'due-soon' ? 'due-soon'
       : meta.cls === 'complete' ? 'complete'
+      : meta.cls === 'deprioritized' ? 'deprioritized'
       : 'on-track';
 
     const rowDeptAttr = String(task.ownerDept || '').replace(/"/g, '&quot;');
@@ -6966,9 +7106,9 @@ function buildPillarDetail(p) {
   // Group into sections — Blocked and Overdue need eyes on them first;
   // Complete needs almost none. Order/labels/pill colours match the same
   // language used in My Actions & To-do elsewhere in the app.
-  const GROUP_ORDER  = ['blocked', 'overdue', 'due-soon', 'on-track', 'complete'];
-  const GROUP_LABEL  = { blocked: 'Blocked', overdue: 'Overdue', 'due-soon': 'Due soon', 'on-track': 'On track', complete: 'Complete' };
-  const GROUP_PILL   = { blocked: 'pcf-pill-amber', overdue: 'pcf-pill-red', 'due-soon': 'pcf-pill-amber', 'on-track': 'pcf-pill-green', complete: 'pcf-pill-blue' };
+  const GROUP_ORDER  = ['blocked', 'overdue', 'due-soon', 'on-track', 'deprioritized', 'complete'];
+  const GROUP_LABEL  = { blocked: 'Blocked', overdue: 'Overdue', 'due-soon': 'Due soon', 'on-track': 'On track', deprioritized: 'Stepped down', complete: 'Complete' };
+  const GROUP_PILL   = { blocked: 'pcf-pill-amber', overdue: 'pcf-pill-red', 'due-soon': 'pcf-pill-amber', 'on-track': 'pcf-pill-green', deprioritized: 'pcf-pill-grey', complete: 'pcf-pill-blue' };
   const grouped = {};
   rows.forEach(r => { (grouped[r.groupKey] = grouped[r.groupKey] || []).push(r.html); });
 
@@ -7015,7 +7155,8 @@ function buildPillarDetail(p) {
   const addTaskBtn = canEdit(p)
     ? '<button class="btn-outline" style="font-size:12px;" onclick="showAddTaskToProduct(\'' + p.id + '\')">+ Add task</button>'
     : '';
-  return filterBarHtml + '<div class="pillar-detail-list" id="pillar-detail-list-' + p.id + '">' + rowsHtml + '</div>' +
+  return (addTaskBtn ? '<div style="display:flex;justify-content:flex-end;margin-bottom:10px;">' + addTaskBtn + '</div>' : '') +
+    filterBarHtml + '<div class="pillar-detail-list" id="pillar-detail-list-' + p.id + '">' + rowsHtml + '</div>' +
     '<div id="modal-reassign-panel" style="padding:0;"></div>' +
     '<div class="form-actions">' + addTaskBtn + editBtn + '<button class="btn-outline" onclick="closeProductModal()">Close</button></div>';
 }
@@ -7287,7 +7428,7 @@ window.confirmReassign = async (productId, taskId) => {
   const commentText = 'Task reassigned from ' + prevLabel + ' to ' + toName +
     (dept ? ' (' + dept + ')' : '') + (reason ? ' — ' + reason : '') +
     '. By ' + (currentPreferredName || currentUser.displayName || currentUser.email) + '.';
-  await set(ref(db, 'products/' + productId + '/comments/' + commentId), {
+  await set(ref(db, 'productComments/' + productId + '/' + commentId), {
     id: commentId, text: commentText,
     userEmail: currentUser.email,
     userName: currentPreferredName || currentUser.displayName || currentUser.email.split('@')[0],
@@ -8695,7 +8836,7 @@ function renderDocFolder(folder, prod) {
       ondragleave="docDragLeave('${folder.id}')"
       ondrop="docDrop(event,'${prod.id}','${folder.id}')">
       <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="color:var(--text-muted)"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
-      <span class="doc-upload-label">Drag file here or <label class="doc-upload-click">browse<input type="file" style="display:none;" onchange="docFileSelected(event,'${prod.id}','${folder.id}')"/></label></span>
+      <span class="doc-upload-label">Drag files here or <label class="doc-upload-click">browse<input type="file" multiple style="display:none;" onchange="docFileSelected(event,'${prod.id}','${folder.id}')"/></label></span>
     </div>` : '';
 
   return `
@@ -8723,13 +8864,27 @@ window.docDragLeave = (folderId) => {
 window.docDrop = (e, productId, folderId) => {
   e.preventDefault();
   document.getElementById(`zone-${folderId}`)?.classList.remove('drag-over');
-  const file = e.dataTransfer.files[0];
-  if (file) uploadDocFile(file, productId, folderId);
+  uploadDocFiles(Array.from(e.dataTransfer.files || []), productId, folderId);
 };
 window.docFileSelected = (e, productId, folderId) => {
-  const file = e.target.files[0];
-  if (file) uploadDocFile(file, productId, folderId);
+  uploadDocFiles(Array.from(e.target.files || []), productId, folderId);
+  e.target.value = ''; // so picking the same file(s) again still fires onchange
 };
+
+// Sequential, not parallel — several base64-encoded uploads hitting the
+// Apps Script backend at once risks rate-limiting or a partial/confusing
+// failure state. One at a time, with the count visible, is slower but
+// predictable — and this is a rare bulk action, not a hot path.
+async function uploadDocFiles(files, productId, folderId) {
+  if (!files || files.length === 0) return;
+  const uploadingEl = document.getElementById(`uploading-${folderId}`);
+  for (let i = 0; i < files.length; i++) {
+    if (uploadingEl && files.length > 1) {
+      uploadingEl.querySelector('span:last-child') && (uploadingEl.querySelector('span:last-child').textContent = ' Uploading ' + (i + 1) + ' of ' + files.length + '...');
+    }
+    await uploadDocFile(files[i], productId, folderId);
+  }
+}
 
 async function uploadDocFile(file, productId, folderId) {
   const uploadingEl = document.getElementById(`uploading-${folderId}`);
@@ -10568,6 +10723,22 @@ async function renderSAConfig(el) {
       </div>
     </div>
 
+    <div class="panel" style="margin-bottom:14px;">
+      <div class="panel-header"><span class="panel-title">Circuit Box password</span></div>
+      <div class="panel-body">
+        <p style="font-size:12px;color:var(--text-mid);margin-bottom:14px;line-height:1.6;">
+          This used to be a build-time secret with no way to change it short of redeploying the app. It now lives in Firebase — changeable here, or via "Forgot password?" on the login screen, which emails a one-time reset link to whichever admin requests it.
+        </p>
+        <div class="form-row"><label class="form-label">New password</label>
+          <input type="password" id="cfg-sa-newpw" class="input-field" style="max-width:280px;"/></div>
+        <div class="form-row"><label class="form-label">Confirm new password</label>
+          <input type="password" id="cfg-sa-confirmpw" class="input-field" style="max-width:280px;"/></div>
+        <div class="form-actions">
+          <button class="btn-primary" onclick="changeSAPasswordFromConfig()">Update password</button>
+        </div>
+      </div>
+    </div>
+
     <div class="panel">
       <div class="panel-header"><span class="panel-title">Danger zone</span></div>
       <div class="panel-body">
@@ -11881,7 +12052,21 @@ window.showProductActivity = async (productId) => {
 
   const snap     = await get(ref(db, `products/${productId}/activity`));
   const activity = snap.val() || {};
+  const userKey  = sanitiseEmail(currentUser.email);
+  const isOwnerOrAdmin = currentRole === 'admin' || isSuperAdmin || prod.ownerId === userKey;
+  // Same rule as the email log and Comments tab: being able to open this
+  // product is not being able to see everything that ever happened in
+  // it. A task-scoped event needs real access to that specific task;
+  // anything without a taskId (handover, baseline, product-level edits)
+  // is owner/admin only, same bar as Comments.
   const events   = Object.values(activity)
+    .filter(e => {
+      if (e.taskId) {
+        const task = (prod.tasks && prod.tasks[e.taskId]) || (prod.pillars && prod.pillars[e.taskId]);
+        return task ? canViewTask(task, prod) : isOwnerOrAdmin;
+      }
+      return isOwnerOrAdmin;
+    })
     .sort((a, b) => b.timestamp - a.timestamp)
     .slice(0, 100);
 
@@ -12583,6 +12768,7 @@ window.openStatusDropdown = (productId, taskId, badgeEl) => {
   const options = [
     { value: 'on-track', label: 'On Track', color: 'var(--green)' },
     { value: 'delayed',  label: 'Delayed',  color: 'var(--amber)' },
+    { value: 'deprioritized', label: 'Stepped down', color: '#6B7280' },
     { value: 'complete', label: 'Complete', color: 'var(--blue)'  },
   ];
 
