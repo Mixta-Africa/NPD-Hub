@@ -1,0 +1,9 @@
+# Cloudflare Pages: make browsers re-check these files on every load (a fast "has it changed?"
+# check, not a full re-download). Without this, a phone can keep showing an old version of a
+# file after you deploy. GitHub Pages ignores this file.
+/index.html
+  Cache-Control: no-cache
+/js/*
+  Cache-Control: no-cache
+/css/*
+  Cache-Control: no-cache
