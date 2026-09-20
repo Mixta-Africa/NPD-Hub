@@ -1,0 +1,90 @@
+/* css/07-tracker-gantt.css — Stat cards, tracker status system, progress summary, Gantt. Load order matters: files are cut from one stylesheet, in cascade order. */
+/* ─── INTERACTIVE STAT CARDS ─── */
+.stat-card-link { cursor: pointer; position: relative; }
+
+/* ─── TRACKER: 3-BUTTON STATUS SYSTEM ─── */
+.status-btn-group { display:flex; gap:4px; flex-wrap:nowrap; }
+.status-btn {
+  font-size:11px; font-weight:600; padding:5px 10px; border-radius:6px;
+  border:1.5px solid transparent; cursor:pointer; background:none;
+  font-family:'Poppins',sans-serif; transition:all .15s; white-space:nowrap;
+  color:var(--text-muted); border-color:var(--border-mid);
+}
+.status-btn:hover { opacity:.8; }
+.status-btn-ontrack        { color:var(--green);  border-color:var(--green);  }
+.status-btn-ontrack.active { background:var(--green); color:white; border-color:var(--green); }
+.status-btn-delayed        { color:var(--red);    border-color:var(--red);    }
+.status-btn-delayed.active { background:var(--red);   color:white; border-color:var(--red);   }
+.status-btn-complete        { color:var(--blue);   border-color:var(--blue);   }
+.status-btn-complete.active { background:var(--blue);  color:white; border-color:var(--blue);  }
+
+/* ─── TRACKER: PROGRESS SUMMARY ─── */
+.tracker-summary-top  { display:flex; align-items:flex-start; justify-content:space-between; margin-bottom:10px; }
+.tracker-pct-badge    { font-size:28px; font-weight:700; color:var(--text); line-height:1; }
+.tracker-progress-wrap {
+  position:relative; height:8px; background:var(--border); border-radius:99px;
+  overflow:visible; margin-bottom:12px;
+}
+.tracker-progress-fill {
+  position:absolute; left:0; top:0; height:100%;
+  background:var(--green); border-radius:99px; transition:width .4s;
+}
+.tracker-progress-delayed {
+  position:absolute; top:0; height:100%;
+  background:var(--red); border-radius:99px; opacity:.7; transition:width .4s;
+}
+.tracker-stats-row    { display:flex; gap:16px; flex-wrap:wrap; }
+.tracker-stat         { font-size:12px; color:var(--text-mid); display:flex; align-items:center; gap:5px; }
+.tracker-stat-num     { font-weight:700; font-size:15px; }
+.tracker-stat-green .tracker-stat-num { color:var(--green); }
+.tracker-stat-blue  .tracker-stat-num { color:var(--blue);  }
+.tracker-stat-red   .tracker-stat-num { color:var(--red);   }
+.tracker-stat-grey  .tracker-stat-num { color:var(--text-muted); }
+
+/* ─── CALENDAR: VIEW TOGGLE ─── */
+.cal-view-toggle { display:flex; border:1px solid var(--border-mid); border-radius:8px; overflow:hidden; }
+.cal-view-btn    { padding:6px 14px; font-size:12px; font-weight:500; background:none; border:none; cursor:pointer; color:var(--text-mid); font-family:'Poppins',sans-serif; transition:background .12s; }
+.cal-view-btn:hover  { background:var(--bg); }
+.cal-view-btn.active { background:var(--red); color:white; }
+
+/* ─── GANTT CHART ─── */
+.gantt-header   { display:flex; margin-bottom:4px; }
+.gantt-label-col { width:160px; flex-shrink:0; }
+.gantt-months   { flex:1; display:flex; }
+.gantt-month-hdr { font-size:11px; font-weight:600; color:var(--text-muted); text-transform:uppercase; letter-spacing:.05em; padding:4px 6px; border-left:1px solid var(--border); }
+
+.gantt-row    { display:flex; align-items:center; margin-bottom:10px; }
+.gantt-label  { width:160px; flex-shrink:0; font-size:12px; font-weight:500; color:var(--text); padding-right:12px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.gantt-track  { flex:1; position:relative; height:28px; background:var(--bg); border-radius:4px; border:1px solid var(--border); }
+
+.gantt-today-line {
+  position:absolute; top:0; bottom:0; left:0; width:2px;
+  background:var(--red); opacity:.4; z-index:1;
+}
+.gantt-line {
+  position:absolute; top:50%; height:3px; margin-top:-1.5px;
+  background:var(--border-mid); border-radius:99px; z-index:1;
+}
+.gantt-dot {
+  position:absolute; top:50%; transform:translate(-50%,-50%);
+  width:12px; height:12px; border-radius:50%; z-index:2; cursor:pointer;
+  transition:transform .15s;
+}
+.gantt-dot:hover { transform:translate(-50%,-50%) scale(1.5); z-index:10; }
+.gantt-dot-green  { background:var(--green); }
+.gantt-dot-amber  { background:var(--amber); }
+.gantt-dot-red    { background:var(--red);   }
+.gantt-dot-blue   { background:var(--blue);  }
+
+.gantt-tooltip {
+  display:none; position:absolute; bottom:calc(100% + 8px); left:50%;
+  transform:translateX(-50%); background:#1a1a18; color:white;
+  font-size:11px; padding:6px 10px; border-radius:6px; white-space:nowrap;
+  pointer-events:none; z-index:20; line-height:1.5;
+}
+.gantt-tooltip::after {
+  content:''; position:absolute; top:100%; left:50%; transform:translateX(-50%);
+  border:5px solid transparent; border-top-color:#1a1a18;
+}
+.gantt-dot:hover .gantt-tooltip { display:block; }
+

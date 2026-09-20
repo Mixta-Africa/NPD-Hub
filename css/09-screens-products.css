@@ -1,0 +1,146 @@
+/* css/09-screens-products.css — Login/denied screens, product cards, detail modal, settings page, picture picker. Load order matters: files are cut from one stylesheet, in cascade order. */
+/* ─── LOGIN & ACCESS DENIED SCREENS ─── */
+#screen-login, #screen-denied { display: flex; min-height: 100vh; align-items: center; justify-content: center; background: var(--bg); padding: 20px; }
+.login-card, .denied-card { background: var(--surface); border-radius: 12px; padding: 40px; width: 100%; max-width: 400px; text-align: center; box-shadow: 0 10px 40px rgba(0,0,0,0.1); margin: auto; }
+.login-logo { margin-bottom: 24px; }
+.login-logo-img { width: 64px; height: 64px; border-radius: 12px; object-fit: cover; margin-bottom: 12px; }
+.login-brand { font-size: 18px; font-weight: 700; color: var(--text); line-height: 1.2; }
+.login-sub { font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; margin-top: 4px; }
+.login-heading { font-size: 20px; font-weight: 600; margin-bottom: 8px; }
+.login-desc { font-size: 12px; color: var(--text-mid); margin-bottom: 24px; line-height: 1.6; }
+.login-notice { font-size: 10px; color: var(--text-muted); margin-top: 16px; }
+#sign-in-btn { width: 100%; padding: 12px; background: white; border: 1px solid var(--border-mid); border-radius: 8px; font-size: 13px; font-weight: 500; color: var(--text); display: flex; align-items: center; justify-content: center; gap: 10px; transition: background 0.2s; box-shadow: 0 1px 2px rgba(0,0,0,0.05); }
+#sign-in-btn:hover { background: var(--bg); }
+#login-error { display: none; color: var(--red); font-size: 12px; margin-top: 12px; background: var(--red-light); padding: 8px; border-radius: 6px; }
+
+/* ═══ PRODUCTS & PROJECTS — CARD REDESIGN ═══════════════════ */
+.pv-filter-row { display:flex; gap:8px; margin-bottom:16px; }
+.pv-filter { background:#fff; border:1px solid var(--border); border-radius:99px; padding:7px 16px; font-size:12px; font-weight:600; color:var(--text-mid); cursor:pointer; display:flex; align-items:center; gap:6px; transition:all 0.15s; font-family:'Poppins',sans-serif; }
+/* ═══ PRODUCT/TASK DETAIL MODAL — TAB BAR ═══════════════════
+   Was completely unstyled (raw <button> chrome) — this is the
+   underline-tab pattern for "which section of this thing am I
+   looking at", distinct from .pv-filter's pill style, which is
+   for filtering a list, not navigating between content sections. */
+.pdt-tabs { display:flex; gap:20px; border-bottom:1px solid var(--border); margin-bottom:16px; overflow-x:auto; }
+.pdt-tab { background:none; border:none; padding:10px 2px; font-size:12px; font-weight:600; color:var(--text-muted); cursor:pointer; border-bottom:2px solid transparent; transition:color .15s, border-color .15s; white-space:nowrap; font-family:'Poppins',sans-serif; }
+.pdt-tab:hover { color:var(--text-mid); }
+.pdt-tab.active { color:var(--red); border-bottom-color:var(--red); }
+
+/* Product/Project toggle in "Create new" — same unstyled-class problem */
+.type-toggle-btn { display:flex; align-items:center; gap:6px; padding:9px 18px; border:1px solid var(--border); border-radius:8px; background:#fff; color:var(--text-mid); font-size:12px; font-weight:600; cursor:pointer; font-family:'Poppins',sans-serif; transition:all .15s; }
+.type-toggle-btn:hover { border-color:var(--border-mid); }
+.type-toggle-btn.type-toggle-active { background:var(--red); border-color:var(--red); color:#fff; }
+.type-toggle-btn.type-toggle-active svg { stroke:#fff; }
+
+/* ═══ SETTINGS PAGE — "Your account" rows, role badges, allowlist/directory
+   lists ═══ These classes were referenced in markup but never had CSS at
+   all — same unstyled-class problem as several other spots this session. */
+.settings-row { display:flex; justify-content:space-between; align-items:center; padding:10px 0; border-bottom:1px solid var(--border); }
+.settings-row:last-of-type { border-bottom:none; }
+.settings-label { font-size:12px; color:var(--text-muted); font-weight:500; }
+.settings-value { font-size:13px; color:var(--text); font-weight:600; }
+.settings-hint { font-size:12px; color:var(--text-mid); line-height:1.6; margin-bottom:2px; }
+
+.role-badge { display:inline-block; font-size:10px; font-weight:700; padding:3px 10px; border-radius:99px; letter-spacing:.02em; white-space:nowrap; }
+.role-admin { background:#FEF2F2; color:#C0282D; }
+.role-viewer { background:#EFF6FF; color:#2563EB; }
+
+.allowlist-form { display:flex; gap:8px; margin-bottom:16px; flex-wrap:wrap; }
+.allowlist-form .input-field { flex:1; min-width:220px; }
+.allowlist-list { display:flex; flex-direction:column; }
+.allowlist-row { display:flex; align-items:center; gap:12px; padding:11px 0; border-bottom:1px solid var(--border); }
+.allowlist-row:last-child { border-bottom:none; }
+.allowlist-avatar { width:32px; height:32px; border-radius:50%; background:var(--bg); color:var(--text-mid); font-size:13px; font-weight:700; display:flex; align-items:center; justify-content:center; flex-shrink:0; }
+.allowlist-info { flex:1; min-width:0; }
+.allowlist-name { font-size:13px; font-weight:600; color:var(--text); }
+.allowlist-role-row { margin-top:3px; display:flex; align-items:center; }
+.pv-filter:hover { border-color:var(--border-mid); }
+.pv-filter.active { background:var(--red); border-color:var(--red); color:#fff; }
+.pv-filter .pv-count { font-size:10px; font-weight:700; background:rgba(0,0,0,0.06); color:var(--text-muted); padding:1px 7px; border-radius:99px; }
+.pv-filter.active .pv-count { background:rgba(255,255,255,0.25); color:#fff; }
+
+.product-grid { display:flex; flex-direction:column; gap:14px; }
+.product-card-full { background:#fff; border:1px solid var(--border); border-radius:12px; padding:20px; transition:box-shadow 0.15s, border-color 0.15s; box-shadow: var(--shadow-xs); }
+.product-card-full:hover { box-shadow:var(--shadow-md); border-color:var(--border-mid); }
+
+.pcf-header { display:flex; justify-content:space-between; align-items:flex-start; gap:16px; margin-bottom:16px; }
+.pcf-header-left { display:flex; align-items:flex-start; gap:12px; min-width:0; }
+.pcf-health-dot { width:10px; height:10px; border-radius:50%; margin-top:7px; flex-shrink:0; }
+.pcf-health-dot.pcf-health-green { background:var(--green); }
+.pcf-health-dot.pcf-health-red   { background:var(--red); }
+.pcf-health-dot.pcf-health-done  { background:var(--blue); }
+.pcf-name-row { display:flex; align-items:center; flex-wrap:wrap; gap:8px; row-gap:6px; }
+.pcf-name { font-size:16px; font-weight:700; color:#1A1A1A; letter-spacing:-0.2px; }
+.pcf-desc { font-size:12px; color:var(--text-muted); margin-top:6px; line-height:1.5; max-width:640px; }
+.pcf-header-right { display:flex; align-items:center; gap:10px; flex-shrink:0; }
+
+.pcf-pill { font-size:10px; font-weight:700; padding:3px 10px; border-radius:99px; letter-spacing:.02em; white-space:nowrap; }
+.pcf-pill-green { background:var(--green-light); color:var(--green); }
+.pcf-pill-red   { background:var(--red-light);   color:var(--red); }
+.pcf-pill-blue  { background:var(--blue-light);  color:var(--blue); }
+.pcf-pill-grey  { background:#F3F4F6; color:var(--text-mid); }
+.pcf-pill-amber { background:var(--amber-light); color:var(--amber); }
+
+.action-row-card { background:#fff; border:1px solid var(--border); border-radius:10px; padding:14px 16px; display:flex; align-items:flex-start; gap:14px; cursor:pointer; box-shadow:var(--shadow-xs); transition:box-shadow .15s, transform .15s, border-color .15s; }
+.action-row-card:hover { box-shadow:var(--shadow-sm); transform:translateY(-1px); border-color:var(--border-mid); }
+.action-owner-chip { display:flex; align-items:center; gap:5px; font-size:10px; color:var(--text-muted); font-weight:600; justify-content:flex-end; margin-top:4px; }
+
+.ma-row { display:flex; align-items:center; gap:12px; padding:12px 16px; border-bottom:1px solid var(--border); cursor:pointer; transition:background .15s; }
+.ma-row:hover { background:#FAFAF9; }
+.ma-row:last-child { border-bottom:none; }
+.ma-icon-sq { width:30px; height:30px; border-radius:8px; display:flex; align-items:center; justify-content:center; flex-shrink:0; }
+.ma-avatar { width:24px; height:24px; border-radius:50%; background:#1A1A1A; color:#fff; font-size:9px; font-weight:700; display:flex; align-items:center; justify-content:center; flex-shrink:0; }
+
+.pcf-progress-row { display:flex; align-items:center; gap:12px; margin-bottom:16px; }
+.pcf-progress-bar { flex:1; height:7px; background:#F0F0EE; border-radius:99px; overflow:hidden; }
+.pcf-progress-fill { height:7px; border-radius:99px; }
+.pcf-fill-green { background:var(--green); }
+.pcf-fill-red   { background:var(--red); }
+.pcf-pct { font-size:12px; font-weight:700; color:var(--text-mid); flex-shrink:0; width:36px; text-align:right; }
+
+.pcf-stats { display:flex; align-items:center; gap:10px; margin-bottom:16px; flex-wrap:wrap; }
+.pcf-stat-box { display:flex; align-items:center; gap:10px; background:#FAFAF9; border:1px solid var(--border); border-radius:10px; padding:9px 14px; flex:1; min-width:130px; }
+.pcf-stat-icon { width:28px; height:28px; border-radius:7px; display:flex; align-items:center; justify-content:center; flex-shrink:0; }
+.pcf-stat-icon.grey  { background:#F3F4F6; color:var(--text-mid); }
+.pcf-stat-icon.green { background:var(--green-light); color:var(--green); }
+.pcf-stat-icon.red   { background:var(--red-light); color:var(--red); }
+.pcf-stat-box-val { font-size:15px; font-weight:700; color:#1A1A1A; line-height:1; }
+.pcf-stat-box-lbl { font-size:10px; color:var(--text-muted); margin-top:3px; }
+.pcf-owner-chip { display:flex; align-items:center; gap:6px; font-size:11px; color:var(--text-muted); font-weight:600; margin-left:auto; padding-left:12px; flex-shrink:0; }
+.pcf-badge-grey { color: var(--text-muted); display:inline-flex; align-items:center; margin-left:6px; }
+
+.pcf-actions { display:flex; flex-wrap:wrap; gap:8px; padding-top:14px; border-top:1px solid var(--border); }
+
+/* ═══ CHART PULSE MARKER ═══════════════════════════════════ */
+.chart-pulse-dot {
+  position: absolute; width: 8px; height: 8px; border-radius: 50%;
+  background: var(--red); border: 2px solid #fff;
+  transform: translate(-50%, -50%); pointer-events: none; display: none;
+  box-shadow: 0 0 0 0 rgba(192,40,45,0.5);
+  animation: chartPulseRing 1.8s ease-out infinite;
+}
+@keyframes chartPulseRing {
+  0%   { box-shadow: 0 0 0 0 rgba(192,40,45,0.45); }
+  70%  { box-shadow: 0 0 0 12px rgba(192,40,45,0); }
+  100% { box-shadow: 0 0 0 0 rgba(192,40,45,0); }
+}
+
+/* ═══ PROJECT PICTURE PICKER ═══════════════════════════════ */
+.imgp-tab { flex:1; padding:12px; font-size:12px; font-weight:600; color:var(--text-muted); background:none; border:none; cursor:pointer; border-bottom:2px solid transparent; transition:color .15s, border-color .15s; }
+.imgp-tab-active { color:var(--red); border-bottom-color:var(--red); }
+.imgp-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:8px; }
+.imgp-thumb { aspect-ratio:4/3; border-radius:8px; overflow:hidden; cursor:pointer; border:2px solid transparent; transition:border-color .15s, transform .15s; }
+.imgp-thumb:hover { border-color:var(--red); transform:translateY(-1px); }
+.imgp-thumb img { width:100%; height:100%; object-fit:cover; display:block; }
+
+.pcf-thumb-wrap { position:relative; flex-shrink:0; }
+.pcf-thumb-edit { position:absolute; inset:0; background:rgba(0,0,0,0.45); border-radius:8px; display:flex; align-items:center; justify-content:center; color:#fff; opacity:0; transition:opacity .15s; cursor:pointer; }
+.pcf-thumb-wrap:hover .pcf-thumb-edit { opacity:1; }
+/* Always-visible small badge — the hover overlay alone is invisible on
+   touch devices and easy to miss even with a mouse. This is the part
+   people can actually see and tap without guessing it's there. */
+.pcf-thumb-badge { position:absolute; bottom:-3px; right:-3px; width:16px; height:16px; border-radius:50%; background:#1A1A1A; color:#fff; display:flex; align-items:center; justify-content:center; border:2px solid #fff; cursor:pointer; transition:transform .15s; }
+.pcf-thumb-badge:hover { transform:scale(1.15); }
+.pcf-thumb-wrap:hover .pcf-thumb-badge { opacity:0; pointer-events:none; }
+
+

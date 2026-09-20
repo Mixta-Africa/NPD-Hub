@@ -1,0 +1,75 @@
+/* css/05-workflows.css — Stakeholder confirm, deadline alerts, document centre, reports form, multi-user. Load order matters: files are cut from one stylesheet, in cascade order. */
+/* ─── PHASE 4: STAKEHOLDER CONFIRM ─── */
+.sc-intro { margin-bottom:16px; font-size:14px; line-height:1.6; }
+.sc-actions-top { display:flex; align-items:center; gap:8px; margin-bottom:14px; flex-wrap:wrap; }
+.sc-count { font-size:12px; color:var(--text-muted); margin-left:auto; }
+
+.sc-dept-list { max-height:340px; overflow-y:auto; border:1px solid var(--border); border-radius:var(--radius); margin-bottom:16px; }
+.sc-dept { padding:10px 14px; border-bottom:1px solid var(--border); }
+.sc-dept:last-child { border-bottom:none; }
+.sc-dept-name { font-size:11px; font-weight:700; color:var(--text-muted); text-transform:uppercase; letter-spacing:.07em; margin-bottom:8px; }
+
+.sc-member { display:flex; align-items:center; gap:8px; padding:5px 0; cursor:pointer; }
+.sc-member:hover { opacity:.8; }
+.sc-checkbox { width:15px; height:15px; accent-color:var(--red); flex-shrink:0; cursor:pointer; }
+.sc-member-name  { font-size:13px; font-weight:500; color:var(--text); min-width:130px; }
+.sc-member-email { font-size:11px; color:var(--text-muted); }
+
+/* ─── PHASE 5: DEADLINE ALERTS + REPORTS ─── */
+.threshold-row { display:flex; align-items:flex-start; gap:10px; padding:10px 0; border-bottom:1px solid var(--border); }
+.threshold-row:last-child { border-bottom:none; }
+
+.deadline-alert-row { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:10px 0; border-bottom:1px solid var(--border); flex-wrap:wrap; }
+.deadline-alert-row:last-child { border-bottom:none; }
+.deadline-alert-info { flex:1; min-width:0; }
+.deadline-alert-pillar  { font-size:13px; font-weight:500; color:var(--text); }
+.deadline-alert-product { font-size:12px; color:var(--text-muted); margin-top:2px; }
+
+.alert-manual-section { background:var(--bg); border-radius:var(--radius); padding:14px; }
+.alert-result-box { padding:10px 14px; border-radius:var(--radius); font-size:13px; font-weight:500; }
+.alert-result-ok  { background:var(--green-light); color:var(--green); }
+.alert-result-err { background:var(--red-light);   color:var(--red);   }
+
+/* ─── PHASE 6: DOCUMENT CENTRE ─── */
+.docs-header-row { display:flex; align-items:flex-start; justify-content:space-between; gap:16px; padding:18px 20px; border-bottom:1px solid var(--border); flex-wrap:wrap; }
+.docs-grid { display:grid; grid-template-columns:repeat(2,1fr); gap:14px; padding:16px; }
+@media(max-width:700px) { .docs-grid { grid-template-columns:1fr; } }
+
+.doc-folder-card { background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); overflow:hidden; }
+.doc-folder-header { display:flex; align-items:center; justify-content:space-between; padding:12px 14px; background:var(--bg); border-bottom:1px solid var(--border); }
+.doc-folder-name  { font-size:12px; font-weight:600; color:var(--text); }
+.doc-folder-count { font-size:11px; color:var(--text-muted); background:var(--surface); padding:2px 8px; border-radius:99px; border:1px solid var(--border); }
+
+.doc-file-list { padding:8px 14px; min-height:40px; }
+.doc-empty { font-size:12px; color:var(--text-muted); padding:8px 0; }
+.doc-file-row { display:flex; align-items:center; gap:8px; padding:6px 0; border-bottom:1px solid var(--border); }
+.doc-file-row:last-child { border-bottom:none; }
+.doc-file-name { flex:1; font-size:12px; color:var(--text); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.doc-file-date { font-size:11px; color:var(--text-muted); flex-shrink:0; }
+.doc-file-link { font-size:11px; color:var(--blue); flex-shrink:0; text-decoration:none; }
+.doc-file-link:hover { text-decoration:underline; }
+
+.doc-upload-zone { display:flex; align-items:center; justify-content:center; gap:8px; padding:12px 14px; border-top:1px solid var(--border); border:2px dashed var(--border-mid); border-radius:0 0 var(--radius) var(--radius); cursor:pointer; transition:background .15s,border-color .15s; }
+.doc-upload-zone:hover, .doc-upload-zone.drag-over { background:var(--blue-light); border-color:var(--blue); }
+.doc-upload-label { font-size:12px; color:var(--text-muted); }
+.doc-upload-click { color:var(--blue); cursor:pointer; text-decoration:underline; }
+.doc-uploading { display:flex; align-items:center; gap:8px; padding:10px 14px; border-top:1px solid var(--border); font-size:12px; color:var(--text-muted); }
+
+/* ─── PHASE 6: REPORTS FORM ─── */
+.report-form { background:var(--bg); border-radius:var(--radius); padding:14px; }
+
+/* ─── PHASE 7: MULTI-USER WORKSPACE ─── */
+.my-products-banner { display:flex; align-items:center; justify-content:space-between; background:var(--blue-light); border:0.5px solid var(--blue); border-radius:var(--radius); padding:8px 14px; margin-bottom:16px; gap:10px; }
+.my-products-label  { font-size:12px; font-weight:500; color:var(--blue); }
+
+.share-member-list  { display:flex; flex-direction:column; gap:4px; margin-bottom:16px; max-height:300px; overflow-y:auto; }
+.share-member-row   { display:flex; align-items:center; gap:12px; padding:8px 0; border-bottom:1px solid var(--border); }
+.share-member-row:last-child { border-bottom:none; }
+.share-member-info  { flex:1; }
+.share-member-name  { font-size:13px; font-weight:500; }
+.share-member-email { font-size:11px; color:var(--text-muted); }
+
+.ho-what-happens { background:var(--bg); border-radius:var(--radius); padding:14px; margin:16px 0; display:flex; flex-direction:column; gap:8px; }
+.ho-step         { display:flex; align-items:flex-start; gap:10px; font-size:13px; color:var(--text-mid); line-height:1.6; }
+.ho-step-num     { width:20px; height:20px; border-radius:50%; background:var(--red-light); color:var(--red); font-size:11px; font-weight:700; display:flex; align-items:center; justify-content:center; flex-shrink:0; margin-top:2px; }
+

@@ -1,0 +1,52 @@
+/* css/04-calendar-tracker.css — Launch calendar and task tracker basics. Load order matters: files are cut from one stylesheet, in cascade order. */
+/* ─── PHASE 3: CALENDAR ─── */
+.cal-legend { display:flex; gap:16px; flex-wrap:wrap; margin-bottom:14px; }
+.leg-item   { display:flex; align-items:center; gap:6px; font-size:12px; color:var(--text-mid); }
+.leg-dot    { width:8px; height:8px; border-radius:50%; flex-shrink:0; }
+.leg-green  { background:var(--green); }
+.leg-amber  { background:var(--amber); }
+.leg-red    { background:var(--red);   }
+.leg-grey   { background:var(--border-mid); }
+.leg-blue   { background:var(--blue);  }
+
+.cal-nav { display:flex; align-items:center; gap:10px; padding:14px 18px; border-bottom:1px solid var(--border); }
+.cal-nav-btn    { background:none; border:1px solid var(--border-mid); border-radius:6px; padding:4px 12px; font-size:16px; color:var(--text-mid); cursor:pointer; }
+.cal-nav-btn:hover { background:var(--bg); }
+.cal-month-label { font-size:15px; font-weight:600; flex:1; text-align:center; }
+.cal-today-btn  { background:none; border:1px solid var(--border-mid); border-radius:6px; padding:4px 12px; font-size:12px; font-weight:500; color:var(--text-mid); cursor:pointer; }
+.cal-today-btn:hover { background:var(--bg); }
+.cal-controls { display:flex; align-items:center; gap:8px; }
+
+.cal-grid-wrap { padding:12px 14px 14px; }
+.cal-day-headers { display:grid; grid-template-columns:repeat(7,1fr); margin-bottom:4px; }
+.cal-day-hdr    { text-align:center; font-size:11px; font-weight:600; color:var(--text-muted); text-transform:uppercase; padding:4px 0; }
+.cal-grid       { display:grid; grid-template-columns:repeat(7,1fr); gap:3px; }
+
+.cal-cell { min-height:64px; border-radius:6px; padding:4px 6px; cursor:pointer; border:1px solid transparent; transition:background .1s; }
+.cal-cell:hover { background:var(--bg); }
+.cal-cell-empty { min-height:64px; }
+.cal-cell-today { background:var(--red-light); border-color:var(--red-mid); }
+.cal-cell-today .cal-day-num { color:var(--red); font-weight:700; }
+.cal-cell-has-events { border-color:var(--border); }
+.cal-day-num { font-size:12px; font-weight:500; color:var(--text-mid); margin-bottom:4px; }
+.cal-dots    { display:flex; flex-wrap:wrap; gap:2px; }
+.cal-dot     { width:7px; height:7px; border-radius:50%; }
+.cal-dot-green { background:var(--green); }
+.cal-dot-amber { background:var(--amber); }
+.cal-dot-red   { background:var(--red);   }
+.cal-dot-blue  { background:var(--blue);  }
+.cal-dot-more  { font-size:9px; color:var(--text-muted); font-weight:600; }
+
+.milestone-row  { display:flex; align-items:flex-start; gap:10px; padding:9px 0; border-bottom:1px solid var(--border); }
+.milestone-row:last-child { border-bottom:none; }
+.milestone-info { flex:1; }
+.milestone-pillar  { font-size:13px; font-weight:500; color:var(--text); }
+.milestone-product { font-size:12px; color:var(--text-muted); margin-top:1px; }
+
+/* ─── PHASE 3: TASK TRACKER ─── */
+.tracker-summary { background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); padding:18px 20px; margin-bottom:14px; }
+.tracker-summary-name { font-size:16px; font-weight:600; margin-bottom:4px; }
+.tracker-summary-meta { font-size:13px; color:var(--text-mid); }
+
+.tracker-row-delayed { background:rgba(192,40,45,.03); }
+
