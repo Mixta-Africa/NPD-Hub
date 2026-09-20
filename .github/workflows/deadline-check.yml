@@ -1,171 +1,107 @@
-name: Daily Deadline Check
+# ─────────────────────────────────────────────────────────────
+# NPD Hub — GitHub Actions Deploy
+#
+# PRIMARY host:  Cloudflare Pages (npd-hub.pages.dev)
+#                Cloudflare runs build.sh (in the repo root) with the
+#                secrets held in Cloudflare's environment variables.
+#
+# FALLBACK host: GitHub Pages (mixta-africa.github.io/NPD-Hub/)
+#                This workflow keeps GitHub Pages in sync. It does the
+#                same three things build.sh does — keep them in step.
+#
+# WHAT THIS DOES
+#   1. Stages ONLY the public site into _site/. Backend and admin files
+#      (gas-backend.js, *.gs, database.rules.json, workflows, docs) are
+#      never published. (The old version uploaded the whole repo root.)
+#   2. Injects secrets into _site/js/core/config.js — the ONLY file with
+#      __PLACEHOLDER__ tokens — and fails if any placeholder is left.
+#   3. Appends ?v=<commit> to every module and stylesheet URL, so a new
+#      deploy can never be served half-old from a cache.
+# ─────────────────────────────────────────────────────────────
 
-# ─────────────────────────────────────────────────────────────
-# DISABLED SCHEDULE — the authoritative daily cron runs inside GAS
-# (dailyDeadlineCheck). This workflow builds its OWN alerts array and
-# therefore bypasses two things the GAS path enforces:
-#   1. Task-level privacy — it would name private tasks in shared emails
-#   2. resolveTaskRecipients() — it would route to product owners, not
-#      the reassigned task owners
-# Left as a manual-only fallback for when GAS is unavailable. Do NOT
-# re-enable the schedule without porting both of those rules across.
-# ─────────────────────────────────────────────────────────────
+name: Deploy NPD Hub
+
 on:
-  workflow_dispatch:        # manual trigger only — see note above
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
 
 jobs:
-  check-deadlines:
+  deploy:
     runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
     steps:
-      - name: Run deadline check
-        env:
-          FIREBASE_DATABASE_URL: ${{ secrets.FIREBASE_DATABASE_URL }}
-          GAS_ENDPOINT:          ${{ secrets.GAS_ENDPOINT }}
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Stage public files into _site
         run: |
-          node << 'EOF'
-          const https = require('https');
+          mkdir -p _site
+          tar \
+            --exclude='./_site' --exclude='./.git' --exclude='./.github' --exclude='./node_modules' \
+            --exclude='./build.sh' --exclude='./gas-backend.js' --exclude='./DecisionEngine.gs' \
+            --exclude='./*.gs' --exclude='./database.rules.json' --exclude='./*.md' --exclude='./*.yml' \
+            -cf - . | tar -xf - -C _site
+          test -f _site/index.html && test -f _site/js/core/config.js
+          echo "Staged $(find _site -type f | wc -l) files"
 
-          function httpsGet(url) {
-            return new Promise((resolve, reject) => {
-              https.get(url, res => {
-                let data = '';
-                res.on('data', d => data += d);
-                res.on('end', () => resolve(JSON.parse(data)));
-              }).on('error', reject);
-            });
-          }
+      - name: Inject secrets into js/core/config.js
+        working-directory: _site
+        run: |
+          F=js/core/config.js
+          sed -i "s|__FIREBASE_API_KEY__|${{ secrets.FIREBASE_API_KEY }}|g"                       $F
+          sed -i "s|__FIREBASE_AUTH_DOMAIN__|${{ secrets.FIREBASE_AUTH_DOMAIN }}|g"               $F
+          sed -i "s|__FIREBASE_DATABASE_URL__|${{ secrets.FIREBASE_DATABASE_URL }}|g"             $F
+          sed -i "s|__FIREBASE_PROJECT_ID__|${{ secrets.FIREBASE_PROJECT_ID }}|g"                 $F
+          sed -i "s|__FIREBASE_STORAGE_BUCKET__|${{ secrets.FIREBASE_STORAGE_BUCKET }}|g"         $F
+          sed -i "s|__FIREBASE_MESSAGING_SENDER_ID__|${{ secrets.FIREBASE_MESSAGING_SENDER_ID }}|g" $F
+          sed -i "s|__FIREBASE_APP_ID__|${{ secrets.FIREBASE_APP_ID }}|g"                         $F
+          sed -i "s|__GAS_ENDPOINT__|${{ secrets.GAS_ENDPOINT }}|g"                               $F
+          sed -i "s|__SUPER_ADMIN_HASH__|${{ secrets.SUPER_ADMIN_HASH }}|g"                       $F
+          sed -i "s|__GROQ_API_KEY__|${{ secrets.GROQ_API_KEY }}|g"                               $F
+          sed -i "s|__CEREBRAS_API_KEY__|${{ secrets.CEREBRAS_API_KEY }}|g"                       $F
+          sed -i "s|__SAMBANOVA_API_KEY__|${{ secrets.SAMBANOVA_API_KEY }}|g"                     $F
+          # Fail loudly if ANY placeholder survives, in ANY file we publish
+          if grep -rIn "__FIREBASE_\|__GAS_ENDPOINT\|__GROQ_\|__SUPER_ADMIN\|__CEREBRAS_\|__SAMBANOVA_" .; then
+            echo "ERROR: Some placeholders were not replaced — check GitHub Secrets"
+            exit 1
+          fi
+          echo "All secrets injected successfully"
 
-          function httpsPost(url, payload) {
-            return new Promise((resolve, reject) => {
-              const body = JSON.stringify(payload);
-              const urlObj = new URL(url);
-              const opts = {
-                hostname: urlObj.hostname,
-                path:     urlObj.pathname + urlObj.search,
-                method:   'POST',
-                headers:  { 'Content-Type': 'text/plain', 'Content-Length': Buffer.byteLength(body) },
-              };
-              const req = https.request(opts, res => {
-                let data = '';
-                res.on('data', d => data += d);
-                res.on('end', () => {
-                  try { resolve(JSON.parse(data)); } catch(e) { resolve({ ok: true, raw: data }); }
-                });
-              });
-              req.on('error', reject);
-              req.write(body);
-              req.end();
-            });
-          }
+      - name: Version asset URLs (cache-busting)
+        working-directory: _site
+        run: |
+          VER="${GITHUB_SHA::8}"
+          # every relative import inside the JS modules:  from './x.js'  and  import './x.js'
+          find js -name '*.js' -exec sed -i -E "s#(from |import )'(\.{1,2}/[^']+\.js)'#\1'\2?v=${VER}'#g" {} +
+          # the entry script and stylesheets referenced from index.html
+          sed -i -E "s#src=\"js/main\.js\"#src=\"js/main.js?v=${VER}\"#; s#(href=\"css/[^\"]+\.css)\"#\1?v=${VER}\"#g" index.html
+          echo "Asset version: ${VER}"
+          # sanity: nothing relative was missed
+          if grep -rEn "(from |import )'\.{1,2}/[^']+\.js'" js; then
+            echo "ERROR: an import was not versioned"; exit 1
+          fi
 
-          async function main() {
-            const dbUrl  = process.env.FIREBASE_DATABASE_URL;
-            const gasUrl = process.env.GAS_ENDPOINT;
-            const today  = new Date(); today.setHours(0,0,0,0);
-            const THRESHOLD_DAYS = 3; // send alerts for overdue + within 3 days
+      - name: Setup Pages
+        uses: actions/configure-pages@v4
 
-            console.log('Fetching products and users from Firebase...');
-            const [data, usersData] = await Promise.all([
-              httpsGet(dbUrl + '/products.json'),
-              httpsGet(dbUrl + '/users.json'),
-            ]);
-            const users = usersData || {};
-            if (!data) { console.log('No products found.'); return; }
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: '_site'
 
-            const alerts = [];
-            const products = Object.values(data);
-
-            products.forEach(prod => {
-              if (prod.status === 'archived') return;
-
-              // Handle both new tasks{} and legacy pillars{} formats
-              let tasks = [];
-              if (prod.tasks && Object.keys(prod.tasks).length > 0) {
-                tasks = Object.values(prod.tasks);
-              } else if (prod.pillars) {
-                tasks = Object.values(prod.pillars).map((pd, i) => ({
-                  id:       pd.pillarId || ('p' + (i+1)),
-                  title:    pd.name || ('Pillar ' + (i+1)),
-                  deadline: pd.deadline,
-                  status:   pd.taskStatus || 'on-track',
-                  owner:    pd.owner || '',
-                  ownerEmails: pd.ownerEmails || [],
-                  pillarId: pd.pillarId || null,
-                }));
-              }
-
-              // Skip if alerts disabled for this product
-              if (prod.alertsEnabled === false) return;
-
-              // Recipient: manual override → owner → fallback
-              let deptEmails = [];
-              if (prod.alertRecipients && prod.alertRecipients.length > 0) {
-                deptEmails = prod.alertRecipients;
-              } else if (prod.ownerId && users[prod.ownerId]?.email) {
-                deptEmails = [users[prod.ownerId].email];
-              } else {
-                console.log('No recipient for ' + prod.name + ' — skipping');
-                return;
-              }
-
-              tasks.forEach(task => {
-                const taskStatus = task.status || 'on-track';
-                // Never alert on complete tasks
-                if (taskStatus === 'complete') return;
-                const isDelayed = taskStatus === 'delayed';
-
-                let diff = null;
-                let daysOverdue = 0;
-                if (task.deadline) {
-                  const due = new Date(task.deadline); due.setHours(0,0,0,0);
-                  diff = Math.round((due - today) / 86400000);
-                  daysOverdue = diff < 0 ? Math.abs(diff) : 0;
-                }
-
-                // Skip future non-delayed tasks beyond threshold
-                if (!isDelayed && diff !== null && diff > THRESHOLD_DAYS) return;
-                // Skip tasks with no deadline that are not delayed
-                if (!isDelayed && diff === null) return;
-
-                const alertType = diff === null
-                  ? 'delayed'
-                  : diff < 0  ? 'overdue'
-                  : diff === 0 ? 'due'
-                  : isDelayed  ? 'delayed'
-                  : 'warning';
-
-                alerts.push({
-                  productName: prod.name,
-                  productId:   prod.id,
-                  pillarName:  task.title || task.name || 'Unknown task',
-                  pillarId:    task.id,
-                  ownerDept:   task.owner || 'Unknown',
-                  deptEmails,
-                  daysUntil:   diff,
-                  daysOverdue,
-                  deadline:    task.deadline || null,
-                  taskStatus,
-                  alertType,
-                });
-              });
-            });
-
-            if (alerts.length === 0) {
-              console.log('No alerts to send — all tasks on track.');
-              return;
-            }
-
-            // Group summary for logging
-            const overdue  = alerts.filter(a => a.alertType === 'overdue').length;
-            const dueToday = alerts.filter(a => a.alertType === 'due').length;
-            const warning  = alerts.filter(a => a.alertType === 'warning').length;
-            console.log('Alerts to send: ' + alerts.length + ' (' + overdue + ' overdue, ' + dueToday + ' due today, ' + warning + ' warnings)');
-
-            console.log('Calling GAS...');
-            const result = await httpsPost(gasUrl, { action: 'checkDeadlines', alerts });
-            console.log('GAS response:', JSON.stringify(result));
-            console.log('Done. Emails sent: ' + (result.sent || 0));
-          }
-
-          main().catch(err => { console.error('Deadline check failed:', err); process.exit(1); });
-          EOF
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
