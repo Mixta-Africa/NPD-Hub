@@ -1,0 +1,105 @@
+/* css/11-mobile.css — Phone layout fixes. LOAD LAST: these rules override the desktop layout.
+   Why this file exists: several screens used fixed side-by-side layouts (inline grids, one-line
+   flex rows) that squeezed text into slivers on a phone. Everything here is scoped to small
+   screens, so desktop is untouched. Breakpoints: 900px (tablet and down), 600px (phone),
+   420px (small phone). */
+
+/* ── Phone hygiene (all sizes) ───────────────────────────────── */
+html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }   /* stop iOS auto-inflating text */
+/* Touch screens only (scoping it keeps desktop rendering byte-for-byte unchanged) */
+@media (pointer: coarse) {
+  button, a, .nav-item, .pv-filter, .pdt-tab { touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
+}
+
+@media (max-width: 900px) {
+  /* The closed drawer was leaking its drop-shadow onto the left screen edge (grey smudge on every page) */
+  #sidebar:not(.mobile-open) { box-shadow: none; }
+
+  /* Floating refresh button: keep it off the last row and clear of the iPhone home bar */
+  #main-content, .main-content { padding-bottom: 84px !important; }
+  #global-refresh-btn {
+    opacity: .9;
+    bottom: calc(14px + env(safe-area-inset-bottom, 0px)) !important;
+    right: 14px !important;
+  }
+
+  /* Long unbroken words (₦ amounts, URLs, names) wrap instead of stretching the layout */
+  .view-title, .view-subtitle, .hero-name, .hero-sub, .panel-title,
+  .ma-main, .action-row-card, .stat-label { overflow-wrap: anywhere; }
+
+  /* Two-column layouts stack */
+  .two-col, .ma-layout { grid-template-columns: 1fr !important; }
+
+  /* Inputs must be able to shrink inside their card (date fields were poking out of the panel) */
+  input[type="date"], input[type="time"], input[type="datetime-local"],
+  .input-field, select, textarea { min-width: 0; max-width: 100%; box-sizing: border-box; }
+  .panel-body div[style*="min-width:130px"] { flex: 1 1 100% !important; }   /* To-do form: Task above Deadline */
+
+  /* Section headers with a dropdown: dropdown takes its own full-width line */
+  .panel-header > select { flex: 1 1 100%; max-width: 100%; }
+
+  /* Filter chips wrap onto extra lines instead of being clipped at the screen edge */
+  .pv-filter-row { flex-wrap: wrap; }
+
+  /* ── Tables: keep columns aligned and let the table scroll sideways ─────────
+     The old rule turned every <thead>/<tbody>/<tr> into its own separate table, so headers
+     no longer lined up with rows and nowrap text spilled across neighbouring cells. */
+  table { display: block; overflow-x: auto; max-width: 100%; white-space: normal; -webkit-overflow-scrolling: touch; }
+  table > thead, table > tbody, table > tfoot, table > tr { display: revert; width: auto; table-layout: auto; }
+  .tracker-table { display: table; overflow: visible; width: 100%; min-width: 640px; }   /* its own panel scrolls */
+  .tracker-table td, .tracker-table th { white-space: nowrap; }
+  .tracker-table td.tracker-pillar { white-space: normal; min-width: 210px; }
+}
+
+/* ── My Actions & To-dos rows ─────────────────────────────────────
+   Was one line of eight items where seven refused to shrink, leaving the title ~30px.
+   Now: title gets its own full-width line, badges + date sit under it, buttons at the end. */
+@media (max-width: 700px) {
+  .ma-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; padding: 12px; }
+  .ma-row .ma-icon-sq, .ma-row .ma-chev { display: none; }
+  /* !important: the element carries an inline flex:1 that would otherwise win */
+  .ma-row .ma-main { order: 1; flex: 1 1 100% !important; min-width: 0; }
+  .ma-row .ma-main > div:first-child { font-size: 14px; line-height: 1.35; }
+  .ma-row .ma-prio, .ma-row .ma-avatar, .ma-row .ma-state { order: 2; flex: 0 0 auto; }
+  .ma-row .ma-due { order: 2; flex: 0 1 auto; width: auto !important; font-size: 12px; }
+  .ma-row .ma-act { order: 3; margin-left: auto; }
+  .ma-row .ma-act .btn-outline { min-height: 34px; padding: 6px 14px !important; font-size: 12px !important; }
+}
+
+/* ── Phone (≤600px) ─────────────────────────────────────────── */
+@media (max-width: 600px) {
+  /* Dashboard: hero stacks (text, then button) and gets a stronger fade so text stays legible on the photo */
+  .hero-banner { position: relative; flex-direction: column; align-items: flex-start; gap: 12px; padding: 16px; }
+  .hero-banner::before {
+    content: ""; position: absolute; inset: 0; border-radius: inherit; pointer-events: none;
+    background: linear-gradient(90deg, rgba(249,250,251,.97) 0%, rgba(249,250,251,.85) 60%, rgba(249,250,251,.55) 100%);
+  }
+  .hero-banner > * { position: relative; z-index: 1; }
+  .hero-banner > div[style*="max-width:60%"] { max-width: 100% !important; }
+  .hero-name { font-size: 22px; line-height: 1.15; }
+  .hero-sub { font-size: 12px; }
+
+  /* Dashboard tiles: 2 x 2 instead of four cramped columns */
+  .stats-row { grid-template-columns: repeat(2, 1fr); gap: 10px; }
+  .stat-card { padding: 12px; }
+
+  /* Dashboard "Quick Actions | Recent Activity" panel: fixed 260px + list left ~100px. Stack them. */
+  .dash-qa-panel { flex-direction: column; }
+  .dash-qa { flex: 0 0 auto !important; border-right: 0 !important; border-bottom: 1px solid var(--border); }
+
+  /* Page headers: title, then actions, full width */
+  .view-header > div:last-child:not(:first-child) { width: 100%; }
+  .view-header .btn-primary, .view-header .btn-secondary { width: 100%; justify-content: center; }
+}
+
+/* ── Small phone (≤420px) ───────────────────────────────────── */
+@media (max-width: 420px) {
+  .action-row-card { flex-wrap: wrap; }                              /* Decisions: buttons under the text */
+  .action-row-card > div[style*="flex:1"] { flex: 1 1 100% !important; }   /* !important: inline flex:1 */
+}
+
+/* ── Touch devices ──────────────────────────────────────────── */
+@media (pointer: coarse) {
+  /* iOS zooms the whole page when you tap an input whose text is under 16px */
+  input:not([type="checkbox"]):not([type="radio"]):not([type="range"]), select, textarea { font-size: 16px !important; }
+}
