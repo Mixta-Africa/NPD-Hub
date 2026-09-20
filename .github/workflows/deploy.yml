@@ -1,0 +1,107 @@
+# ─────────────────────────────────────────────────────────────
+# NPD Hub — GitHub Actions Deploy
+#
+# PRIMARY host:  Cloudflare Pages (npd-hub.pages.dev)
+#                Cloudflare runs build.sh (in the repo root) with the
+#                secrets held in Cloudflare's environment variables.
+#
+# FALLBACK host: GitHub Pages (mixta-africa.github.io/NPD-Hub/)
+#                This workflow keeps GitHub Pages in sync. It does the
+#                same three things build.sh does — keep them in step.
+#
+# WHAT THIS DOES
+#   1. Stages ONLY the public site into _site/. Backend and admin files
+#      (gas-backend.js, *.gs, database.rules.json, workflows, docs) are
+#      never published. (The old version uploaded the whole repo root.)
+#   2. Injects secrets into _site/js/core/config.js — the ONLY file with
+#      __PLACEHOLDER__ tokens — and fails if any placeholder is left.
+#   3. Appends ?v=<commit> to every module and stylesheet URL, so a new
+#      deploy can never be served half-old from a cache.
+# ─────────────────────────────────────────────────────────────
+
+name: Deploy NPD Hub
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Stage public files into _site
+        run: |
+          mkdir -p _site
+          tar \
+            --exclude='./_site' --exclude='./.git' --exclude='./.github' --exclude='./node_modules' \
+            --exclude='./build.sh' --exclude='./gas-backend.js' --exclude='./DecisionEngine.gs' \
+            --exclude='./*.gs' --exclude='./database.rules.json' --exclude='./*.md' --exclude='./*.yml' \
+            -cf - . | tar -xf - -C _site
+          test -f _site/index.html && test -f _site/js/core/config.js
+          echo "Staged $(find _site -type f | wc -l) files"
+
+      - name: Inject secrets into js/core/config.js
+        working-directory: _site
+        run: |
+          F=js/core/config.js
+          sed -i "s|__FIREBASE_API_KEY__|${{ secrets.FIREBASE_API_KEY }}|g"                       $F
+          sed -i "s|__FIREBASE_AUTH_DOMAIN__|${{ secrets.FIREBASE_AUTH_DOMAIN }}|g"               $F
+          sed -i "s|__FIREBASE_DATABASE_URL__|${{ secrets.FIREBASE_DATABASE_URL }}|g"             $F
+          sed -i "s|__FIREBASE_PROJECT_ID__|${{ secrets.FIREBASE_PROJECT_ID }}|g"                 $F
+          sed -i "s|__FIREBASE_STORAGE_BUCKET__|${{ secrets.FIREBASE_STORAGE_BUCKET }}|g"         $F
+          sed -i "s|__FIREBASE_MESSAGING_SENDER_ID__|${{ secrets.FIREBASE_MESSAGING_SENDER_ID }}|g" $F
+          sed -i "s|__FIREBASE_APP_ID__|${{ secrets.FIREBASE_APP_ID }}|g"                         $F
+          sed -i "s|__GAS_ENDPOINT__|${{ secrets.GAS_ENDPOINT }}|g"                               $F
+          sed -i "s|__SUPER_ADMIN_HASH__|${{ secrets.SUPER_ADMIN_HASH }}|g"                       $F
+          sed -i "s|__GROQ_API_KEY__|${{ secrets.GROQ_API_KEY }}|g"                               $F
+          sed -i "s|__CEREBRAS_API_KEY__|${{ secrets.CEREBRAS_API_KEY }}|g"                       $F
+          sed -i "s|__SAMBANOVA_API_KEY__|${{ secrets.SAMBANOVA_API_KEY }}|g"                     $F
+          # Fail loudly if ANY placeholder survives, in ANY file we publish
+          if grep -rIn "__FIREBASE_\|__GAS_ENDPOINT\|__GROQ_\|__SUPER_ADMIN\|__CEREBRAS_\|__SAMBANOVA_" .; then
+            echo "ERROR: Some placeholders were not replaced — check GitHub Secrets"
+            exit 1
+          fi
+          echo "All secrets injected successfully"
+
+      - name: Version asset URLs (cache-busting)
+        working-directory: _site
+        run: |
+          VER="${GITHUB_SHA::8}"
+          # every relative import inside the JS modules:  from './x.js'  and  import './x.js'
+          find js -name '*.js' -exec sed -i -E "s#(from |import )'(\.{1,2}/[^']+\.js)'#\1'\2?v=${VER}'#g" {} +
+          # the entry script and stylesheets referenced from index.html
+          sed -i -E "s#src=\"js/main\.js\"#src=\"js/main.js?v=${VER}\"#; s#(href=\"css/[^\"]+\.css)\"#\1?v=${VER}\"#g" index.html
+          echo "Asset version: ${VER}"
+          # sanity: nothing relative was missed
+          if grep -rEn "(from |import )'\.{1,2}/[^']+\.js'" js; then
+            echo "ERROR: an import was not versioned"; exit 1
+          fi
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v4
+
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: '_site'
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
