@@ -1,0 +1,96 @@
+# ─────────────────────────────────────────────────────────────
+# NPD Hub — GitHub Actions Deploy
+#
+# PRIMARY host:  Cloudflare Pages (npd-hub.pages.dev)
+#                Cloudflare pulls from this repo and runs build.sh
+#                with secrets set in the Cloudflare dashboard.
+#                >>> build.sh must inject into js/core/config.js (NOT
+#                >>> index.html) and apply the same asset versioning
+#                >>> shown below. See the two steps in this file.
+#
+# FALLBACK host: GitHub Pages (mixta-africa.github.io/NPD-Hub/)
+#                This workflow keeps GitHub Pages in sync.
+#
+# WHAT CHANGED WITH THE MULTI-FILE LAYOUT
+#   1. Secrets now live in ONE file, js/core/config.js. That is the only
+#      place a __PLACEHOLDER__ token exists, so it is the only file the
+#      injection step touches.
+#   2. The app is many small files instead of one big one, so a deploy can
+#      leave a browser holding a mix of old and new files. Every asset URL
+#      therefore gets a ?v=<commit> suffix at deploy time; a new deploy is
+#      a new URL for every file, so nothing stale can be reused.
+# ─────────────────────────────────────────────────────────────
+
+name: Deploy NPD Hub
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Inject secrets into js/core/config.js
+        run: |
+          F=js/core/config.js
+          sed -i "s|__FIREBASE_API_KEY__|${{ secrets.FIREBASE_API_KEY }}|g"                       $F
+          sed -i "s|__FIREBASE_AUTH_DOMAIN__|${{ secrets.FIREBASE_AUTH_DOMAIN }}|g"               $F
+          sed -i "s|__FIREBASE_DATABASE_URL__|${{ secrets.FIREBASE_DATABASE_URL }}|g"             $F
+          sed -i "s|__FIREBASE_PROJECT_ID__|${{ secrets.FIREBASE_PROJECT_ID }}|g"                 $F
+          sed -i "s|__FIREBASE_STORAGE_BUCKET__|${{ secrets.FIREBASE_STORAGE_BUCKET }}|g"         $F
+          sed -i "s|__FIREBASE_MESSAGING_SENDER_ID__|${{ secrets.FIREBASE_MESSAGING_SENDER_ID }}|g" $F
+          sed -i "s|__FIREBASE_APP_ID__|${{ secrets.FIREBASE_APP_ID }}|g"                         $F
+          sed -i "s|__GAS_ENDPOINT__|${{ secrets.GAS_ENDPOINT }}|g"                               $F
+          sed -i "s|__SUPER_ADMIN_HASH__|${{ secrets.SUPER_ADMIN_HASH }}|g"                       $F
+          sed -i "s|__GROQ_API_KEY__|${{ secrets.GROQ_API_KEY }}|g"                               $F
+          sed -i "s|__CEREBRAS_API_KEY__|${{ secrets.CEREBRAS_API_KEY }}|g"                       $F
+          sed -i "s|__SAMBANOVA_API_KEY__|${{ secrets.SAMBANOVA_API_KEY }}|g"                     $F
+          # Fail loudly if ANY placeholder survives, in ANY file we publish
+          if grep -rIn "__FIREBASE_\|__GAS_ENDPOINT\|__GROQ_\|__SUPER_ADMIN\|__CEREBRAS_\|__SAMBANOVA_" js index.html css; then
+            echo "ERROR: Some placeholders were not replaced — check GitHub Secrets"
+            exit 1
+          fi
+          echo "All secrets injected successfully"
+
+      - name: Version asset URLs (cache-busting)
+        run: |
+          VER="${GITHUB_SHA::8}"
+          # every relative import inside the JS modules:  from './x.js'  and  import './x.js'
+          find js -name '*.js' -exec sed -i -E "s#(from |import )'(\.{1,2}/[^']+\.js)'#\1'\2?v=${VER}'#g" {} +
+          # the entry script and stylesheets referenced from index.html
+          sed -i -E "s#src=\"js/main\.js\"#src=\"js/main.js?v=${VER}\"#; s#(href=\"css/[^\"]+\.css)\"#\1?v=${VER}\"#g" index.html
+          echo "Asset version: ${VER}"
+          # sanity: nothing relative was missed
+          if grep -rEn "(from |import )'\.{1,2}/[^']+\.js'" js; then
+            echo "ERROR: an import was not versioned"; exit 1
+          fi
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v4
+
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: '.'
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
