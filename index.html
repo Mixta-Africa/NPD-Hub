@@ -9189,31 +9189,31 @@ function renderReports(el) {
       <div class="panel-header"><span class="panel-title">Email schedule</span></div>
       <div class="panel-body">
         <p style="font-size:13px;color:var(--text-mid);line-height:1.7;margin-bottom:16px;">
-          Set the daily time for deadline alert emails and personal task digest emails. All times are WAT (West Africa Time). Changes take effect after redeploying the GAS trigger.
+          Deadline alerts and task digests now go out as <strong>one email per person</strong>, listing everything on their plate across all projects.
+          Choose which weekdays it is sent. Saturday and Sunday are never sent. All times are WAT (West Africa Time).
+          A change of days applies from the next run; a change of send time also needs the button below.
         </p>
         ${currentRole === 'admin' ? `
-        <div class="form-row" style="margin-bottom:12px;">
-          <label class="form-label">Deadline alert time (daily)</label>
-          <select id="alert-hour-sel" class="select-field" style="width:100%;">
-            ${Array.from({length:24},(_,i)=>'<option value="'+i+'">'+(i===0?'12:00 AM':i<12?i+':00 AM':i===12?'12:00 PM':(i-12)+':00 PM')+'</option>').join('')}
-          </select>
-        </div>
-        <div class="form-row" style="margin-bottom:12px;">
-          <label class="form-label">Daily task digest time</label>
-          <select id="todo-hour-sel" class="select-field" style="width:100%;">
-            ${Array.from({length:24},(_,i)=>'<option value="'+i+'">'+(i===0?'12:00 AM':i<12?i+':00 AM':i===12?'12:00 PM':(i-12)+':00 PM')+'</option>').join('')}
-          </select>
+        <div class="form-row" style="margin-bottom:14px;">
+          <label class="form-label">Send reminders on</label>
+          <div id="alert-days-row" style="display:flex;gap:8px;flex-wrap:wrap;">
+            ${[['1','Mon'],['2','Tue'],['3','Wed'],['4','Thu'],['5','Fri']].map(([v,l]) =>
+              '<label style="display:flex;align-items:center;gap:6px;padding:8px 12px;border:1px solid var(--border);border-radius:8px;cursor:pointer;font-size:13px;user-select:none;">' +
+              '<input type="checkbox" class="alert-day-cb" value="' + v + '"> ' + l + '</label>').join('')}
+          </div>
+          <div style="font-size:11px;color:var(--text-muted);margin-top:6px;">Default is Mon, Wed, Fri. Emails are also limited to the working days set in Settings &rarr; Decision engine &mdash; working hours. To pause reminders completely, switch off Deadline alerts in Circuit Box.</div>
+          <div id="alert-days-note" style="font-size:11px;color:#D97706;font-weight:500;margin-top:6px;display:none;"></div>
         </div>
         <div class="form-row" style="margin-bottom:16px;">
-          <label class="form-label">Weekly digest day</label>
-          <select id="todo-day-sel" class="select-field" style="width:100%;">
-            <option value="1">Monday</option><option value="2">Tuesday</option><option value="3">Wednesday</option>
-            <option value="4">Thursday</option><option value="5">Friday</option>
+          <label class="form-label">Send time</label>
+          <select id="alert-hour-sel" class="select-field" style="width:100%;">
+            ${Array.from({length:24},(_,i)=>'<option value="'+i+'">'+(i===0?'12:00 AM':i<12?i+':00 AM':i===12?'12:00 PM':(i-12)+':00 PM')+'</option>').join('')}
           </select>
         </div>
         <button class="btn-primary" onclick="saveEmailSchedule()" style="width:100%;">Save schedule</button>
         <button class="btn-outline" onclick="sendMyTodoNow()" style="width:100%;margin-top:8px;">Send me my task list now</button>
         <div id="schedule-result" style="display:none;margin-top:10px;"></div>
+        <div id="schedule-lastrun" style="font-size:11px;color:var(--text-muted);margin-top:10px;"></div>
         ` : '<p style="font-size:12px;color:var(--text-muted);">Only admins can change the email schedule.</p>'}
       </div>
     </div>
@@ -13296,46 +13296,80 @@ window.runAIDiagnostic = async () => {
 
 window.saveEmailSchedule = async () => {
   const btn = document.querySelector('button[onclick="saveEmailSchedule()"]');
-  if (btn) { btn.disabled = true; btn.textContent = 'Syncing to Google Cloud...'; }
-  
+
   const alertHour = parseInt(document.getElementById('alert-hour-sel')?.value || '7');
-  const todoHour  = parseInt(document.getElementById('todo-hour-sel')?.value  || '8');
-  const todoDay   = parseInt(document.getElementById('todo-day-sel')?.value   || '1');
-  
+  // Weekdays only (1=Mon..5=Fri). The backend also refuses weekends, so this is belt and braces.
+  const alertDays = Array.from(document.querySelectorAll('.alert-day-cb:checked'))
+    .map(cb => parseInt(cb.value)).filter(d => d >= 1 && d <= 5).sort((a, b) => a - b);
+
+  if (alertDays.length === 0) {
+    showToast('Pick at least one weekday. To pause reminders entirely, switch off Deadline alerts in Circuit Box.', 'error');
+    return;
+  }
+  if (btn) { btn.disabled = true; btn.textContent = 'Syncing to Google Cloud...'; }
+
   try {
-    // Save to database
-    await set(ref(db, 'config/emailSchedule'), { alertHour, todoHour, todoDay, updatedAt: Date.now(), updatedBy: currentUser.email });
-    
-    // Tell GAS to physically rebuild the Google Triggers
+    // update(), not set(): the backend keeps its own lastRunDate marker in this
+    // same node, and set() would wipe it and re-open the door to a same-day resend.
+    await update(ref(db, 'config/emailSchedule'), { alertHour, alertDays, updatedAt: Date.now(), updatedBy: currentUser.email });
+
+    // Rebuild the Google trigger so a changed send time takes effect
     const resGas = await callGAS('updateTriggers', {});
-    
+
     const res = document.getElementById('schedule-result');
     if (res) {
       res.style.display = 'block';
       if (resGas.ok) {
-        res.innerHTML = '<div style="background:#F0FDF4;border:1px solid #BBF7D0;border-radius:8px;padding:10px 14px;font-size:12px;color:#16A34A;font-weight:500;">Schedule saved and Google triggers successfully synced!</div>';
+        res.innerHTML = '<div style="background:#F0FDF4;border:1px solid #BBF7D0;border-radius:8px;padding:10px 14px;font-size:12px;color:#16A34A;font-weight:500;">Saved. Reminders will go out on ' + alertDays.map(d => ['','Mon','Tue','Wed','Thu','Fri'][d]).join(', ') + '.</div>';
       } else {
-        res.innerHTML = '<div style="background:#FFFBEB;border:1px solid #FDE68A;border-radius:8px;padding:10px 14px;font-size:12px;color:#D97706;font-weight:500;">Saved locally, but could not sync to GAS: ' + resGas.error + '</div>';
+        res.innerHTML = '<div style="background:#FFFBEB;border:1px solid #FDE68A;border-radius:8px;padding:10px 14px;font-size:12px;color:#D97706;font-weight:500;">Days saved and will apply from the next run, but the send-time trigger could not be rebuilt: ' + resGas.error + '</div>';
       }
     }
-    showToast('Email schedule synced.', 'success');
-  } catch(e) { 
-    showToast('Save failed: ' + e.message, 'error'); 
+    showToast('Reminder schedule saved.', 'success');
+  } catch(e) {
+    showToast('Save failed: ' + e.message, 'error');
   }
   if (btn) { btn.disabled = false; btn.textContent = 'Save schedule'; }
 };
-  
+
 async function loadEmailSchedule() {
+  const paint = (days, hour) => {
+    document.querySelectorAll('.alert-day-cb').forEach(cb => { cb.checked = days.includes(parseInt(cb.value)); });
+    const ah = document.getElementById('alert-hour-sel');
+    if (ah) ah.value = hour;
+  };
+  paint([1, 3, 5], 7);                       // defaults, shown even if nothing has been saved yet
+
+  // Working days from Settings act as a ceiling for email. Warn when a ticked day is switched off there.
+  const DAY_NAMES = ['', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri'];
+  let workDays = null;
+  try {
+    const wdSnap = await get(ref(db, 'config/orgContext/workDays'));
+    const wd = wdSnap.exists() ? Object.values(wdSnap.val() || {}).map(Number) : [];
+    if (wd.length) workDays = wd;
+  } catch(e) { /* no ceiling known: leave the warning off */ }
+  const refreshNote = () => {
+    const note = document.getElementById('alert-days-note');
+    if (!note) return;
+    const blocked = !workDays ? [] : Array.from(document.querySelectorAll('.alert-day-cb:checked'))
+      .map(cb => parseInt(cb.value)).filter(d => !workDays.includes(d));
+    note.style.display = blocked.length ? 'block' : 'none';
+    note.textContent = blocked.length
+      ? blocked.map(d => DAY_NAMES[d]).join(', ') + ' will not send: switched off in Settings \u2192 Decision engine \u2014 working hours.'
+      : '';
+  };
+  document.getElementById('alert-days-row')?.addEventListener('change', refreshNote);
   try {
     const snap = await get(ref(db, 'config/emailSchedule'));
-    if (!snap.exists()) return;
+    if (!snap.exists()) { refreshNote(); return; }
     const s = snap.val();
-    const ah = document.getElementById('alert-hour-sel');
-    const th = document.getElementById('todo-hour-sel');
-    const td = document.getElementById('todo-day-sel');
-    if (ah) ah.value = s.alertHour ?? 7;
-    if (th) th.value = s.todoHour  ?? 8;
-    if (td) td.value = s.todoDay   ?? 1;
+    // Firebase can hand a sparse array back as an object, so normalise both shapes
+    let days = Array.isArray(s.alertDays) ? s.alertDays : Object.values(s.alertDays || {});
+    days = days.map(Number).filter(d => d >= 1 && d <= 5);
+    paint(days.length ? days : [1, 3, 5], s.alertHour ?? 7);
+    refreshNote();
+    const lr = document.getElementById('schedule-lastrun');
+    if (lr && s.lastRunDate) lr.textContent = 'Last reminder run: ' + s.lastRunDate;
   } catch(e) { /* settings not yet saved */ }
 }
 
