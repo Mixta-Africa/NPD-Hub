@@ -342,6 +342,11 @@ window.updatePillarStatus = async (productId, taskId, newStatus, _isUndo) => {
     if (prod?.tasks?.[taskId]) {
       await set(ref(db, `products/${productId}/tasks/${taskId}/status`), newStatus);
       prod.tasks[taskId].status = newStatus;
+      // WHEN it was completed drives the weekly report's on-time analysis; cleared again if the task is reopened
+      // Best-effort: this must never be able to stop the status change itself from completing.
+      const doneAt = newStatus === 'complete' ? Date.now() : null;
+      try { await set(ref(db, `products/${productId}/tasks/${taskId}/completedAt`), doneAt); prod.tasks[taskId].completedAt = doneAt; }
+      catch (e) { console.warn('completedAt not recorded (status change unaffected):', e); }
     } else {
       // Legacy pillars
       await set(ref(db, `products/${productId}/pillars/${taskId}/taskStatus`), newStatus);

@@ -26,6 +26,17 @@ export function renderReports(el) {
       </div>
     </div>
 
+    <div class="panel" style="margin-bottom:16px;">
+      <div class="panel-header"><span class="panel-title">My weekly report</span></div>
+      <div class="panel-body" style="display:flex;gap:14px;align-items:center;flex-wrap:wrap;">
+        <div style="flex:1;min-width:220px;font-size:13px;color:var(--text-mid);line-height:1.7;">
+          Your own week at a glance: what you finished, what <strong>rolled over</strong> from earlier weeks, and an analysis of how you are trending.
+          Looking for the team-level report? That is <em>Generate last week's report</em>, further down this page.
+        </div>
+        <button class="btn-primary" onclick="openWeeklyReport()">Open my weekly report</button>
+      </div>
+    </div>
+
     <div class="two-col" style="margin-bottom:16px;">
       <div class="panel">
         <div class="panel-header"><span class="panel-title">Deadline Alert Engine</span></div>

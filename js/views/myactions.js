@@ -21,6 +21,12 @@ export async function renderMyActions(el) {
         '<h1 class="view-title">My Actions &amp; To-do</h1>' +
         '<p class="view-subtitle">Stay on top of what\'s important. Here\'s what needs your attention.</p>' +
       '</div>' +
+      '<div class="ma-header-actions">' +
+        '<button class="btn-primary ma-report-btn" onclick="openWeeklyReport()" title="Your week: what you finished, what rolled over, and the analysis">' +
+          '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>' +
+          ' Weekly report<span id="ma-carry-badge" class="ma-carry-badge" style="display:none;"></span>' +
+        '</button>' +
+      '</div>' +
     '</div>' +
     '<div class="panel" id="pending-approvals-panel" style="margin-bottom:16px;display:none;">' +
       '<div class="panel-header">' +
@@ -138,6 +144,41 @@ export function isoWeekKey(date) {
   return d.getUTCFullYear() + '-W' + String(weekNo).padStart(2, '0');
 }
 function currentWeekKey() { return isoWeekKey(new Date()); }
+
+// 'YYYY-MM-DD' as a LOCAL date (new Date('2026-09-18') is UTC and lands on the wrong day west of Greenwich)
+export function parseLocalDate(v) {
+  if (!v) return null;
+  const m = String(v).match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (m) return new Date(+m[1], +m[2] - 1, +m[3]);
+  const d = new Date(v);
+  return isNaN(d) ? null : new Date(d.getFullYear(), d.getMonth(), d.getDate());
+}
+// The ISO week a personal to-do belongs to. Older tasks were saved before week tags existed, so fall back to
+// their deadline, then their creation date, instead of treating them as "always this week" forever.
+export function effWeek(t) {
+  if (t.weekKey) return t.weekKey;
+  const d = parseLocalDate(t.deadline) || (t.createdAt ? new Date(t.createdAt) : new Date());
+  return isoWeekKey(d);
+}
+// Whole ISO weeks a still-open project task has slipped past the week its deadline fell in (0 = due this week or later)
+function maWeeksCarried(deadline) {
+  const d = parseLocalDate(deadline);
+  if (!d) return 0;
+  const a = isoWeekKey(d), b = currentWeekKey();
+  if (a >= b) return 0;
+  const [ya, wa] = a.split('-W').map(Number), [yb, wb] = b.split('-W').map(Number);
+  return Math.round((new Date(yb, 0, 4).getTime() - new Date(ya, 0, 4).getTime()) / (7 * 86400000)) + (wb - wa);
+}
+function maCarryTag(r) {
+  if (r.eff === 'complete') return '';
+  const n = maWeeksCarried(r.task.deadline);
+  return n > 0 ? ' · <span class="ma-carry" title="Its deadline fell in an earlier week and it is still open">↻ carried ' + (n === 1 ? 'from last week' : n + ' weeks') + '</span>' : '';
+}
+function maUpdateCarryBadge(records) {
+  const n = records.filter(r => r.eff !== 'complete' && maWeeksCarried(r.task.deadline) > 0).length;
+  const el = document.getElementById('ma-carry-badge');
+  if (el) { el.textContent = n > 0 ? n : ''; el.style.display = n > 0 ? 'inline-flex' : 'none'; el.title = n + ' carried over from earlier weeks'; }
+}
 export function weekKeyLabel(weekKey) {
   // "2026-W38" -> "Week of 14 Sep" — the Monday of that ISO week.
   const [y, w] = weekKey.split('-W').map(Number);
@@ -176,13 +217,15 @@ async function loadStandaloneTasks() {
     // instead of ever showing it here as if it were still actionable —
     // that's what makes a closed week actually uneditable, rather than
     // just visually different.
-    const pastIncomplete = all.filter(t => t.weekKey && t.weekKey !== cwk && t.status !== 'complete' && !t.reviewed && !t.rolledOver);
+    // "Past" means strictly earlier than this week. (It used to be "not this week", which also swept tasks scheduled
+    // for NEXT week into the review.) effWeek() also covers older tasks saved before week tags existed.
+    const pastIncomplete = all.filter(t => effWeek(t) < cwk && t.status !== 'complete' && !t.reviewed && !t.rolledOver);
     if (pastIncomplete.length > 0) {
       showWeeklyReviewModal(pastIncomplete);
       return; // review must be resolved before the list below means anything
     }
 
-    const tasks = all.filter(t => !t.weekKey || t.weekKey === cwk);
+    const tasks = all.filter(t => t.weekKey ? t.weekKey === cwk : effWeek(t) >= cwk);
     if (tasks.length === 0) {
       el.innerHTML = '<div style="font-size:12px;color:#9CA3AF;padding:6px 0;">Nothing here yet. Add your first personal task above.</div>';
       loadWeeklyPerformance();
@@ -242,6 +285,8 @@ window.addStandaloneTask = async () => {
 
 window.toggleStandaloneTask = async (id, done) => {
   await set(ref(db, standaloneRef() + '/' + id + '/status'), done ? 'complete' : 'on-track');
+  try { await set(ref(db, standaloneRef() + '/' + id + '/completedAt'), done ? Date.now() : null); }   // best-effort: never blocks the tick itself
+  catch (e) { console.warn('completedAt not recorded (tick unaffected):', e); }
   loadStandaloneTasks();
 };
 
@@ -265,13 +310,14 @@ function showWeeklyReviewModal(pastIncomplete) {
   pastIncomplete.forEach(t => { _weeklyReviewState[t.id] = null; });
 
   const byWeek = {};
-  pastIncomplete.forEach(t => { (byWeek[t.weekKey] = byWeek[t.weekKey] || []).push(t); });
+  pastIncomplete.forEach(t => { (byWeek[effWeek(t)] = byWeek[effWeek(t)] || []).push(t); });
 
   document.getElementById('modal-title-text').textContent = 'Weekly review';
   document.getElementById('modal-body-content').innerHTML =
     '<p style="font-size:13px;color:var(--text-mid);margin-bottom:16px;line-height:1.6;">' +
       'A previous week ended with tasks still open. Decide what happens to each one — this is what closes that week out and locks it into your performance log.' +
     '</p>' +
+    '<div style="margin-bottom:14px;"><button class="btn-outline" style="font-size:11px;padding:6px 12px;" onclick="rollAllWeeklyReview()">↻ Roll everything over to this week</button></div>' +
     Object.entries(byWeek).map(([wk, items]) => (
       '<div style="margin-bottom:14px;">' +
         '<div style="font-size:11px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.04em;margin-bottom:8px;">' + weekKeyLabel(wk) + '</div>' +
@@ -288,6 +334,10 @@ function showWeeklyReviewModal(pastIncomplete) {
   document.getElementById('create-product-modal').style.display = 'flex';
   window._weeklyReviewTasks = pastIncomplete;
 }
+
+window.rollAllWeeklyReview = () => {
+  (window._weeklyReviewTasks || []).forEach(t => window.setWeeklyReviewChoice(t.id, 'rollover'));
+};
 
 window.setWeeklyReviewChoice = (taskId, choice) => {
   _weeklyReviewState[taskId] = choice;
@@ -307,7 +357,7 @@ window.finishWeeklyReview = async () => {
   // Group by the week each task actually belonged to, so a stats entry
   // gets written per week even if several unreviewed weeks piled up.
   const byWeek = {};
-  tasks.forEach(t => { (byWeek[t.weekKey] = byWeek[t.weekKey] || []).push(t); });
+  tasks.forEach(t => { (byWeek[effWeek(t)] = byWeek[effWeek(t)] || []).push(t); });
 
   for (const [wk, items] of Object.entries(byWeek)) {
     let rolledOver = 0, missed = 0;
@@ -319,7 +369,7 @@ window.finishWeeklyReview = async () => {
         await set(ref(db, standaloneRef() + '/' + newId), {
           id: newId, title: t.title, deadline: '', status: 'on-track',
           ownerEmail: currentUser.email, createdAt: Date.now(),
-          weekKey: cwk, rolledOverFrom: t.id,
+          weekKey: cwk, rolledOverFrom: t.id, rollCount: (t.rollCount || 0) + 1,
         });
         await set(ref(db, standaloneRef() + '/' + t.id + '/rolledOver'), true);
       } else {
@@ -332,7 +382,7 @@ window.finishWeeklyReview = async () => {
     // ones passed in here) so the completion rate reflects everything,
     // not just what needed a decision.
     const snap = await get(ref(db, standaloneRef()));
-    const weekTasks = snap.exists() ? Object.values(snap.val()).filter(x => x.id && !x.id.startsWith('_') && x.weekKey === wk) : [];
+    const weekTasks = snap.exists() ? Object.values(snap.val()).filter(x => x.id && !x.id.startsWith('_') && effWeek(x) === wk) : [];
     const completed = weekTasks.filter(x => x.status === 'complete').length;
     const total = weekTasks.length;
 
@@ -375,10 +425,7 @@ async function loadWeeklyPerformance() {
   }
 }
 
-async function loadMyActions() {
-  const listEl = document.getElementById('ma-list');
-  if (!listEl) return;
-  try {
+export async function collectMyActionRecords() {
     const products = await getProductsFresh();
     const userKey  = sanitiseEmail(currentUser.email);
     const meEmail  = (currentUser.email || '').toLowerCase().trim();
@@ -417,7 +464,16 @@ async function loadMyActions() {
       });
     });
 
+    return records;
+}
+
+async function loadMyActions() {
+  const listEl = document.getElementById('ma-list');
+  if (!listEl) return;
+  try {
+    const records = await collectMyActionRecords();
     window._myActionsData = records;
+    maUpdateCarryBadge(records);
     renderMyActionsList();
   } catch(e) {
     listEl.innerHTML = '<div class="loading-row muted" style="padding:24px;">Could not load your tasks. Try refreshing.</div>';
@@ -714,7 +770,7 @@ function renderMyActionsList() {
         </div>
         <div class="ma-main" style="flex:1;min-width:0;">
           <div style="font-size:13px;font-weight:600;color:#1A1A1A;">${r.task.title || 'Untitled task'}</div>
-          <div style="font-size:11px;color:var(--text-muted);margin-top:1px;">${r.prod.name}</div>
+          <div style="font-size:11px;color:var(--text-muted);margin-top:1px;">${r.prod.name}${maCarryTag(r)}</div>
         </div>
         <span class="pcf-pill ${prioCls} ma-prio" style="flex-shrink:0;">${r.priority}</span>
         <div class="ma-avatar" title="${ownerName}">${maInitials(ownerName)}</div>

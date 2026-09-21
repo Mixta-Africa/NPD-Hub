@@ -56,6 +56,7 @@ import './auth/privacy-lock.js';
 import './ui/shell.js';
 import './features/share.js';
 import './features/weekly-log.js';
+import './features/weekly-report.js';
 import './features/handover.js';
 import './superadmin/index.js';
 import './superadmin/health.js';

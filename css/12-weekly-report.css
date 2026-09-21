@@ -1,0 +1,100 @@
+/* css/12-weekly-report.css — My weekly report, the "Weekly report" header button, and the carried-over markers.
+   Loads after 11-mobile.css. Phone layout is included here (bottom of file). */
+
+/* ── My Actions header button + carried-over markers ───────────── */
+.view-header .ma-header-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+.ma-report-btn { display: inline-flex; align-items: center; gap: 7px; white-space: nowrap; }
+.ma-carry-badge {
+  align-items: center; justify-content: center; min-width: 18px; height: 18px; padding: 0 5px; margin-left: 2px;
+  border-radius: 9px; background: #fff; color: var(--red); font-size: 10px; font-weight: 700;
+}
+.ma-carry { color: #B45309; font-weight: 600; white-space: nowrap; }
+
+/* ── The report modal is wider than the default 640px ───────────── */
+.modal-box:has(.wr-root) { max-width: 860px; }
+
+/* ── Toolbar ────────────────────────────────────────────────────── */
+.wr-root { font-size: 13px; color: var(--text); }
+.wr-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 16px; }
+.wr-nav { display: flex; align-items: center; gap: 10px; }
+.wr-arrow { width: 34px; height: 34px; padding: 0 !important; font-size: 18px; line-height: 1; display: inline-flex; align-items: center; justify-content: center; }
+.wr-arrow[disabled] { opacity: .35; cursor: not-allowed; }
+.wr-range-main { font-size: 14px; font-weight: 700; }
+.wr-range-sub { font-size: 11px; color: var(--text-muted); }
+.wr-quick { display: flex; gap: 6px; }
+.wr-quick .btn-outline { font-size: 11px; padding: 6px 12px; }
+.wr-quick .wr-on { background: var(--text); color: #fff; border-color: var(--text); }
+
+/* ── KPI cards ──────────────────────────────────────────────────── */
+.wr-kpis { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-bottom: 18px; }
+.wr-kpi { border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; background: var(--surface); }
+.wr-kpi-label { font-size: 10px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--text-muted); }
+.wr-kpi-value { font-size: 26px; font-weight: 700; line-height: 1.15; margin-top: 4px; }
+.wr-of { font-size: 14px; font-weight: 500; color: var(--text-muted); }
+.wr-kpi-sub { font-size: 11px; color: var(--text-muted); margin-top: 3px; }
+.wr-kpi.wr-up .wr-kpi-sub { color: var(--green); font-weight: 600; }
+.wr-kpi.wr-down .wr-kpi-sub, .wr-kpi.wr-warn .wr-kpi-value { color: var(--red); }
+.wr-kpi.wr-down .wr-kpi-sub { font-weight: 600; }
+
+/* ── Sections ───────────────────────────────────────────────────── */
+.wr-section { margin-bottom: 20px; }
+.wr-section-title { font-size: 11px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--text-muted); margin-bottom: 8px; display: flex; align-items: center; gap: 8px; }
+.wr-count { background: var(--bg, #F3F4F6); border-radius: 9px; padding: 1px 8px; font-size: 10px; color: var(--text-mid); letter-spacing: 0; }
+.wr-empty { font-size: 12px; color: var(--text-muted); padding: 10px 0; }
+
+/* ── Analysis ───────────────────────────────────────────────────── */
+.wr-insights { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.wr-ins { display: flex; gap: 10px; align-items: flex-start; font-size: 13px; line-height: 1.55; padding: 10px 12px; border-radius: 8px; background: #F8F8F7; }
+.wr-dot { width: 8px; height: 8px; border-radius: 50%; margin-top: 6px; flex-shrink: 0; background: #9CA3AF; }
+.wr-ins-good .wr-dot { background: var(--green); } .wr-ins-good { background: #F0FDF4; }
+.wr-ins-warn .wr-dot { background: #D97706; }      .wr-ins-warn { background: #FFFBEB; }
+
+/* ── Trend chart ────────────────────────────────────────────────── */
+.wr-trend { display: flex; align-items: flex-end; gap: 10px; height: 132px; padding: 4px 4px 0; }
+.wr-trend-col { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: flex-end; gap: 4px; min-width: 0; }
+.wr-trend-val { font-size: 11px; font-weight: 700; }
+.wr-bar { width: 100%; max-width: 46px; border-radius: 5px 5px 0 0; }
+.wr-bar-good { background: var(--green); } .wr-bar-mid { background: #F59E0B; } .wr-bar-low { background: var(--red); } .wr-bar-none { background: #E5E7EB; }
+.wr-trend-lbl { font-size: 10px; color: var(--text-muted); white-space: nowrap; }
+
+/* ── Item rows ──────────────────────────────────────────────────── */
+.wr-row { display: flex; align-items: center; gap: 10px; padding: 10px 0; border-bottom: 1px solid var(--border); }
+.wr-row-main { flex: 1; min-width: 0; }
+.wr-row-title { font-size: 13px; font-weight: 600; line-height: 1.35; overflow-wrap: anywhere; }
+.wr-row-sub { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
+.wr-row-tags { display: flex; gap: 6px; flex-shrink: 0; }
+.wr-row-actions { display: flex; gap: 6px; flex-shrink: 0; }
+.wr-row-actions .btn-outline { font-size: 11px; padding: 5px 11px; }
+.wr-chip { font-size: 10px; font-weight: 700; padding: 3px 8px; border-radius: 10px; white-space: nowrap; }
+.wr-chip-carry { background: #FEF3C7; color: #B45309; }
+.wr-chip-ok { background: #DCFCE7; color: #15803D; }
+.wr-chip-late { background: #FEE2E2; color: #B91C1C; }
+
+/* ── By project ─────────────────────────────────────────────────── */
+.wr-proj { display: flex; align-items: center; gap: 12px; padding: 7px 0; }
+.wr-proj-name { flex: 0 0 34%; font-size: 12px; font-weight: 600; overflow-wrap: anywhere; }
+.wr-proj-bar { flex: 1; height: 8px; border-radius: 4px; background: #E5E7EB; overflow: hidden; }
+.wr-proj-fill { height: 100%; background: var(--green); border-radius: 4px; }
+.wr-proj-num { flex: 0 0 auto; font-size: 12px; font-weight: 600; min-width: 70px; text-align: right; }
+.wr-proj-open { color: #B45309; font-weight: 500; }
+
+.wr-foot { display: flex; gap: 10px; justify-content: flex-end; flex-wrap: wrap; padding-top: 6px; border-top: 1px solid var(--border); margin-top: 6px; }
+
+/* ── Phone ──────────────────────────────────────────────────────── */
+@media (max-width: 600px) {
+  .wr-kpis { grid-template-columns: repeat(2, 1fr); }
+  .wr-kpi-value { font-size: 22px; }
+  .wr-toolbar { flex-direction: column; align-items: stretch; }
+  .wr-nav { justify-content: space-between; }
+  .wr-quick { justify-content: stretch; } .wr-quick .btn-outline { flex: 1; }
+  .wr-row { flex-wrap: wrap; }
+  .wr-row-main { flex: 1 1 100%; }
+  .wr-row-actions { margin-left: auto; }
+  .wr-proj { flex-wrap: wrap; gap: 4px 12px; }
+  .wr-proj-name { flex: 1 1 100%; }
+  .wr-proj-bar { flex: 1 1 0; }
+  .wr-foot { flex-direction: column; } .wr-foot .btn-outline, .wr-foot .btn-primary { width: 100%; justify-content: center; }
+  .wr-trend { gap: 6px; }
+  .view-header .ma-header-actions { width: 100%; }
+  .view-header .ma-report-btn { width: 100%; justify-content: center; }
+}
