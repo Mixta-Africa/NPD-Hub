@@ -151,7 +151,11 @@ export function renderReports(el) {
         <button class="btn-primary" onclick="saveEmailSchedule()" style="width:100%;">Save schedule</button>
         <button class="btn-outline" onclick="sendMyTodoNow()" style="width:100%;margin-top:8px;">Send me my task list now</button>
         <div id="schedule-result" style="display:none;margin-top:10px;"></div>
-        <div id="schedule-lastrun" style="font-size:11px;color:var(--text-muted);margin-top:10px;"></div>
+        <div id="schedule-lastrun" style="font-size:12px;padding:10px 12px;border-radius:8px;margin-top:12px;display:none;"></div>
+        <button class="btn-outline" id="send-reminders-now-btn" onclick="sendRemindersNowClick()" style="width:100%;margin-top:8px;"
+          title="Sends the real reminder emails right now, to everyone with something due — bypasses the Mon/Wed/Fri schedule for this one run only.">
+          Send reminders now (real send, bypasses schedule)
+        </button>
         ` : '<p style="font-size:12px;color:var(--text-muted);">Only admins can change the email schedule.</p>'}
       </div>
     </div>
@@ -656,7 +660,45 @@ async function loadEmailSchedule() {
     days = days.map(Number).filter(d => d >= 1 && d <= 5);
     paint(days.length ? days : [1, 3, 5], s.alertHour ?? 7);
     refreshNote();
-    const lr = document.getElementById('schedule-lastrun');
-    if (lr && s.lastRunDate) lr.textContent = 'Last reminder run: ' + s.lastRunDate;
   } catch(e) { /* settings not yet saved */ }
+  renderLastRunStatus();
 }
+
+// Shows what actually happened last time scheduledReminders ran — sent, skipped (and why), or
+// errored — not just "we saved your settings". Before this, a skip and a send looked identical
+// from the dashboard: nothing here at all, in both cases. Call again after any manual send so the
+// status updates immediately instead of waiting for the next scheduled run.
+async function renderLastRunStatus() {
+  const el = document.getElementById('schedule-lastrun');
+  if (!el) return;
+  try {
+    const snap = await get(ref(db, 'config/emailSchedule/lastRun'));
+    if (!snap.exists()) {
+      el.style.display = 'block';
+      el.style.background = '#F3F4F6'; el.style.color = 'var(--text-mid)';
+      el.textContent = 'No automated run has been recorded yet. It will appear here after the next scheduled run, or press "Send reminders now" below.';
+      return;
+    }
+    const r = snap.val();
+    const mins = Math.round((Date.now() - r.at) / 60000);
+    const ago = mins < 1 ? 'just now' : mins < 60 ? mins + ' min ago' : mins < 1440 ? Math.round(mins / 60) + 'h ago' : Math.round(mins / 1440) + 'd ago';
+    const style = { sent: ['#F0FDF4', '#16A34A'], skipped: ['#F3F4F6', 'var(--text-mid)'], error: ['#FEF2F2', '#C0282D'] }[r.result] || ['#F3F4F6', 'var(--text-mid)'];
+    const label = { sent: 'Sent', skipped: 'Skipped', error: 'Failed' }[r.result] || r.result;
+    el.style.display = 'block'; el.style.background = style[0]; el.style.color = style[1];
+    el.innerHTML = '<strong>' + label + '</strong> · ' + (r.dateStr || '') + ' (' + ago + ') — ' + (r.detail || '');
+    if (r.result === 'error') el.innerHTML += '<div style="margin-top:4px;font-weight:600;">This needs attention — reminders did not go out as expected.</div>';
+  } catch (e) { el.style.display = 'none'; }
+}
+
+window.sendRemindersNowClick = async () => {
+  const btn = document.getElementById('send-reminders-now-btn');
+  if (btn) { btn.disabled = true; btn.textContent = 'Sending…'; }
+  try {
+    const res = await callGAS('runRemindersNow', {});
+    showToast(res.ok ? (res.sent ? 'Sent ' + res.sent + ' email(s).' : 'Ran — nothing was due to send.') : 'Failed: ' + (res.message || res.error), res.ok ? 'success' : 'error');
+  } catch (e) {
+    showToast('Could not reach the backend: ' + e.message, 'error');
+  }
+  await renderLastRunStatus();
+  if (btn) { btn.disabled = false; btn.textContent = 'Send reminders now (real send, bypasses schedule)'; }
+};
