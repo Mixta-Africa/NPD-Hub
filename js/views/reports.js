@@ -137,6 +137,13 @@ export function renderReports(el) {
         <button class="btn-outline" onclick="sendMyTodoNow()" style="width:100%;margin-top:8px;">Send me my task list now</button>
         <div id="schedule-result" style="display:none;margin-top:10px;"></div>
         <div id="schedule-lastrun" style="font-size:12px;padding:10px 12px;border-radius:8px;margin-top:12px;display:none;"></div>
+        <div class="form-row" style="margin-top:14px;margin-bottom:2px;">
+          <label class="form-label">Scope</label>
+          <select id="reminder-scope-sel" class="select-field" style="width:100%;">
+            <option value="__all__">All eligible projects</option>
+          </select>
+          <div id="reminder-scope-note" style="font-size:11px;color:var(--text-muted);margin-top:6px;"></div>
+        </div>
         <label style="display:flex;align-items:center;gap:8px;font-size:12px;color:var(--text-mid);margin-top:10px;cursor:pointer;">
           <input type="checkbox" id="send-reminders-test-mode"/> Test mode — send everything to me instead of the real recipients
         </label>
@@ -226,7 +233,7 @@ export function renderReports(el) {
 
   if (currentRole === 'admin') setTimeout(loadReportProductList, 50);
   loadDeadlineStatus();
-  if (currentRole === 'admin') loadEmailSchedule();
+  if (currentRole === 'admin') { loadEmailSchedule(); loadReminderScopeOptions(); }
 }
 
 /* ══ WEEKLY REPORT — for the Monday update ═══════════════════
@@ -358,6 +365,31 @@ async function loadDeadlineStatus() {
 }
 
 /* ══ PHASE 6: PROGRESS REPORTS ══════════════════════════════ */
+// The exact set "All eligible projects" and this dropdown offer: everything canUserSeeProduct allows
+// right now, which already means "My View" -> only products I own or have a task in, "Org View" ->
+// everything — whichever the Dashboard toggle is currently set to. Re-read on every visit to this
+// page (not cached) so a toggle changed on the Dashboard a moment ago is reflected immediately.
+async function loadReminderScopeOptions() {
+  const sel  = document.getElementById('reminder-scope-sel');
+  const note = document.getElementById('reminder-scope-note');
+  if (!sel) return;
+  const products = await getProductsFresh();
+  const userKey  = sanitiseEmail(currentUser.email);
+  const eligible = Object.values(products).filter(p => p.status !== 'archived' && canUserSeeProduct(p, userKey));
+
+  const prevValue = sel.value;
+  sel.innerHTML = '<option value="__all__">All eligible projects (' + eligible.length + ')</option>' +
+    eligible.map(p => '<option value="' + p.id + '">' + p.name + '</option>').join('');
+  // Keep the previous pick only if it is still eligible; otherwise fall back to "All"
+  sel.value = eligible.some(p => p.id === prevValue) ? prevValue : '__all__';
+
+  if (note) {
+    const modeLabel = window.adminViewMode === 'personal' ? 'My View' : 'Org View';
+    note.textContent = 'Following the Dashboard\'s ' + modeLabel + ' toggle — ' + eligible.length +
+      ' project' + (eligible.length !== 1 ? 's' : '') + ' eligible right now. Switch the toggle on the Dashboard to change this.';
+  }
+}
+
 async function loadReportProductList() {
   const prods = await getProductsFresh();
   const sel   = document.getElementById('report-product-sel');
@@ -575,11 +607,40 @@ async function renderLastRunStatus() {
 window.sendRemindersNowClick = async () => {
   const btn = document.getElementById('send-reminders-now-btn');
   const testMode = document.getElementById('send-reminders-test-mode')?.checked;
+  const scopeChoice = document.getElementById('reminder-scope-sel')?.value || '__all__';
   if (btn) { btn.disabled = true; btn.textContent = testMode ? 'Sending test…' : 'Sending…'; }
   try {
-    const res = await callGAS('runRemindersNow', testMode ? { testTo: currentUser.email } : {});
+    // Re-derive eligibility fresh at click time, from the CURRENT My View / Org View toggle — never
+    // trust the dropdown's already-rendered options, in case the toggle changed since this page loaded.
+    const products = await getProductsFresh();
+    const userKey  = sanitiseEmail(currentUser.email);
+    const eligible = Object.values(products).filter(p => p.status !== 'archived' && canUserSeeProduct(p, userKey));
+    const eligibleIds = eligible.map(p => p.id);
+
+    let productIds, scopeLabel;
+    if (scopeChoice === '__all__') {
+      productIds = eligibleIds;
+      scopeLabel = (window.adminViewMode === 'personal' ? 'My View' : 'Org View') + ' — all ' + eligibleIds.length + ' eligible project(s)';
+    } else if (eligibleIds.includes(scopeChoice)) {
+      productIds = [scopeChoice];
+      scopeLabel = eligible.find(p => p.id === scopeChoice)?.name || scopeChoice;
+    } else {
+      // The chosen project fell out of scope (archived, or the toggle changed) between page load and click
+      showToast('That project is no longer eligible under the current view. Re-select a scope and try again.', 'error');
+      if (btn) { btn.disabled = false; btn.textContent = 'Send reminders now (bypasses schedule)'; }
+      return;
+    }
+    if (productIds.length === 0) {
+      showToast('No eligible projects under the current view — nothing to send.', 'error');
+      if (btn) { btn.disabled = false; btn.textContent = 'Send reminders now (bypasses schedule)'; }
+      return;
+    }
+
+    const payload = { productIds };
+    if (testMode) payload.testTo = currentUser.email;
+    const res = await callGAS('runRemindersNow', payload);
     const modeTag = testMode ? ' (test mode — sent to you only)' : '';
-    showToast(res.ok ? (res.sent ? 'Sent ' + res.sent + ' email(s)' + modeTag + '.' : 'Ran — nothing was due to send.') : 'Failed: ' + (res.message || res.error), res.ok ? 'success' : 'error');
+    showToast(res.ok ? (res.sent ? 'Sent ' + res.sent + ' email(s)' + modeTag + ' — scope: ' + scopeLabel + '.' : 'Ran — nothing was due to send in this scope.') : 'Failed: ' + (res.message || res.error), res.ok ? 'success' : 'error');
   } catch (e) {
     showToast('Could not reach the backend: ' + e.message, 'error');
   }
