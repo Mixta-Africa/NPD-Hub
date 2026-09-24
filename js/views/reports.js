@@ -636,7 +636,7 @@ window.sendRemindersNowClick = async () => {
       return;
     }
 
-    const payload = { productIds };
+    const payload = { productIds, sentByName: currentPreferredName || currentUser.email, sentBy: currentUser.email };
     if (testMode) payload.testTo = currentUser.email;
     const res = await callGAS('runRemindersNow', payload);
     const modeTag = testMode ? ' (test mode — sent to you only)' : '';
