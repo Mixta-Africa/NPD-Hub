@@ -142,7 +142,13 @@ function getTaskEffectiveStatus(task, prod) {
   if (prod && task.predecessors && task.predecessors.length > 0) {
     const isBlocked = task.predecessors.some(pid => {
       const pred = (prod.tasks && prod.tasks[pid]) || (prod.pillars && prod.pillars[pid]);
-      return pred && (pred.status || pred.taskStatus || 'on-track') !== 'complete';
+      if (!pred) return false;
+      const predStatus = pred.status || pred.taskStatus || 'on-track';
+      // A stepped-down (deprioritized) predecessor has been deliberately abandoned, not merely
+      // delayed — it will never reach 'complete'. Treating it as still-blocking would leave every
+      // dependent task permanently stuck as "Blocked" with no way out, inflating Needs Action
+      // indefinitely for work nobody is actually waiting on anymore.
+      return predStatus !== 'complete' && predStatus !== 'deprioritized';
     });
     if (isBlocked) return 'blocked';
   }
