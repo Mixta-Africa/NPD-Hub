@@ -104,7 +104,6 @@ window.__npd_init({
   toggleAllStakeholders:   window.toggleAllStakeholders,
   skipGASSetup:            window.skipGASSetup,
   confirmAndLaunchGAS:     window.confirmAndLaunchGAS,
-  triggerDeadlineCheck:    window.triggerDeadlineCheck,
   docsSelectProduct:       window.docsSelectProduct,
   docDragOver:             window.docDragOver,
   docDragLeave:            window.docDragLeave,
