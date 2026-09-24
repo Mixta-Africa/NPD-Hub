@@ -41,28 +41,13 @@ export function renderReports(el) {
       <div class="panel">
         <div class="panel-header"><span class="panel-title">Deadline Alert Engine</span></div>
         <div class="panel-body">
-          <p style="font-size:13px;color:var(--text-mid);line-height:1.7;margin-bottom:16px;">
-            Runs automatically every day via Google Apps Script — the same schedule set below under "Email schedule."<br/>
-            Sends targeted emails to the responsible department only — not all stakeholders.<br/>
-            Triggers: <strong>daily, for every active task with a deadline</strong>, showing each recipient a running countdown to (or past) that deadline.
+          <p style="font-size:13px;color:var(--text-mid);line-height:1.7;margin-bottom:0;">
+            Runs automatically on the schedule set below under "Email schedule" (Mon/Wed/Fri by default). Each person with something
+            due or overdue — anywhere they are an owner, across every project — gets <strong>one combined email</strong> listing all of it,
+            resolved from that task's actual assigned owner(s), never a generic department address.<br/><br/>
+            Nothing here is gated by time of day beyond the single scheduled send hour: a manual send works at any hour.
+            The one manual dispatch button — real or test — is under <strong>Email schedule</strong>, further down this page.
           </p>
-          ${currentRole === 'admin' ? `
-          <div class="alert-manual-section">
-            <div class="form-section-label" style="margin-bottom:10px;">Manual trigger</div>
-            <select id="alert-product-sel" class="select-field" style="width:100%;margin-bottom:10px;">
-              <option value="all">All active products</option>
-            </select>
-            <div style="margin-bottom:10px;">
-            <select id="alert-send-mode" class="select-field" style="width:100%;">
-              <option value="real">Live — send to responsible departments</option>
-              <option value="test">Test — send only to o.olasunkanmi@mixtafrica.com</option>
-            </select>
-          </div>
-          <button class="btn-primary" onclick="triggerDeadlineCheck()" style="width:100%;">
-              Run deadline check now
-            </button>
-            <div id="alert-result" style="display:none;margin-top:12px;"></div>
-          </div>` : '<p style="font-size:12px;color:var(--text-muted);">Contact an admin to trigger a manual check.</p>'}
         </div>
       </div>
 
@@ -152,9 +137,12 @@ export function renderReports(el) {
         <button class="btn-outline" onclick="sendMyTodoNow()" style="width:100%;margin-top:8px;">Send me my task list now</button>
         <div id="schedule-result" style="display:none;margin-top:10px;"></div>
         <div id="schedule-lastrun" style="font-size:12px;padding:10px 12px;border-radius:8px;margin-top:12px;display:none;"></div>
-        <button class="btn-outline" id="send-reminders-now-btn" onclick="sendRemindersNowClick()" style="width:100%;margin-top:8px;"
-          title="Sends the real reminder emails right now, to everyone with something due — bypasses the Mon/Wed/Fri schedule for this one run only.">
-          Send reminders now (real send, bypasses schedule)
+        <label style="display:flex;align-items:center;gap:8px;font-size:12px;color:var(--text-mid);margin-top:10px;cursor:pointer;">
+          <input type="checkbox" id="send-reminders-test-mode"/> Test mode — send everything to me instead of the real recipients
+        </label>
+        <button class="btn-outline" id="send-reminders-now-btn" onclick="sendRemindersNowClick()" style="width:100%;margin-top:6px;"
+          title="Runs the same routing as the automatic schedule, right now, to whoever actually owns each overdue or due task — bypasses Mon/Wed/Fri for this one run only.">
+          Send reminders now (bypasses schedule)
         </button>
         ` : '<p style="font-size:12px;color:var(--text-muted);">Only admins can change the email schedule.</p>'}
       </div>
@@ -238,18 +226,7 @@ export function renderReports(el) {
 
   if (currentRole === 'admin') setTimeout(loadReportProductList, 50);
   loadDeadlineStatus();
-  if (currentRole === 'admin') { loadAlertProductList(); loadEmailSchedule(); }
-}
-
-async function loadAlertProductList() {
-  const products = await getProductsFresh();
-  const sel     = document.getElementById('alert-product-sel');
-  if (!sel) return;
-  Object.values(products).filter(p => p.status !== 'archived').forEach(p => {
-    const opt = document.createElement('option');
-    opt.value = p.id; opt.textContent = p.name;
-    sel.appendChild(opt);
-  });
+  if (currentRole === 'admin') loadEmailSchedule();
 }
 
 /* ══ WEEKLY REPORT — for the Monday update ═══════════════════
@@ -430,101 +407,6 @@ window.generateProgressReport = async () => {
   });
 };
 
-window.triggerDeadlineCheck = async () => {
-  const btn = document.querySelector('.alert-manual-section .btn-primary');
-  const resultEl = document.getElementById('alert-result');
-  if (btn) { btn.disabled = true; btn.textContent = 'Running...'; }
-  if (resultEl) resultEl.style.display = 'none';
-
-  try {
-    const productId = document.getElementById('alert-product-sel')?.value || 'all';
-    // Build alert payload from Firebase
-    const products  = await getProductsFresh();
-    const today     = new Date(); today.setHours(0,0,0,0);
-    const alerts    = [];
-
-    Object.values(products)
-      .filter(p => p.status !== 'archived' && (productId === 'all' || p.id === productId))
-      .forEach(prod => {
-        // Use unified task system — handles both new tasks{} and legacy pillars{}
-        const tasks = getProductTasks(prod);
-        tasks.forEach(task => {
-          if (!task.deadline || task.status === 'complete') return;
-          const isDelayed = task.status === 'delayed';
-          const due  = task.deadline ? new Date(task.deadline) : null;
-          if (due) due.setHours(0,0,0,0);
-          const diff = due ? Math.round((due - today) / 86400000) : null;
-
-          // Send if: deadline overdue/approaching OR explicitly marked delayed
-          const threshold = SYS_CONFIG.alertThresholdDays || 3;
-          const deadlineAlert = due && diff !== null && diff <= threshold;
-          if (!deadlineAlert && !isDelayed) return;
-
-          // Skip if alerts disabled for this product
-          if (prod.alertsEnabled === false) return;
-
-          // Recipient priority:
-          // 1. Manual alertRecipients set on the product
-          // 2. Product owner's email
-          // 3. Current logged-in user
-          let deptEmails = [];
-          if (prod.alertRecipients && prod.alertRecipients.length > 0) {
-            deptEmails = prod.alertRecipients;
-          } else {
-            // Default: the product owner
-            const ownerMember = TEAM_MEMBERS[prod.ownerId];
-            if (ownerMember?.email) {
-              deptEmails = [ownerMember.email];
-            } else {
-              deptEmails = [currentUser.email];
-            }
-          }
-
-          alerts.push({
-            productName: prod.name,
-            productId:   prod.id,
-            pillarName:  task.title || task.name,
-            pillarId:    task.id,
-            ownerDept:   task.owner || 'Unknown',
-            deptEmails,
-            daysUntil:   diff,
-            deadline:    task.deadline,
-            alertType:   diff < 0 ? 'overdue' : diff === 0 ? 'due' : 'warning',
-            // Overdue tasks: include days count in every email
-            daysOverdue: diff < 0 ? Math.abs(diff) : 0,
-          });
-        });
-      });
-
-    if (alerts.length === 0) {
-      if (resultEl) {
-        resultEl.style.display = 'block';
-        resultEl.className = 'alert-result-box alert-result-ok';
-        resultEl.innerHTML = ICON.check_circle + ' No alerts to send — all pillars are on track.';
-      }
-    } else {
-      const testMode = document.getElementById('alert-send-mode')?.value === 'test';
-    const result = await callGAS('checkDeadlines', { alerts, testMode });
-      if (resultEl) {
-        resultEl.style.display = 'block';
-        resultEl.className = `alert-result-box ${result.ok ? 'alert-result-ok' : 'alert-result-err'}`;
-        resultEl.innerHTML = result.ok
-          ? ICON.check_circle + ` ${result.sent || alerts.length} alert email${(result.sent||alerts.length)>1?'s':''} sent.`
-          : `❌ Error: ${result.error}`;
-      }
-      loadDeadlineStatus();
-    }
-  } catch(e) {
-    if (resultEl) {
-      resultEl.style.display = 'block';
-      resultEl.className = 'alert-result-box alert-result-err';
-      resultEl.innerHTML = '❌ ' + e.message;
-    }
-  }
-
-  if (btn) { btn.disabled = false; btn.textContent = 'Run deadline check now'; }
-};
-
 window.sendMyTodoNow = async () => {
   showToast('Sending your task list...', 'info');
   try {
@@ -692,13 +574,15 @@ async function renderLastRunStatus() {
 
 window.sendRemindersNowClick = async () => {
   const btn = document.getElementById('send-reminders-now-btn');
-  if (btn) { btn.disabled = true; btn.textContent = 'Sending…'; }
+  const testMode = document.getElementById('send-reminders-test-mode')?.checked;
+  if (btn) { btn.disabled = true; btn.textContent = testMode ? 'Sending test…' : 'Sending…'; }
   try {
-    const res = await callGAS('runRemindersNow', {});
-    showToast(res.ok ? (res.sent ? 'Sent ' + res.sent + ' email(s).' : 'Ran — nothing was due to send.') : 'Failed: ' + (res.message || res.error), res.ok ? 'success' : 'error');
+    const res = await callGAS('runRemindersNow', testMode ? { testTo: currentUser.email } : {});
+    const modeTag = testMode ? ' (test mode — sent to you only)' : '';
+    showToast(res.ok ? (res.sent ? 'Sent ' + res.sent + ' email(s)' + modeTag + '.' : 'Ran — nothing was due to send.') : 'Failed: ' + (res.message || res.error), res.ok ? 'success' : 'error');
   } catch (e) {
     showToast('Could not reach the backend: ' + e.message, 'error');
   }
-  await renderLastRunStatus();
-  if (btn) { btn.disabled = false; btn.textContent = 'Send reminders now (real send, bypasses schedule)'; }
+  if (!testMode) await renderLastRunStatus();   // a test run writes to lastTestRun, not lastRun — the real status box should not flicker to reflect a test
+  if (btn) { btn.disabled = false; btn.textContent = 'Send reminders now (bypasses schedule)'; }
 };
