@@ -20,8 +20,19 @@ function positionChartPulse() {
   const meta = chart.getDatasetMeta(1);
   const pt   = meta?.data?.[idx];
   if (!pt) return;
-  dot.style.left = pt.x + 'px';
-  dot.style.top  = pt.y + 'px';
+  // chart.canvas gives pt.x/pt.y relative to the CANVAS's own top-left. The dot is an absolutely
+  // positioned child of chart.canvas.parentElement (its offsetParent), which is positioned relative
+  // to that parent's PADDING box, not its content box — so if the parent has any padding (it does:
+  // "Project Progress" panel body uses padding:12px 16px 16px), left:pt.x / top:pt.y alone lands the
+  // dot up-and-left of the real point by exactly that padding, every single time. Measuring the two
+  // boxes directly (rather than hardcoding the current padding values) keeps this correct even if the
+  // panel's CSS changes later.
+  const canvasBox = chart.canvas.getBoundingClientRect();
+  const wrapBox   = dot.offsetParent ? dot.offsetParent.getBoundingClientRect() : canvasBox;
+  const offsetX   = canvasBox.left - wrapBox.left;
+  const offsetY   = canvasBox.top  - wrapBox.top;
+  dot.style.left = (pt.x + offsetX) + 'px';
+  dot.style.top  = (pt.y + offsetY) + 'px';
   dot.style.display = 'block';
 }
 window.addEventListener('resize', () => { clearTimeout(window._pulseResizeT); window._pulseResizeT = setTimeout(positionChartPulse, 150); });
