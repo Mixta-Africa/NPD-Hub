@@ -47,9 +47,58 @@ function ensureProductViewStyles() {
       .product-list-view .pcf-progress-row{max-width:none;width:100%;margin:8px 0 0;}
       .pv-toolbar{gap:8px;}
     }
+
+    /* ── Grid view: compact, minimalist tiles — a few true columns, not one stretched card ── */
+    .product-grid{display:grid !important;grid-template-columns:repeat(auto-fill,minmax(270px,1fr)) !important;gap:16px;align-items:start;}
+    .product-grid-card{position:relative;background:#fff;border:1px solid var(--border,#E5E5E3);border-radius:12px;padding:16px;display:flex;flex-direction:column;gap:10px;transition:box-shadow .15s ease,transform .15s ease;}
+    .product-grid-card:hover{box-shadow:0 8px 22px rgba(0,0,0,.06);transform:translateY(-1px);border-color:var(--border-mid,#D8D8D5);}
+    .pgc-top{display:flex;align-items:center;gap:6px;flex-wrap:wrap;}
+    .pgc-dot{width:7px;height:7px;border-radius:50%;flex:0 0 auto;}
+    .pgc-dot.pcf-health-red{background:#C0282D;}
+    .pgc-dot.pcf-health-green{background:#16A34A;}
+    .pgc-dot.pcf-health-done{background:#2563EB;}
+    .pgc-type-tag{font-size:9px;font-weight:700;letter-spacing:.06em;color:var(--text-muted,#6B7280);}
+    .pgc-pin-tag{font-size:9px;font-weight:700;color:#92400E;}
+    .pgc-order{display:flex;gap:2px;margin-left:auto;}
+    .pgc-name{font-size:14px;font-weight:600;color:var(--text,#1A1A1A);cursor:pointer;line-height:1.35;overflow-wrap:anywhere;}
+    .pgc-name:hover{color:#C0282D;}
+    .pgc-sub{display:flex;justify-content:space-between;gap:8px;font-size:11px;color:var(--text-muted,#6B7280);}
+    .pgc-progress{display:flex;align-items:center;gap:8px;}
+    .pgc-progress-bar{flex:1;height:4px;background:#F0F0EE;border-radius:2px;overflow:hidden;}
+    .pgc-progress-fill{height:4px;border-radius:2px;}
+    .pgc-pct{flex:0 0 auto;font-size:11px;font-weight:600;color:var(--text-muted,#6B7280);}
+    .pgc-meta-row{display:flex;align-items:center;flex-wrap:wrap;gap:6px;}
+    .pgc-chip{font-size:10px;font-weight:600;padding:2px 8px;border-radius:10px;white-space:nowrap;}
+    .pgc-chip-red{color:#C0282D;background:#FEF2F2;}
+    .pgc-chip-green{color:#16A34A;background:#F0FDF4;}
+    .pgc-chip-grey{color:var(--text-muted,#6B7280);background:#F3F4F6;}
+    .pgc-actions{display:flex;align-items:center;gap:6px;margin-top:2px;}
+    .pgc-actions .btn-primary-sm,.pgc-actions .btn-secondary-sm{flex:1 1 auto;justify-content:center;}
+    .pgc-more-btn{flex:0 0 auto;width:30px;height:30px;border:1px solid var(--border,#E5E5E3);background:#fff;border-radius:7px;cursor:pointer;color:var(--text-muted,#6B7280);display:flex;align-items:center;justify-content:center;font-size:13px;line-height:1;padding:0;}
+    .pgc-more-btn:hover{background:#F3F4F6;color:var(--text,#1A1A1A);}
+    .pgc-menu{display:none;flex-direction:column;gap:2px;position:absolute;right:16px;top:44px;min-width:160px;background:#fff;border:1px solid var(--border,#E5E5E3);border-radius:10px;box-shadow:0 10px 28px rgba(0,0,0,.1);padding:6px;z-index:20;}
+    .pgc-menu.open{display:flex;}
+    .pgc-menu button{background:none;border:none;text-align:left;padding:7px 10px;font-size:12px;border-radius:6px;cursor:pointer;color:var(--text,#1A1A1A);}
+    .pgc-menu button:hover{background:#F3F4F6;}
+    @media (max-width:480px){ .product-grid{grid-template-columns:1fr !important;} }
   `;
   document.head.appendChild(style);
 }
+
+/* Close any open grid-card "more" menu when clicking elsewhere on the page (bound once). */
+if (!window.__pgcMenuCloseBound) {
+  window.__pgcMenuCloseBound = true;
+  document.addEventListener('click', () => {
+    document.querySelectorAll('.pgc-menu.open').forEach(m => m.classList.remove('open'));
+  });
+}
+
+window.toggleGridCardMenu = (menuId, ev) => {
+  if (ev) ev.stopPropagation();
+  document.querySelectorAll('.pgc-menu.open').forEach(m => { if (m.id !== menuId) m.classList.remove('open'); });
+  const menu = document.getElementById(menuId);
+  if (menu) menu.classList.toggle('open');
+};
 
 export function renderProducts(el) {
   ensureProductViewStyles();
@@ -163,10 +212,11 @@ export async function loadProductList(skipFetch = false) {
     }
 
     const wrapClass = _viewMode === 'list' ? 'product-list-view' : 'product-grid';
+    const renderFn  = _viewMode === 'list' ? renderProductCard : renderProductCardGrid;
     area.innerHTML = '<div class="' + wrapClass + '">' + list.map(p => {
       const group = list.filter(x => !!x.pinned === !!p.pinned);
       const idx = group.indexOf(p);
-      return renderProductCard(p, { isFirst: idx === 0, isLast: idx === group.length - 1 });
+      return renderFn(p, { isFirst: idx === 0, isLast: idx === group.length - 1 });
     }).join('') + '</div>';
   } catch(e) {
     area.innerHTML = '<div class="panel"><div class="empty-state-sm"><p>Failed to load products.</p></div></div>';
@@ -358,6 +408,95 @@ function renderProductCard(p, posInfo = {}) {
           : `<button class="btn-secondary-sm" style="color:var(--amber);border-color:var(--amber);" onclick="archiveProduct('${p.id}')">Archive</button>`)
           : ''}
       </div>
+    </div>`;
+}
+
+/* Minimalist grid-view tile: the essentials only (name, status, progress, task count,
+   one key stat) with everything else — Share, Handover, Activity, Archive, Onboard,
+   type conversion — tucked behind a "⋯" menu so the tile stays clean at a glance. */
+function renderProductCardGrid(p, posInfo = {}) {
+  const allTasks  = getProductTasks(p).filter(t => canViewTask(t, p));
+  const total     = allTasks.length || 1;
+  const complete  = allTasks.filter(t => resolveTaskStatus(t) === 'complete').length;
+  const delayed   = allTasks.filter(t => {
+    const eff = resolveTaskStatus(t);
+    return eff === 'overdue' || eff === 'delayed';
+  }).length;
+  const pct       = Math.round((complete / total) * 100);
+  const itemType  = p.itemType || 'product';
+  const statusCls = p.status || 'active';
+  const statusLbl = p.status === 'complete' ? 'Complete' : 'Active';
+
+  const today2 = new Date(); today2.setHours(0,0,0,0);
+  const launch = p.launchDate ? new Date(p.launchDate) : null;
+  if (launch) launch.setHours(0,0,0,0);
+  const daysToLaunch = launch ? Math.round((launch - today2) / 86400000) : null;
+
+  const launchText = !p.launchDate ? '—'
+    : daysToLaunch < 0   ? `${Math.abs(daysToLaunch)}d overdue`
+    : daysToLaunch === 0 ? 'Due today'
+    : `${daysToLaunch}d left`;
+
+  const healthCls = delayed > 0 ? 'pcf-health-red' : pct === 100 ? 'pcf-health-done' : 'pcf-health-green';
+
+  const metaChip = delayed > 0
+    ? `<span class="pgc-chip pgc-chip-red">${delayed} overdue</span>`
+    : pct === 100
+      ? `<span class="pgc-chip pgc-chip-grey">Complete</span>`
+      : `<span class="pgc-chip pgc-chip-green">On track</span>`;
+
+  const menuId = 'pgc-menu-' + p.id;
+  const moreMenu = `
+    <div class="pgc-menu" id="${menuId}">
+      ${canEdit(p) && !p.onboardedAt ? `<button onclick="event.stopPropagation();toggleGridCardMenu('${menuId}');reOnboardProduct('${p.id}')">${ICON.warn} Onboard</button>` : ''}
+      ${canEdit(p) ? `<button onclick="event.stopPropagation();toggleGridCardMenu('${menuId}');convertItemType('${p.id}','${itemType}')">${itemType === 'project' ? 'Convert to Product' : 'Convert to Project'}</button>` : ''}
+      ${canEdit(p) ? `<button onclick="event.stopPropagation();toggleGridCardMenu('${menuId}');showShareModal('${p.id}')">Share</button>` : ''}
+      ${getProductAccess(p) === 'owner' || currentRole === 'admin' ? `<button onclick="event.stopPropagation();toggleGridCardMenu('${menuId}');showHandoverModal('${p.id}')">Handover</button>` : ''}
+      <button onclick="event.stopPropagation();toggleGridCardMenu('${menuId}');showProductActivity('${p.id}')">Activity</button>
+      ${canEdit(p) ? (p.status === 'archived'
+        ? `<button onclick="event.stopPropagation();toggleGridCardMenu('${menuId}');unarchiveProduct('${p.id}')">Restore</button>`
+        : `<button onclick="event.stopPropagation();toggleGridCardMenu('${menuId}');archiveProduct('${p.id}')">Archive</button>`)
+        : ''}
+    </div>`;
+
+  return `
+    <div class="product-grid-card">
+      <div class="pgc-top">
+        <span class="pgc-dot ${healthCls}" title="${delayed > 0 ? delayed + ' delayed' : pct === 100 ? 'Complete' : 'On track'}"></span>
+        <span class="pgc-type-tag">${itemType.toUpperCase()}</span>
+        ${p.pinned ? '<span class="pgc-pin-tag">📌 Pinned</span>' : ''}
+        <div class="pgc-order">
+          <button class="pcf-order-btn ${p.pinned ? 'active' : ''}" title="${p.pinned ? 'Unpin' : 'Pin to top'}" onclick="event.stopPropagation(); toggleProductPin('${p.id}')">
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="${p.pinned ? 'currentColor' : 'none'}" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="17" x2="12" y2="22"/><path d="M5 17h14l-1.4-1.4A2 2 0 0117 14.2V9a5 5 0 00-10 0v5.2a2 2 0 01-.6 1.4L5 17z"/></svg>
+          </button>
+          <button class="pcf-order-btn" title="Move up" ${posInfo.isFirst ? 'disabled' : ''} onclick="event.stopPropagation(); moveProductUp('${p.id}')">▲</button>
+          <button class="pcf-order-btn" title="Move down" ${posInfo.isLast ? 'disabled' : ''} onclick="event.stopPropagation(); moveProductDown('${p.id}')">▼</button>
+        </div>
+      </div>
+
+      <div class="pgc-name" title="Open dashboard" onclick="openProjectDashboard('${p.id}')">${p.name}</div>
+      <div class="pgc-sub">
+        <span>${p.ownerName?.split(' ')[0] || '—'}</span>
+        <span>${launchText}</span>
+      </div>
+
+      <div class="pgc-progress">
+        <div class="pgc-progress-bar"><div class="pgc-progress-fill" style="width:${pct}%;background:${delayed > 0 ? '#C0282D' : '#16A34A'};"></div></div>
+        <span class="pgc-pct">${pct}%</span>
+      </div>
+
+      <div class="pgc-meta-row">
+        <span class="pgc-chip pgc-chip-grey">${allTasks.length} tasks</span>
+        ${metaChip}
+        <span class="status-chip status-${statusCls}" style="font-size:10px;">${statusLbl}</span>
+      </div>
+
+      <div class="pgc-actions">
+        <button class="btn-primary-sm" onclick="openProjectDashboard('${p.id}')">${ICON.bolt} Dashboard</button>
+        <button class="btn-secondary-sm" onclick="viewProduct('${p.id}')">Tasks</button>
+        <button class="pgc-more-btn" title="More actions" onclick="toggleGridCardMenu('${menuId}', event)">⋯</button>
+      </div>
+      ${moreMenu}
     </div>`;
 }
 
