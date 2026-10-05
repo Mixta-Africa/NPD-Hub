@@ -1,4 +1,5 @@
-/* views/products.js — Products & Projects list, cards, filters, archive. */
+/* views/products.js — Products & Projects list, cards, filters, archive.
+   Adds: pin-to-top, manual up/down reordering, and a grid/list view toggle. */
 
 import { db, ref, set } from '../core/firebase.js';
 import { sanitiseEmail } from '../core/utils.js';
@@ -11,7 +12,47 @@ import { loadDashboardStats } from './dashboard.js';
 import { getProductsFresh, productListCache } from '../data/products-cache.js';
 import { startCountdown } from '../ui/shell.js';
 
+let _productFilter = 'all';   // 'all' | 'product' | 'project' | 'archived'
+let _viewMode = (() => { try { return localStorage.getItem('pv-view-mode') || 'grid'; } catch (e) { return 'grid'; } })(); // 'grid' | 'list'
+let _lastRenderedList = [];   // the exact array of products currently on screen, in display order — used by pin/reorder
+
+/* Self-contained styling for the new controls, injected once so this feature needs no other file touched. */
+function ensureProductViewStyles() {
+  if (document.getElementById('pv-extra-style')) return;
+  const style = document.createElement('style');
+  style.id = 'pv-extra-style';
+  style.textContent = `
+    .pv-toolbar{display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:4px;}
+    .pv-view-toggle{display:inline-flex;border:1px solid var(--border,#E5E5E3);border-radius:8px;overflow:hidden;flex:0 0 auto;}
+    .pv-view-btn{background:#fff;border:none;padding:6px 10px;cursor:pointer;color:var(--text-muted,#6B7280);display:flex;align-items:center;}
+    .pv-view-btn+.pv-view-btn{border-left:1px solid var(--border,#E5E5E3);}
+    .pv-view-btn.active{background:var(--bg-subtle,#F3F4F6);color:var(--text,#1A1A1A);}
+    .pv-view-btn svg{display:block;}
+    .pcf-order-controls{display:flex;flex-direction:column;gap:2px;margin-right:8px;flex:0 0 auto;}
+    .pcf-order-btn{width:22px;height:22px;border:1px solid var(--border,#E5E5E3);background:#fff;border-radius:5px;display:flex;align-items:center;justify-content:center;cursor:pointer;font-size:10px;line-height:1;color:var(--text-muted,#6B7280);padding:0;}
+    .pcf-order-btn:hover:not(:disabled){background:#F3F4F6;color:var(--text,#1A1A1A);}
+    .pcf-order-btn:disabled{opacity:.35;cursor:default;}
+    .pcf-order-btn.active{color:#92400E;border-color:#FDE68A;background:#FFFBEB;}
+    .product-list-view{display:flex;flex-direction:column;gap:8px;}
+    .product-list-view .product-card-full{padding:10px 14px;}
+    .product-list-view .pcf-header{flex-wrap:nowrap;align-items:center;gap:10px;}
+    .product-list-view .pcf-header-left{flex-direction:row;align-items:center;gap:10px;flex:1 1 auto;min-width:0;}
+    .product-list-view .pcf-desc{display:none;}
+    .product-list-view .pcf-progress-row{max-width:160px;margin:0 12px;flex:0 0 auto;}
+    .product-list-view .pcf-stats{flex-wrap:nowrap;gap:12px;}
+    .product-list-view .pcf-stat-box-lbl{display:none;}
+    .product-list-view .pcf-actions{flex-wrap:nowrap;}
+    @media (max-width:700px){
+      .product-list-view .pcf-header{flex-wrap:wrap;}
+      .product-list-view .pcf-progress-row{max-width:none;width:100%;margin:8px 0 0;}
+      .pv-toolbar{gap:8px;}
+    }
+  `;
+  document.head.appendChild(style);
+}
+
 export function renderProducts(el) {
+  ensureProductViewStyles();
   el.innerHTML = `
     <div class="view-header">
       <div>
@@ -20,11 +61,21 @@ export function renderProducts(el) {
       </div>
       <button class="btn-primary" onclick="showCreateProduct()">+ New</button>
     </div>
-    <div class="pv-filter-row">
-      <button class="pv-filter active" data-type="all"     onclick="setProductFilter('all',this)">All <span id="pvc-all" class="pv-count"></span></button>
-      <button class="pv-filter"        data-type="product" onclick="setProductFilter('product',this)">Products <span id="pvc-product" class="pv-count"></span></button>
-      <button class="pv-filter"        data-type="project" onclick="setProductFilter('project',this)">Projects <span id="pvc-project" class="pv-count"></span></button>
-      <button class="pv-filter"        data-type="archived" onclick="setProductFilter('archived',this)">Archived <span id="pvc-archived" class="pv-count"></span></button>
+    <div class="pv-toolbar">
+      <div class="pv-filter-row">
+        <button class="pv-filter active" data-type="all"     onclick="setProductFilter('all',this)">All <span id="pvc-all" class="pv-count"></span></button>
+        <button class="pv-filter"        data-type="product" onclick="setProductFilter('product',this)">Products <span id="pvc-product" class="pv-count"></span></button>
+        <button class="pv-filter"        data-type="project" onclick="setProductFilter('project',this)">Projects <span id="pvc-project" class="pv-count"></span></button>
+        <button class="pv-filter"        data-type="archived" onclick="setProductFilter('archived',this)">Archived <span id="pvc-archived" class="pv-count"></span></button>
+      </div>
+      <div class="pv-view-toggle" role="group" aria-label="View mode">
+        <button class="pv-view-btn ${_viewMode === 'grid' ? 'active' : ''}" data-mode="grid" onclick="setProductViewMode('grid')" title="Grid view">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>
+        </button>
+        <button class="pv-view-btn ${_viewMode === 'list' ? 'active' : ''}" data-mode="list" onclick="setProductViewMode('list')" title="List view">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+        </button>
+      </div>
     </div>
     <div id="product-list-area"><div class="loading-row" style="padding:24px;">Loading...</div></div>
     <div id="create-product-modal" class="modal-overlay" style="display:none;">
@@ -39,8 +90,6 @@ export function renderProducts(el) {
   loadProductList();
 }
 
-let _productFilter = 'all';   // 'all' | 'product' | 'project'
-
 window.setProductFilter = (type, btn) => {
   _productFilter = type;
   document.querySelectorAll('.pv-filter').forEach(b => b.classList.remove('active'));
@@ -48,12 +97,29 @@ window.setProductFilter = (type, btn) => {
   const t = document.getElementById('pv-title');
   const sub = document.getElementById('pv-subtitle');
   if (t) t.textContent = type === 'project' ? 'Projects' : type === 'product' ? 'Products' : type === 'archived' ? 'Archived Items' : 'Products & Projects';
-  if (sub) sub.textContent = type === 'project' ? 'Internal projects and workstreams' 
-    : type === 'product' ? 'Active product launches' 
+  if (sub) sub.textContent = type === 'project' ? 'Internal projects and workstreams'
+    : type === 'product' ? 'Active product launches'
     : type === 'archived' ? 'Historical items hidden from active tracking'
     : 'Everything you track';
   loadProductList();
 };
+
+window.setProductViewMode = (mode) => {
+  _viewMode = mode;
+  try { localStorage.setItem('pv-view-mode', mode); } catch (e) { /* ignore */ }
+  document.querySelectorAll('.pv-view-btn').forEach(b => b.classList.toggle('active', b.dataset.mode === mode));
+  loadProductList(true);
+};
+
+/* Pinned items always sort first; within a group, an explicit sortOrder wins,
+   items that have never been manually moved fall back to newest-first. */
+function compareManual(a, b) {
+  const ao = a.sortOrder, bo = b.sortOrder;
+  if (ao != null && bo != null) return ao - bo;
+  if (ao != null) return -1;
+  if (bo != null) return 1;
+  return (b.createdAt || 0) - (a.createdAt || 0);
+}
 
 export async function loadProductList(skipFetch = false) {
   const area = document.getElementById('product-list-area');
@@ -63,17 +129,21 @@ export async function loadProductList(skipFetch = false) {
     if (!skipFetch || Object.keys(productListCache).length === 0) {
       await getProductsFresh();
     }
-    
+
     const products = productListCache;
     const userKey  = sanitiseEmail(currentUser.email);
-    
-    const visible  = Object.values(products)
+
+    const filteredByStatus = Object.values(products)
       .filter(p => {
         if (_productFilter === 'archived' && p.status !== 'archived') return false;
         if (_productFilter !== 'archived' && p.status === 'archived') return false;
         return canUserSeeProduct(p, userKey);
-      })
-      .sort((a,b) => b.createdAt - a.createdAt);
+      });
+
+    // Pinned items float to the top as their own group; both groups keep any manual order.
+    const pinnedItems = filteredByStatus.filter(p => p.pinned).sort(compareManual);
+    const normalItems = filteredByStatus.filter(p => !p.pinned).sort(compareManual);
+    const visible = [...pinnedItems, ...normalItems];
 
     const nProduct = visible.filter(p => (p.itemType || 'product') === 'product').length;
     const nProject = visible.filter(p => (p.itemType || 'product') === 'project').length;
@@ -82,6 +152,7 @@ export async function loadProductList(skipFetch = false) {
     setCount('pvc-archived', Object.values(products).filter(p => p.status === 'archived' && canUserSeeProduct(p, userKey)).length);
 
     const list = _productFilter === 'all' ? visible : visible.filter(p => (p.itemType || 'product') === _productFilter);
+    _lastRenderedList = list;
 
     if (list.length === 0) {
       const noun = _productFilter === 'project' ? 'projects' : _productFilter === 'product' ? 'products' : 'products or projects';
@@ -91,34 +162,53 @@ export async function loadProductList(skipFetch = false) {
       return;
     }
 
-    area.innerHTML = '<div class="product-grid">' + list.map(p => renderProductCard(p)).join('') + '</div>';
+    const wrapClass = _viewMode === 'list' ? 'product-list-view' : 'product-grid';
+    area.innerHTML = '<div class="' + wrapClass + '">' + list.map(p => {
+      const group = list.filter(x => !!x.pinned === !!p.pinned);
+      const idx = group.indexOf(p);
+      return renderProductCard(p, { isFirst: idx === 0, isLast: idx === group.length - 1 });
+    }).join('') + '</div>';
   } catch(e) {
     area.innerHTML = '<div class="panel"><div class="empty-state-sm"><p>Failed to load products.</p></div></div>';
   }
 }
 
-function renderProductCard(p) {
+function renderProductCard(p, posInfo = {}) {
   const allTasks   = getProductTasks(p).filter(t => canViewTask(t, p));
   const total      = allTasks.length || 1;
   const complete   = allTasks.filter(t => resolveTaskStatus(t) === 'complete').length;
-  
+
   // UNIFIED DELAYED STAT: Captures both overdue dates and explicit dropdown delays
   const delayed    = allTasks.filter(t => {
     const eff = resolveTaskStatus(t);
     return eff === 'overdue' || eff === 'delayed';
   }).length;
-  
+
   // Clean math: Everything not complete and not delayed is On Track
   const onTrack    = Math.max(0, total - complete - delayed);
   const pct        = Math.round((complete / total) * 100);
-  
+
   const itemType   = p.itemType || 'product';
   const typeBadge  = itemType === 'project'
     ? '<span style="font-size:10px;font-weight:700;color:#2563EB;background:#EFF6FF;padding:2px 8px;border-radius:10px;letter-spacing:.03em;">PROJECT</span>'
     : '<span style="font-size:10px;font-weight:700;color:#C0282D;background:#FEF2F2;padding:2px 8px;border-radius:10px;letter-spacing:.03em;">PRODUCT</span>';
   const statusCls  = p.status || 'active';
   const statusLbl  = p.status === 'complete' ? 'Complete' : 'Active';
-  
+
+  const pinnedBadge = p.pinned
+    ? '<span style="font-size:10px;font-weight:700;color:#92400E;background:#FFFBEB;border:1px solid #FDE68A;padding:2px 8px;border-radius:10px;letter-spacing:.03em;">📌 PINNED</span>'
+    : '';
+
+  // Pin toggle + manual up/down reorder, scoped to pin status (pinned items only reorder among themselves)
+  const orderControls = `
+    <div class="pcf-order-controls">
+      <button class="pcf-order-btn ${p.pinned ? 'active' : ''}" title="${p.pinned ? 'Unpin' : 'Pin to top'}" onclick="event.stopPropagation(); toggleProductPin('${p.id}')">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="${p.pinned ? 'currentColor' : 'none'}" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="17" x2="12" y2="22"/><path d="M5 17h14l-1.4-1.4A2 2 0 0117 14.2V9a5 5 0 00-10 0v5.2a2 2 0 01-.6 1.4L5 17z"/></svg>
+      </button>
+      <button class="pcf-order-btn" title="Move up" ${posInfo.isFirst ? 'disabled' : ''} onclick="event.stopPropagation(); moveProductUp('${p.id}')">▲</button>
+      <button class="pcf-order-btn" title="Move down" ${posInfo.isLast ? 'disabled' : ''} onclick="event.stopPropagation(); moveProductDown('${p.id}')">▼</button>
+    </div>`;
+
   const editBtn = canEdit(p)
     ? `<button class="btn-secondary-sm" onclick="editProduct('${p.id}')">Edit dates</button>`
     : '';
@@ -172,7 +262,7 @@ function renderProductCard(p) {
     const isUrgent = daysToLaunch <= 3;
     const cdColor = isUrgent ? '#C0282D' : '#6B7280';
     const cdBg = isUrgent ? '#FEF2F2' : '#F3F4F6';
-    
+
     countdownChip = `<span id="${countdownId}" style="font-size:10px;font-weight:700;color:${cdColor};background:${cdBg};padding:2px 8px;border-radius:10px;letter-spacing:.02em;margin-left:4px;"></span>`;
     setTimeout(() => startCountdown(countdownId, p.launchDate), 100);
   }
@@ -203,9 +293,10 @@ function renderProductCard(p) {
     <div class="product-card-full">
       <div class="pcf-header">
         <div class="pcf-header-left">
+          ${orderControls}
           <div class="pcf-health-dot ${healthCls}" title="${healthTip}"></div>
           <div>
-            <div class="pcf-name-row"><span class="pcf-name" style="cursor:pointer;" title="Open dashboard" onclick="openProjectDashboard('${p.id}')">${p.name}</span>${typeBadge}${healthBadge}${periodBadge}${accessBadge(p)}${slipHtml}${atRiskBadge}${forecastBadge}${countdownChip}</div>
+            <div class="pcf-name-row"><span class="pcf-name" style="cursor:pointer;" title="Open dashboard" onclick="openProjectDashboard('${p.id}')">${p.name}</span>${typeBadge}${pinnedBadge}${healthBadge}${periodBadge}${accessBadge(p)}${slipHtml}${atRiskBadge}${forecastBadge}${countdownChip}</div>
             ${(p.itemType === 'project' && canViewBudget(p) && (p.budget || p.spend)) ? `
               <div style="margin-top:6px;">
                 <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--text-muted);margin-bottom:3px;">
@@ -262,7 +353,7 @@ function renderProductCard(p) {
         ${canEdit(p) ? `<button class="btn-secondary-sm" onclick="showShareModal('${p.id}')">Share</button>` : ''}
         ${getProductAccess(p) === 'owner' || currentRole === 'admin' ? `<button class="btn-secondary-sm" onclick="showHandoverModal('${p.id}')">Handover</button>` : ''}
         <button class="btn-secondary-sm" onclick="showProductActivity('${p.id}')">Activity</button>
-        ${canEdit(p) ? (p.status === 'archived' 
+        ${canEdit(p) ? (p.status === 'archived'
           ? `<button class="btn-secondary-sm" style="color:var(--green);border-color:var(--green);" onclick="unarchiveProduct('${p.id}')">Restore</button>`
           : `<button class="btn-secondary-sm" style="color:var(--amber);border-color:var(--amber);" onclick="archiveProduct('${p.id}')">Archive</button>`)
           : ''}
@@ -270,10 +361,49 @@ function renderProductCard(p) {
     </div>`;
 }
 
+/* ══ PIN & MANUAL REORDER ═════════════════════════════════════
+   pinned (bool) and sortOrder (number) live on the product record itself
+   (products/{id}/pinned, products/{id}/sortOrder), so order is shared
+   across whoever views the list, same as every other product field. */
+window.toggleProductPin = async (id) => {
+  const item = _lastRenderedList.find(p => p.id === id) || productListCache[id];
+  if (!item) return;
+  try {
+    await set(ref(db, 'products/' + id + '/pinned'), !item.pinned);
+    await loadProductList();
+  } catch (e) {
+    showToast('Failed to update pin: ' + e.message, 'error');
+  }
+};
+
+async function moveProduct(id, dir) {
+  const list = _lastRenderedList || [];
+  const item = list.find(p => p.id === id);
+  if (!item) return;
+  // Reordering only happens within the item's own group — pinned items move among pinned items, same for the rest.
+  const group = list.filter(p => !!p.pinned === !!item.pinned);
+  const pos = group.findIndex(p => p.id === id);
+  const newPos = pos + dir;
+  if (newPos < 0 || newPos >= group.length) return;
+
+  const reordered = group.slice();
+  const [moved] = reordered.splice(pos, 1);
+  reordered.splice(newPos, 0, moved);
+
+  try {
+    await Promise.all(reordered.map((p, i) => set(ref(db, 'products/' + p.id + '/sortOrder'), i)));
+    await loadProductList();
+  } catch (e) {
+    showToast('Failed to reorder: ' + e.message, 'error');
+  }
+}
+window.moveProductUp   = (id) => moveProduct(id, -1);
+window.moveProductDown = (id) => moveProduct(id, 1);
+
 /* ══ ARCHIVE & SUPER ADMIN TOTAL WIPE ════════════════════════ */
 window.archiveProduct = async (productId) => {
   if (!confirm('Archive this item?\n\nIt will be hidden from your active dashboard and trackers, but you can always view or restore it from the "Archived" tab.')) return;
-  
+
   try {
     await set(ref(db, 'products/' + productId + '/status'), 'archived');
     showToast('Item archived', 'success');
@@ -286,7 +416,7 @@ window.archiveProduct = async (productId) => {
 };
 window.unarchiveProduct = async (productId) => {
   if (!confirm('Restore this item?\n\nIt will move back to your active dashboard and tracking views.')) return;
-  
+
   try {
     await set(ref(db, 'products/' + productId + '/status'), 'active');
     showToast('Item restored to active', 'success');
