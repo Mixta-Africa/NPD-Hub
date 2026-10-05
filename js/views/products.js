@@ -226,11 +226,14 @@ export async function loadProductList(skipFetch = false) {
 function renderProductCard(p, posInfo = {}) {
   const allTasks   = getProductTasks(p).filter(t => canViewTask(t, p));
   const total      = allTasks.length || 1;
-  const complete   = allTasks.filter(t => resolveTaskStatus(t) === 'complete').length;
+  // resolveTaskStatus's blocked-by-predecessor check only runs when the product is passed in —
+  // omitting it (as this used to) makes a blocked-and-overdue task miscount as plain "overdue"
+  // here while the task modal (which does pass it) correctly buckets it under "Blocked".
+  const complete   = allTasks.filter(t => resolveTaskStatus(t, p) === 'complete').length;
 
   // UNIFIED DELAYED STAT: Captures both overdue dates and explicit dropdown delays
   const delayed    = allTasks.filter(t => {
-    const eff = resolveTaskStatus(t);
+    const eff = resolveTaskStatus(t, p);
     return eff === 'overdue' || eff === 'delayed';
   }).length;
 
@@ -417,9 +420,10 @@ function renderProductCard(p, posInfo = {}) {
 function renderProductCardGrid(p, posInfo = {}) {
   const allTasks  = getProductTasks(p).filter(t => canViewTask(t, p));
   const total     = allTasks.length || 1;
-  const complete  = allTasks.filter(t => resolveTaskStatus(t) === 'complete').length;
+  // Same fix as the list card: pass the product so the blocked-by-predecessor check actually runs.
+  const complete  = allTasks.filter(t => resolveTaskStatus(t, p) === 'complete').length;
   const delayed   = allTasks.filter(t => {
-    const eff = resolveTaskStatus(t);
+    const eff = resolveTaskStatus(t, p);
     return eff === 'overdue' || eff === 'delayed';
   }).length;
   const pct       = Math.round((complete / total) * 100);
