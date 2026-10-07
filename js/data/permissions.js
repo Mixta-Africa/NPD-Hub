@@ -123,6 +123,21 @@ export function canViewTask(task, prod) {
 
   return false;
 }
+
+/* Can this person leave an update/note on THIS SPECIFIC TASK?
+   Deliberately broader than canEdit(prod) — a task's own assignees need
+   a way to report progress without being handed product-level edit
+   rights (deadlines, owners, predecessors stay admin/owner/shared-editor
+   only — see showEditTask). Narrower than canViewTask — being able to
+   see a public/department task doesn't by itself mean you should be
+   posting updates on someone else's work. */
+export function canUpdateTask(task, prod) {
+  if (!currentUser || !task) return false;
+  if (canEdit(prod)) return true;
+  const myEmail = (currentUser.email || '').toLowerCase();
+  return taskOwnerList(task).some(o => o.email && o.email.toLowerCase() === myEmail);
+}
+
 export function canSetTaskVisibility(prod) {
   if (currentRole === 'admin' || isSuperAdmin) return true;
   if (!currentUser || !prod) return false;
