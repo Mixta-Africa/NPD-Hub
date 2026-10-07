@@ -2,7 +2,7 @@
 
 import { db, ref, set } from '../core/firebase.js';
 import { currentPreferredName, currentUser } from '../core/state.js';
-import { canEdit, getTaskVisibility, taskOwnerList } from '../data/permissions.js';
+import { canEdit, canUpdateTask, getTaskVisibility, taskOwnerList } from '../data/permissions.js';
 import { ownerLabel } from './task-editor.js';
 import { getProductTasks } from '../data/product-model.js';
 import { callGAS } from '../core/gas.js';
@@ -45,6 +45,7 @@ window.showTaskDetailPanel = (productId, taskId) => {
     dependency_change: { label: 'DEPENDENCY', color: '#2563EB' },
     approval: { label: 'APPROVED', color: 'var(--green)' },
     rejection: { label: 'REJECTED', color: 'var(--text-muted)' },
+    note: { label: 'UPDATE', color: '#2563EB' },
   };
   const historyHtml = historyEntries.length === 0
     ? '<div style="font-size:12px;color:var(--text-muted);padding:8px 0;">No changes logged yet.</div>'
@@ -70,8 +71,15 @@ window.showTaskDetailPanel = (productId, taskId) => {
     '<div style="display:flex;align-items:center;gap:8px;margin-bottom:16px;flex-wrap:wrap;">' +
       '<span class="pcf-pill" style="background:' + smeta.color + '18;color:' + smeta.color + ';text-transform:uppercase;">' + smeta.label + '</span>' +
       (getTaskVisibility(task) !== 'public' ? '<span class="pcf-pill pcf-pill-grey">' + getTaskVisibility(task).toUpperCase() + '</span>' : '') +
-      '<button class="btn-outline" style="margin-left:auto;font-size:11px;padding:5px 12px;" onclick="showEditTask(\'' + productId + '\',\'' + taskId + '\')">Edit task</button>' +
+      '<div style="margin-left:auto;display:flex;gap:6px;flex-wrap:wrap;">' +
+      (canUpdateTask(task, prod) ? '<button class="btn-outline" style="font-size:11px;padding:5px 12px;" onclick="showAddTaskNote(\'' + productId + '\',\'' + taskId + '\')" title="Leave a note or progress update — visible to the owner and admins">Add update</button>' : '') +
+      // Edit is product-level (deadline, dependencies, structural fields) —
+      // hidden rather than shown-then-rejected, same as the task row's own
+      // Edit button in product-detail.js. A plain assignee uses "Add update"
+      // above instead.
+      (canEdit(prod) ? '<button class="btn-outline" style="font-size:11px;padding:5px 12px;" onclick="showEditTask(\'' + productId + '\',\'' + taskId + '\')">Edit task</button>' : '') +
       (canEdit(prod) ? '<button class="btn-outline" style="font-size:11px;padding:5px 12px;color:#7C2D12;border-color:#7C2D12;" onclick="showEscalateToAMCModal(\'' + productId + '\',\'' + taskId + '\')" title="Manual and discretionary — never sent automatically">Escalate to AMC</button>' : '') +
+      '</div>' +
     '</div>' +
     pendingReqHtml +
     '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px;">' +
@@ -171,6 +179,59 @@ window.showEditTask = (productId, taskId) => {
       '<button class="btn-primary" onclick="saveTaskEdits(\'' + productId + '\',\'' + taskId + '\')">Save changes</button>' +
     '</div>';
   document.getElementById('create-product-modal').style.display = 'flex';
+};
+
+/* ══ ADD UPDATE — the assignee's channel ══════════════════════
+   For anyone named on the task who isn't an owner/admin/shared-editor:
+   a plain-text note into the SAME task.updates node Edit/Delay already
+   write to, tagged 'note' so it reads distinctly in Full history above.
+   Deliberately not a full edit — no deadline, owner or dependency
+   fields — and it also logs to Recent Activity so the product owner
+   sees it without needing to open this task specifically. */
+window.showAddTaskNote = (productId, taskId) => {
+  const prod = productListCache[productId];
+  const task = prod && getProductTasks(prod).find(t => t.id === taskId);
+  if (!prod || !task || !canUpdateTask(task, prod)) { showToast('You do not have access to update this task.', 'error'); return; }
+
+  ensureProductModal();
+  document.getElementById('modal-title-text').textContent = 'Add an update';
+  document.getElementById('modal-body-content').innerHTML =
+    '<p style="font-size:12px;color:var(--text-muted);margin-bottom:12px;line-height:1.5;">' +
+      'Posted to this task\'s history, visible to the product owner and admins.</p>' +
+    '<div class="form-row"><textarea id="task-note-input" class="input-field" rows="4" placeholder="What\'s the latest on this task?"></textarea></div>' +
+    '<div class="form-actions">' +
+      '<button class="btn-outline" onclick="closeProductModal()">Cancel</button>' +
+      '<button class="btn-primary" onclick="submitTaskNote(\'' + productId + '\',\'' + taskId + '\')">Post update</button>' +
+    '</div>';
+  document.getElementById('create-product-modal').style.display = 'flex';
+};
+
+window.submitTaskNote = async (productId, taskId) => {
+  const prod = productListCache[productId];
+  const task = prod && getProductTasks(prod).find(t => t.id === taskId);
+  if (!prod || !task || !canUpdateTask(task, prod)) { showToast('You do not have access to update this task.', 'error'); return; }
+
+  const text = document.getElementById('task-note-input')?.value.trim();
+  if (!text) { showToast('Update cannot be empty.', 'error'); return; }
+
+  const path = prod.tasks?.[taskId] ? 'tasks/' + taskId : 'pillars/' + taskId;
+  const base = 'products/' + productId + '/' + path;
+  const who  = currentPreferredName || currentUser.displayName || currentUser.email.split('@')[0];
+  const updateId = 'upd_' + Date.now() + '_' + Math.floor(Math.random() * 1000);
+  const record = { id: updateId, text, changeType: 'note', userEmail: currentUser.email, userName: who, createdAt: Date.now() };
+
+  try {
+    await set(ref(db, base + '/updates/' + updateId), record);
+    if (!task.updates) task.updates = {};
+    task.updates[updateId] = record;
+    await logActivity(productId, 'task_note', 'Update on: ' + (task.title || task.name || 'Untitled task'), text, taskId);
+    closeProductModal();
+    showToast('Update posted.', 'success');
+    const body = document.getElementById('product-detail-body');
+    if (body) body.innerHTML = buildPillarDetail(prod);
+  } catch(e) {
+    showToast('Could not post update: ' + e.message, 'error');
+  }
 };
 
 window.saveTaskEdits = async (productId, taskId) => {
