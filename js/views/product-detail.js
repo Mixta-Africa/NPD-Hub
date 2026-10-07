@@ -1,7 +1,7 @@
 /* views/product-detail.js — Product/project detail view and tabs. */
 
 import { currentRole } from '../core/state.js';
-import { accessBadge, canEdit, canSetTaskVisibility, canViewTask, getTaskVisibility, TASK_VISIBILITY } from '../data/permissions.js';
+import { accessBadge, canEdit, canSetTaskVisibility, canUpdateTask, canViewTask, getTaskVisibility, TASK_VISIBILITY } from '../data/permissions.js';
 import { ownerLabel } from '../features/task-editor.js';
 import { getProductTasks } from '../data/product-model.js';
 import { formatDate, resolveTaskStatus, STATUS_META } from '../data/status.js';
@@ -245,6 +245,11 @@ export function buildPillarDetail(p) {
     const moveDownBtn = canEdit(p) && !isLast ? '<button onclick="moveProductTask(\'' + p.id + '\', \'' + task.id + '\', 1)" style="background:none;border:1px solid var(--border);border-radius:6px;padding:3px 8px;font-size:10px;color:var(--text-muted);cursor:pointer;font-family:Poppins,sans-serif;margin-left:6px;" title="Move Down">↓</button>' : '';
     const deleteBtn = canEdit(p) ? '<button onclick="deleteProductTask(\'' + p.id + '\', \'' + task.id + '\')" style="background:none;border:1px solid var(--border);border-radius:6px;padding:3px 8px;font-size:10px;color:var(--red);cursor:pointer;font-family:Poppins,sans-serif;margin-left:6px;" title="Delete Task">✕</button>' : '';
     const editBtn = canEdit(p) ? '<button onclick="showEditTask(\'' + p.id + '\', \'' + task.id + '\')" style="background:none;border:1px solid var(--border);border-radius:6px;padding:3px 8px;font-size:10px;color:var(--text-mid);cursor:pointer;font-family:Poppins,sans-serif;margin-left:6px;" title="Edit task">Edit</button>' : '';
+    // Not canEdit(p) — the full Edit form is product-level (deadline, deps,
+    // owners). An assignee who is just one of this task's owners still gets
+    // a working way to report progress: a note on the task's own history,
+    // visible to the owner/admins, without product-level edit rights.
+    const noteBtn = canUpdateTask(task, p) ? '<button onclick="showAddTaskNote(\'' + p.id + '\', \'' + task.id + '\')" style="background:none;border:1px solid var(--border);border-radius:6px;padding:3px 8px;font-size:10px;color:var(--text-mid);cursor:pointer;font-family:Poppins,sans-serif;margin-left:6px;" title="Add an update or note on this task">Note</button>' : '';
     const insertBelowBtn = canEdit(p) ? '<button onclick="showAddTaskToProduct(\'' + p.id + '\', \'' + task.id + '\')" style="background:none;border:1px solid var(--border);border-radius:6px;width:22px;height:22px;display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:700;color:var(--text-mid);cursor:pointer;margin-left:6px;" title="Insert new task right below this one">+</button>' : '';
 
     // Drag-and-drop reorder — the up/down buttons work fine one step at a
@@ -288,7 +293,7 @@ export function buildPillarDetail(p) {
         blockedHint + spinLink +
       '</div>' +
       '<div class="pillar-detail-actions" style="display:flex;align-items:center;gap:4px;flex-wrap:wrap;">' +
-        statusEl + editBtn + reassignBtn + spinOutBtn + insertBelowBtn + moveUpBtn + moveDownBtn + deleteBtn +
+        statusEl + noteBtn + editBtn + reassignBtn + spinOutBtn + insertBelowBtn + moveUpBtn + moveDownBtn + deleteBtn +
       '</div>' +
     '</div>' };
   });
