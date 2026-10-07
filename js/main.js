@@ -41,6 +41,7 @@ import './features/export-sheet.js';
 import './views/ask.js';
 import './features/task-list-controls.js';
 import './features/task-detail.js';
+import './features/present-mode.js';
 import './features/product-onboarding.js';
 import './views/product-detail.js';
 import './features/task-actions.js';
