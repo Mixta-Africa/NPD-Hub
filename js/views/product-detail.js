@@ -78,13 +78,20 @@ function buildProductDetail(p, tab) {
     : '<span style="font-size:10px;font-weight:700;color:#C0282D;background:#FEF2F2;padding:2px 7px;border-radius:8px;">PRODUCT</span>';
 
   const tabHtml =
-    '<div class="pdt-header">' +
+    '<div class="pdt-header" style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap;">' +
     '<div class="pdt-meta">' + lChip + typeChip + accessBadge(p) +
       '<span class="pdt-owner-chip">' +
         '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 3.6-7 8-7s8 3 8 7"/></svg>' +
         (p.ownerName || 'Unassigned') +
       '</span>' +
     '</div>' +
+    // Walk management through status live — built for a screen-share or
+    // projector, not a second device: fullscreen, click/arrow-key through
+    // the same numbers this page already shows.
+    '<button onclick="enterPresentMode(\'' + p.id + '\')" style="background:var(--red);color:#fff;border:none;border-radius:7px;padding:7px 16px;font-size:12px;font-weight:600;font-family:Poppins,sans-serif;cursor:pointer;white-space:nowrap;display:flex;align-items:center;gap:6px;" title="Full-screen status walkthrough for this project">' +
+      '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>' +
+      'Present' +
+    '</button>' +
     '<div class="pdt-tabs">' +
       '<button class="pdt-tab active" onclick="switchProductTab(\'' + p.id + '\',\'tasks\',this)">Tasks</button>' +
       '<button class="pdt-tab" onclick="switchProductTab(\'' + p.id + '\',\'assignees\',this)">Assignees</button>' +
