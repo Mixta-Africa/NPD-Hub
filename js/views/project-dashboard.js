@@ -48,14 +48,14 @@ async function loadProjectDashboard(productId) {
 
       const tasks   = getProductTasks(p).filter(t => canViewTask(t, p));
       const today   = new Date(); today.setHours(0,0,0,0);
-
+      
       // We pass `p` into resolveTaskStatus here to ensure 'Blocked' tasks are accounted for globally
       const done    = tasks.filter(t => resolveTaskStatus(t, p) === 'complete').length;
       const delayed = tasks.filter(t => ['overdue','delayed'].includes(resolveTaskStatus(t, p))).length;
       const blocked = tasks.filter(t => resolveTaskStatus(t, p) === 'blocked').length;
       const onTrack = Math.max(0, tasks.length - done - delayed - blocked);
       const pct     = tasks.length ? Math.round((done / tasks.length) * 100) : 0;
-
+      
       const isProject = (p.itemType || 'product') === 'project';
       const launch  = p.launchDate ? new Date(p.launchDate) : null;
       if (launch) launch.setHours(0,0,0,0);
@@ -66,7 +66,7 @@ async function loadProjectDashboard(productId) {
       let forecastHtml = '';
       if (forecast.delayDays > 0) {
         // Map the bottlenecks array into a neat HTML list
-        const bottleneckList = forecast.bottlenecks && forecast.bottlenecks.length > 0
+        const bottleneckList = forecast.bottlenecks && forecast.bottlenecks.length > 0 
           ? forecast.bottlenecks.map(b => '<li style="margin-bottom:4px;"><strong>' + b.name + '</strong> (' + b.delay + 'd direct delay)</li>').join('')
           : '<li>Unspecified cascading delays across multiple tasks.</li>';
 
@@ -87,7 +87,7 @@ async function loadProjectDashboard(productId) {
                 <div style="font-size:10px;color:#B45309;text-transform:uppercase;">Delay Risk</div>
               </div>
             </summary>
-
+            
             <div style="padding:0 16px 16px 64px;font-size:12px;color:#92400E;line-height:1.6;border-top:1px dashed #FDE68A;margin-top:-4px;padding-top:12px;">
               <div style="font-weight:700;margin-bottom:8px;text-transform:uppercase;font-size:11px;letter-spacing:0.04em;">Critical Path Bottlenecks</div>
               <ul style="margin:0 0 10px 0;padding-left:18px;">
@@ -124,17 +124,8 @@ async function loadProjectDashboard(productId) {
 
       const icoTrend  = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="' + (pct >= 75 ? 'var(--green)' : pct >= 40 ? 'var(--amber)' : 'var(--red)') + '" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>';
       const icoCheck  = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--green)" stroke-width="2"><path d="M22 11.08V12a10 10 0 11-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>';
-
-      // Two distinct, status-named tiles instead of one blended "Needs action" figure —
-      // a task that's Blocked (waiting on a predecessor) is a different problem, with a
-      // different fix, than a task that's actually Overdue, so they get separate numbers,
-      // separate colours (amber vs red, matching the Blocked/Overdue colours used
-      // everywhere else in this app — the Dependency Map legend, the task status pills)
-      // and separate drill-downs rather than being added together into one vague count.
-      const blockedClr = blocked > 0 ? '#D97706' : 'var(--green)';
-      const overdueClr = delayed > 0 ? 'var(--red)' : 'var(--green)';
-      const icoBlocked = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="' + blockedClr + '" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg>';
-      const icoOverdue  = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="' + overdueClr + '" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>';
+      const needsClr  = (delayed + blocked) > 0 ? 'var(--red)' : 'var(--green)';
+      const icoWarn   = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="' + needsClr + '" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>';
 
       body.innerHTML =
         '<div class="view-header">' +
@@ -158,19 +149,24 @@ async function loadProjectDashboard(productId) {
             (canEdit(p) ? '<button class="btn-secondary-sm" onclick="syncProjectSheet(\'' + p.id + '\')">Live sheet</button>' : '') +
             '<button class="btn-secondary-sm" onclick="exportProjectTracker(\'' + p.id + '\')">Export tracker</button>' +
             '<button class="btn-secondary-sm" onclick="viewProduct(\'' + p.id + '\')">Full detail</button>' +
+            // Full-screen status walkthrough — built for standing in front of
+            // management with this screen already shared (Zoom/projector).
+            '<button class="btn-secondary-sm" style="background:var(--red);color:#fff;border-color:var(--red);" onclick="enterPresentMode(\'' + p.id + '\')" title="Full-screen status walkthrough for this project">' +
+              '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:4px;"><polygon points="5 3 19 12 5 21 5 3"/></svg>' +
+              'Present' +
+            '</button>' +
           '</div>' +
         '</div>' +
 
-        forecastHtml +
+        forecastHtml + 
 
         '<div class="stats-row">' +
           statCard('Progress',  pct + '%',      pct >= 75 ? 'var(--green)' : pct >= 40 ? 'var(--amber)' : 'var(--red)', pct >= 75 ? 'stat-tint-green' : pct >= 40 ? 'stat-tint-amber' : 'stat-tint-red', icoTrend, 'progress') +
           statCard('Complete',  done,           'var(--green)', 'stat-tint-green', icoCheck, 'complete') +
           statCard('On track',  onTrack,        'var(--green)', 'stat-tint-green', icoCheck, 'ontrack') +
-          statCard('Blocked',   blocked,        blockedClr,     blocked > 0 ? 'stat-tint-amber' : 'stat-tint-green', icoBlocked, 'blocked') +
-          statCard('Overdue',   delayed,        overdueClr,     delayed > 0 ? 'stat-tint-red' : 'stat-tint-green', icoOverdue, 'overdue') +
+          statCard('Needs action', delayed + blocked, needsClr, (delayed + blocked) > 0 ? 'stat-tint-red' : 'stat-tint-green', icoWarn, 'needsaction') +
         '</div>' +
-
+        
        // --- INJECT DEPENDENCY MAP (collapsed by default — not everyone
        // needs it open, and it eats real vertical space when it is) ---
         (dependencyMapSyntax ? `
@@ -230,7 +226,7 @@ async function loadProjectDashboard(productId) {
                       if (svgEl) svgEl.style.filter = 'drop-shadow(0 1px 3px rgba(16,24,40,0.12))';
                     });
                   }
-                } catch(e) {
+                } catch(e) { 
                   console.warn('Mermaid engine failed:', e);
                   const container = document.getElementById('mermaid-container-' + productId);
                   if (container) container.innerHTML = '<div style="color:var(--red);font-size:12px;">Map engine encountered a syntax error.</div>';
@@ -243,7 +239,7 @@ async function loadProjectDashboard(productId) {
 
         // Register the listener so it safely unmounts when you change pages
         registerListener('project_dash', unsub);
-
+        
       } catch(e) {
         console.warn('loadProjectDashboard failed:', e);
         body.innerHTML = '<div class="loading-row muted" style="padding:24px;">Could not load this item.</div>';
@@ -269,11 +265,7 @@ function buildPdBudget(p) {
 }
 
 function buildPdDeptBlock(dept, list, today, p) {
-  // Overdue and Blocked are counted — and labelled — separately, same split as the
-  // top-level stat tiles, so a department with only blocked tasks (no overdue ones)
-  // still shows a badge instead of silently reporting nothing wrong.
-  const overdueCount = list.filter(t => ['overdue','delayed'].includes(resolveTaskStatus(t, p))).length;
-  const blockedCount = list.filter(t => resolveTaskStatus(t, p) === 'blocked').length;
+  const issues = list.filter(t => ['overdue','delayed'].includes(resolveTaskStatus(t, p))).length;
   const done   = list.filter(t => resolveTaskStatus(t, p) === 'complete').length;
   const rows = list.map(t => {
     const eff = resolveTaskStatus(t, p);
@@ -295,8 +287,7 @@ function buildPdDeptBlock(dept, list, today, p) {
     '<div style="padding:10px 18px;display:flex;align-items:center;gap:8px;background:#FAFAF9;">' +
       '<span style="font-size:12px;font-weight:700;color:var(--text);">' + dept + '</span>' +
       '<span style="font-size:10px;color:var(--text-muted);">' + done + '/' + list.length + ' done</span>' +
-      (overdueCount > 0 ? '<span style="font-size:10px;font-weight:700;color:var(--red);background:#FEF2F2;padding:1px 7px;border-radius:8px;">' + overdueCount + ' overdue</span>' : '') +
-      (blockedCount > 0 ? '<span style="font-size:10px;font-weight:700;color:#D97706;background:#FFFBEB;padding:1px 7px;border-radius:8px;">' + blockedCount + ' blocked</span>' : '') +
+      (issues > 0 ? '<span style="font-size:10px;font-weight:700;color:var(--red);background:#FEF2F2;padding:1px 7px;border-radius:8px;">' + issues + ' need action</span>' : '') +
     '</div>' + rows +
   '</div>';
 }
@@ -307,7 +298,7 @@ window.scrollToDept = () => {
 };
 
 /* ══ STAT TILE → DEPARTMENT BREAKDOWN ═════════════════════════
-   Each of the tiles at the top of a project's dashboard opens
+   Each of the four tiles at the top of a project's dashboard opens
    this instead of just being a number — a real per-department chart
    for that specific metric, not a generic "scroll to the list below". */
 window.showStatBreakdown = (productId, metric) => {
@@ -317,11 +308,10 @@ window.showStatBreakdown = (productId, metric) => {
   const tasks = getProductTasks(prod).filter(t => canViewTask(t, prod));
 
   const METRIC_META = {
-    progress:    { title: 'Progress by department',       match: t => resolveTaskStatus(t, prod) === 'complete' },
-    complete:    { title: 'Completed tasks by department', match: t => resolveTaskStatus(t, prod) === 'complete' },
-    ontrack:     { title: 'On-track tasks by department',  match: t => ['on-track', 'due-soon'].includes(resolveTaskStatus(t, prod)) },
-    blocked:     { title: 'Blocked tasks by department',   match: t => resolveTaskStatus(t, prod) === 'blocked' },
-    overdue:     { title: 'Overdue tasks by department',   match: t => ['overdue', 'delayed'].includes(resolveTaskStatus(t, prod)) },
+    progress:    { title: 'Progress by department',            match: t => resolveTaskStatus(t, prod) === 'complete' },
+    complete:    { title: 'Completed tasks by department',      match: t => resolveTaskStatus(t, prod) === 'complete' },
+    ontrack:     { title: 'On-track tasks by department',       match: t => ['on-track', 'due-soon'].includes(resolveTaskStatus(t, prod)) },
+    needsaction: { title: 'Tasks needing action, by department', match: t => ['overdue', 'delayed', 'blocked'].includes(resolveTaskStatus(t, prod)) },
   };
   const meta = METRIC_META[metric] || METRIC_META.complete;
 
