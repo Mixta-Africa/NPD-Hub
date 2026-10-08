@@ -1,7 +1,8 @@
 /* features/export-sheet.js — Tracker export and live Google Sheet sync. */
 
 import { db, get, ref } from '../core/firebase.js';
-import { currentPreferredName, currentUser } from '../core/state.js';
+import { currentPreferredName, currentRole, currentUser } from '../core/state.js';
+import { sanitiseEmail } from '../core/utils.js';
 import { TEAM_MEMBERS } from '../data/app-config.js';
 import { canViewTask } from '../data/permissions.js';
 import { ownerLabel } from './task-editor.js';
@@ -162,7 +163,7 @@ export async function pushSheetIfLinked(productId) {
 window.syncProjectSheet = async (productId) => {
   const p = productListCache[productId];
   if (!p) return;
-  
+
   showToast('Syncing to Google Sheets…', 'info');
 
   const authEmails = new Set();
@@ -174,10 +175,19 @@ window.syncProjectSheet = async (productId) => {
     });
   }
 
+  // Only an admin or the product's own owner can widen a sheet to every
+  // task — the same bypass canViewTask already grants them in the Hub
+  // itself, just extended to what gets written to the sheet. A shared
+  // editor triggering this still gets the conservative, per-task filter;
+  // once an admin/owner has opted a project's sheet into full access the
+  // backend remembers it (never un-set by a later non-admin push).
+  const fullAccess = currentRole === 'admin' || p.ownerId === sanitiseEmail(currentUser.email);
+
   try {
-    const res = await callGAS('syncProjectToSheet', { 
+    const res = await callGAS('syncProjectToSheet', {
       productId,
-      authorizedEmails: Array.from(authEmails)
+      authorizedEmails: Array.from(authEmails),
+      fullAccess,
     });
     if (!res.ok) { showToast('Sync failed: ' + (res.error || 'unknown'), 'error'); return; }
     showSheetSyncResult(p ? p.name : 'Item', res);
