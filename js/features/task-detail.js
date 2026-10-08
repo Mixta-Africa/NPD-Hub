@@ -229,6 +229,21 @@ window.submitTaskNote = async (productId, taskId) => {
     showToast('Update posted.', 'success');
     const body = document.getElementById('product-detail-body');
     if (body) body.innerHTML = buildPillarDetail(prod);
+
+    // Email whoever actually owns this — the task's own creator/the
+    // product's owner, plus its named owner(s) if they're not the one
+    // who just posted. Recent Activity is easy to miss; this isn't.
+    // Best-effort: the note is already saved above either way.
+    try {
+      await callGAS('sendTaskNoteAlert', {
+        productId, taskId,
+        taskTitle: task.title || task.name || 'Untitled task',
+        productName: prod.name || '',
+        noteText: text,
+        postedByEmail: currentUser.email,
+        postedByName: who,
+      });
+    } catch(e) { /* note already saved — a failed alert isn't worth surfacing */ }
   } catch(e) {
     showToast('Could not post update: ' + e.message, 'error');
   }
