@@ -12,6 +12,7 @@ import { generateDependencyMap } from '../features/dependency-map.js';
 import { computeProjectPrediction, formatDate, resolveTaskStatus, STATUS_META } from '../data/status.js';
 import { productListCache } from '../data/products-cache.js';
 import { ensureProductModal } from '../features/product-form.js';
+import { buildCommentsPanelHtml } from '../features/comments-feed.js';
 
 /* ══════════════════════════════════════════════════════════════
    PROJECT DASHBOARD — each item gets its own view rather than a
@@ -195,6 +196,8 @@ async function loadProjectDashboard(productId) {
           </div>` : '') +
 
         ((isProject && canViewBudget(p) && (p.budget || p.spend)) ? buildPdBudget(p) : '') +
+
+        buildCommentsPanelHtml({ productId: p.id, title: 'Recent Comments', subtitle: 'On this ' + (isProject ? 'project' : 'product') }) +
 
         '<div class="panel" id="pd-departments">' +
           '<div class="panel-header">' +
