@@ -10,6 +10,7 @@ import { loadDashboardEmailLog } from '../features/email-log.js';
 import { loadPreferredName } from './settings.js';
 import { getGreeting } from '../ui/shell.js';
 import { renderDashboardCharts } from './dashboard-charts.js';
+import { buildCommentsPanelHtml, refreshCommentsFeed } from '../features/comments-feed.js';
 
 export function renderDashboard(el) {
   loadPreferredName().then(() => {
@@ -180,8 +181,10 @@ export function renderDashboard(el) {
           </div>
           <div id="dash-emaillog" style="flex:1;"><div class="loading-row" style="padding:16px;">Loading...</div></div>
         </div>
-      </div>`;
-      
+      </div>
+
+      ${buildCommentsPanelHtml({ limit: 6, subtitle: 'Across everything you can see', containerId: 'dash-comments-items' })}`;
+
     loadDashboardStats();
     loadDashboardEmailLog();
   });
@@ -396,6 +399,8 @@ function _updateDashboardUI(list) {
     if (typeof renderDashboardCharts === 'function') {
       renderDashboardCharts(list);
     }
+
+    refreshCommentsFeed('dash-comments-items', { limit: 6 });
   } catch(e) {
     console.warn('Dashboard UI update failed:', e);
   }
