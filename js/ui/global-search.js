@@ -8,9 +8,12 @@ import { getProductsFresh } from '../data/products-cache.js';
 
 /* ══ GLOBAL SEARCH — header bar ═══════════════════════════════
    Was pure decoration: an <input> with no listener at all. Searches
-   products/projects and tasks the current user can actually see
-   (same canUserSeeProduct/canViewTask gates as everywhere else — a
-   search box is not a way to leak a task someone shouldn't find). */
+   products/projects, tasks, AND comments (task.updates where
+   changeType === 'note') the current user can actually see (same
+   canUserSeeProduct/canViewTask gates as everywhere else — a search box
+   is not a way to leak a task someone shouldn't find). Comments were the
+   thing people couldn't find at all short of opening a task and scrolling
+   to Full history — this is the fix for that, not just a nice-to-have. */
 let _gsDebounce = null;
 
 export function initGlobalSearch() {
@@ -58,6 +61,7 @@ async function runGlobalSearch(q) {
 
     const productMatches = [];
     const taskMatches = [];
+    const commentMatches = [];
 
     Object.values(products).forEach(prod => {
       if (prod.status === 'archived') return;
@@ -68,18 +72,29 @@ async function runGlobalSearch(q) {
       getProductTasks(prod).filter(t => canViewTask(t, prod)).forEach(t => {
         const title = t.title || t.name || '';
         if (title.toLowerCase().includes(ql)) taskMatches.push({ task: t, prod });
+
+        if (t.updates) {
+          Object.values(t.updates).forEach(u => {
+            if (u && u.changeType === 'note' && (u.text || '').toLowerCase().includes(ql)) {
+              commentMatches.push({ task: t, prod, update: u });
+            }
+          });
+        }
       });
     });
 
-    renderGlobalSearchResults(q, productMatches.slice(0, 5), taskMatches.slice(0, 6));
+    commentMatches.sort((a, b) => (b.update.createdAt || 0) - (a.update.createdAt || 0));
+
+    renderGlobalSearchResults(q, productMatches.slice(0, 5), taskMatches.slice(0, 6), commentMatches.slice(0, 5));
   } catch(e) {
     el.innerHTML = '<div class="gsr-empty">Search failed — try again.</div>';
   }
 }
 
-function renderGlobalSearchResults(q, productMatches, taskMatches) {
+function renderGlobalSearchResults(q, productMatches, taskMatches, commentMatches) {
   const el = ensureGlobalSearchResultsEl();
-  if (productMatches.length === 0 && taskMatches.length === 0) {
+  commentMatches = commentMatches || [];
+  if (productMatches.length === 0 && taskMatches.length === 0 && commentMatches.length === 0) {
     el.innerHTML = '<div class="gsr-empty">No matches for "' + q.replace(/</g,'&lt;') + '"</div>';
     return;
   }
@@ -108,6 +123,21 @@ function renderGlobalSearchResults(q, productMatches, taskMatches) {
           '</div>' +
         '</div>'
       ).join('');
+  }
+  if (commentMatches.length) {
+    html += '<div class="gsr-section-label">Comments</div>' +
+      commentMatches.map(({ task, prod, update }) => {
+        const who = update.userName || (update.userEmail || '').split('@')[0] || 'Someone';
+        const text = String(update.text || '').replace(/</g,'&lt;');
+        const snippet = text.length > 90 ? text.slice(0, 90) + '…' : text;
+        return '<div class="gsr-row" onclick="closeGlobalSearchResults(); showTaskDetailPanel(\'' + prod.id + '\',\'' + task.id + '\')">' +
+          '<span class="gsr-row-icon" style="background:#EFF6FF;color:#2563EB;">C</span>' +
+          '<div style="flex:1;min-width:0;">' +
+            '<div class="gsr-row-title">' + who + ': ' + snippet + '</div>' +
+            '<div class="gsr-row-sub">' + (task.title || task.name || 'Untitled') + ' &middot; ' + (prod.name || '') + '</div>' +
+          '</div>' +
+        '</div>';
+      }).join('');
   }
   el.innerHTML = html;
 }
