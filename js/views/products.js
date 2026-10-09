@@ -11,6 +11,7 @@ import { computeProjectPrediction, formatDate, resolveTaskStatus } from '../data
 import { loadDashboardStats } from './dashboard.js';
 import { getProductsFresh, productListCache } from '../data/products-cache.js';
 import { startCountdown } from '../ui/shell.js';
+import { buildCommentsPanelHtml } from '../features/comments-feed.js';
 
 let _productFilter = 'all';   // 'all' | 'product' | 'project' | 'archived'
 let _viewMode = (() => { try { return localStorage.getItem('pv-view-mode') || 'grid'; } catch (e) { return 'grid'; } })(); // 'grid' | 'list'
@@ -126,6 +127,7 @@ export function renderProducts(el) {
         </button>
       </div>
     </div>
+    ${buildCommentsPanelHtml({ limit: 8, title: 'Recent Comments', subtitle: 'Across all products & projects' })}
     <div id="product-list-area"><div class="loading-row" style="padding:24px;">Loading...</div></div>
     <div id="create-product-modal" class="modal-overlay" style="display:none;">
       <div class="modal-box">
